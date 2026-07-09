@@ -132,7 +132,18 @@ Assistants are *clients* of Nova. The platform surface is:
 - **SDKs**: TypeScript first (shared Zod schemas from `packages/schema` generate the client types), then Kotlin, Swift, Python.
 - **Plugins + marketplace** (post-GA): capture extractors and action integrations authored by third parties, sandboxed and permission-scoped.
 
-Full endpoint and scope reference: [API_AND_SDK_SPEC.md](./API_AND_SDK_SPEC.md).
+The serving surface at a glance (full reference: [API_AND_SDK_SPEC.md](./API_AND_SDK_SPEC.md)):
+
+| Surface | Examples | Scope required |
+|---|---|---|
+| Moments | `POST /v1/moments`, `GET /v1/moments/:id`, `POST /v1/context/search` | `context:capture` / `context:read` |
+| Live sessions | `POST /v1/sessions`, `WS /v1/sessions/:id/stream` | `context:capture` |
+| Memory | `GET /v1/memory/query`, `PATCH /v1/memory/:id` | `memory:read` / `memory:write` |
+| Actions | `POST /v1/actions/propose`, `POST /v1/actions/:id/execute` | `action:propose` / `action:execute` |
+| Events | `POST /v1/webhooks`, `GET /v1/events/stream` (SSE) | per-event-type scopes |
+| Audit | `GET /v1/audit` (user's own trail) | any authenticated user |
+
+Two platform rules that hold everywhere: **the Context Buffer has no API** — no scope, no endpoint, no SDK method reads the ring; third parties receive context exclusively as promoted Context Moments ([CONTEXT_BUFFER.md](./CONTEXT_BUFFER.md) §5). And **rate limits are per key and per user**, enforced in Redis at the gateway, with metered-API billing counted from the same counters so billing and throttling can never disagree.
 
 ---
 
@@ -283,6 +294,17 @@ Details: [SECURITY_AND_PRIVACY.md](./SECURITY_AND_PRIVACY.md) and [API_AND_SDK_S
 - **Structured logs (pino), with a hard rule: no context payloads in logs.** No OCR text, no transcripts, no URLs beyond registrable domain, no frame data. Log the moment ID and sizes, never the content. Enforced by a redaction serializer in the shared logger package and a CI grep for banned fields; treat violations as incidents, not bugs.
 - **User-facing audit log**, surfaced in-product: every capture, every third-party read, every action proposal/approval/execution, every key use. This is a product feature, not an ops table — trust requires the user seeing exactly what touched their context and when.
 - Metrics: queue depth/age, enrichment latency p50/p95, embedding throughput, provider error rates per model (feeds Intelligence Engine routing), sync outbox depth per client.
+
+Starting SLOs (alerts are wired to these, not to raw metrics):
+
+| SLO | Target |
+|---|---|
+| Capture confirmed locally | p95 < 500 ms (client-measured) |
+| Moment visible in web app after sync | p95 < 10 s |
+| Enrichment complete (summary, entities, embedding) | p95 < 60 s |
+| Retrieval (`/v1/context/search`) | p95 < 300 ms |
+| Live-session answer (question → grounded response) | p95 < 4 s |
+| API availability | 99.9% monthly |
 
 ---
 
