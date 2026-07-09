@@ -141,3 +141,30 @@ button.danger {
   border-color: #dc2626;
   color: #dc2626;
 }
+
+.onboarding {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.consent-point {
+  border: 1px solid #8883;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12.5px;
+}
+.consent-point p {
+  margin: 4px 0 0;
+  opacity: 0.8;
+}
+.consent-check {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 12.5px;
+  opacity: 0.95;
+}
+.consent-check input {
+  width: auto;
+  margin-top: 2px;
+}

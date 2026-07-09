@@ -6,14 +6,19 @@ import type {
   TranscriptionResponse,
 } from "@nova/schema";
 
+import type { CaptureMode } from "@nova/context-engine";
+
 export interface ExtensionSettings {
   apiUrl: string;
   apiToken: string;
+  // M4 visual-redaction safeguard: 'full' | 'blurred' | 'text_only'.
+  captureMode: CaptureMode;
 }
 
 const DEFAULTS: ExtensionSettings = {
   apiUrl: "http://localhost:3001",
   apiToken: "",
+  captureMode: "full",
 };
 
 export async function loadSettings(): Promise<ExtensionSettings> {
@@ -113,4 +118,23 @@ export async function suggestProjectsPreview(
     // Suggestions are a convenience; never block the capture flow on them.
     return [];
   }
+}
+
+/** Fire-and-forget product event (M4 funnel). Names are allowlisted
+ * server-side; props carry counts/flags only — never captured content. */
+export function trackEvent(
+  settings: ExtensionSettings,
+  event: string,
+  props: Record<string, number | boolean | string> = {},
+): void {
+  void fetch(`${settings.apiUrl}/v1/events`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(settings.apiToken ? { authorization: `Bearer ${settings.apiToken}` } : {}),
+    },
+    body: JSON.stringify({ event, props }),
+  }).catch(() => {
+    /* analytics never block the UI */
+  });
 }

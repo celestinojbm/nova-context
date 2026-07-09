@@ -3,6 +3,7 @@ import type {
   MemorySearchResponse,
 } from "@nova/schema";
 import { revalidatePath } from "next/cache";
+import { ConfirmSubmit } from "./components/ConfirmSubmit";
 import { API_URL, apiGet, apiPost, authHeaders } from "./lib/api";
 
 export const dynamic = "force-dynamic";
@@ -123,9 +124,9 @@ export default async function TimelinePage({
                   )}
                   <form action={deleteMoment} className="moment-delete">
                     <input type="hidden" name="id" value={m.id} />
-                    <button type="submit" title="Delete this moment and everything derived from it">
+                    <ConfirmSubmit message="Delete this moment and everything derived from it (tasks, actions, embeddings)? This cannot be undone.">
                       Delete
-                    </button>
+                    </ConfirmSubmit>
                   </form>
                 </div>
               </article>

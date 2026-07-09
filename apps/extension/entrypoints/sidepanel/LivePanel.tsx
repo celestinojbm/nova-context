@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { LiveSessionState } from "../../utils/live.js";
 import { LiveSession } from "../../utils/live.js";
-import { fetchProjects, postMoment, type ExtensionSettings } from "../../utils/api.js";
+import { fetchProjects, postMoment, trackEvent, type ExtensionSettings } from "../../utils/api.js";
 
 /**
  * Live Context Mode v0 UI. Explicit start/stop, always-visible recording
@@ -28,7 +28,9 @@ export function LivePanel({
 
   useEffect(() => {
     const session = new LiveSession();
+    session.captureMode = settings.captureMode;
     sessionRef.current = session;
+    trackEvent(settings, "live_session_started", { mode: settings.captureMode });
     session.onUpdate = () => setState(session.state());
     session.onExpired = () => {
       onExit("Live session reached the 30-minute limit and was ended. Buffer discarded.");
@@ -43,6 +45,7 @@ export function LivePanel({
     return () => {
       clearInterval(ticker);
       // Panel unmount = session over. The buffer dies here, by design.
+      if (session.active) trackEvent(settings, "live_session_stopped", { reason: "unmount" });
       session.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -90,6 +93,7 @@ export function LivePanel({
   }
 
   function onStop() {
+    trackEvent(settings, "live_session_stopped", { reason: "user" });
     session?.stop();
     onExit("Live session ended. The buffer was discarded — only saved moments remain.");
   }

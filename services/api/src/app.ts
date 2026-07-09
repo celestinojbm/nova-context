@@ -21,10 +21,12 @@ import Fastify, { type FastifyInstance } from "fastify";
 import pg from "pg";
 import { z } from "zod";
 import type { Env } from "./env.js";
+import { Analytics } from "./analytics.js";
 import { createEnrichmentQueue, type EnrichmentJob } from "./queue.js";
 import { registerM1Routes } from "./routes-m1.js";
 import { registerM2Routes } from "./routes-m2.js";
 import { registerM3Routes } from "./routes-m3.js";
+import { registerM4Routes } from "./routes-m4.js";
 import { redactDeep, suggestProjects, type RedactionType } from "@nova/context-engine";
 
 const DEV_USER_EMAIL = "dev@nova.local";
@@ -131,6 +133,8 @@ export async function buildApp({ env, pool, liveQa }: BuildAppOptions): Promise<
         ? new AnthropicLiveQa({ apiKey: env.ANTHROPIC_API_KEY, model: env.NOVA_LIVE_MODEL })
         : null;
   const redactionOn = env.NOVA_REDACTION === "on";
+  // M4: privacy-preserving funnel analytics (allowlisted events, no content).
+  const analytics = new Analytics(db, env.NOVA_ANALYTICS === "local");
 
   // Enrichment queue producer (optional): without Redis, moments store with
   // enrichment_status 'skipped' and everything else keeps working.
@@ -385,6 +389,20 @@ export async function buildApp({ env, pool, liveQa }: BuildAppOptions): Promise<
       ],
     );
 
+    analytics.track(
+      userId,
+      moment.source_mode === "live_context" ? "live_moment_saved" : "instant_capture_saved",
+      {
+        has_screenshot: typeof body.payload["screenshot_data_url"] === "string",
+        has_intent: Boolean(body.intent_text),
+        linked: Boolean(moment.project_id),
+        enrichment: enrichmentJobId ? "queued" : "skipped",
+        redactions: redactionTally
+          ? [...redactionTally.values()].reduce((a, b) => a + b, 0)
+          : 0,
+      },
+    );
+
     const response: CreateContextMomentResponse = {
       id: moment.id,
       project_id: moment.project_id,
@@ -480,7 +498,7 @@ export async function buildApp({ env, pool, liveQa }: BuildAppOptions): Promise<
     return { items: rows };
   });
 
-  registerM1Routes(app, { db, devUserId, intentRouter, transcriptionRouter });
+  registerM1Routes(app, { db, devUserId, intentRouter, transcriptionRouter, analytics });
   registerM2Routes(app, {
     db,
     devUserId,
@@ -488,6 +506,7 @@ export async function buildApp({ env, pool, liveQa }: BuildAppOptions): Promise<
     momentColumns: MOMENT_COLUMNS,
     momentColumnsPrefixed: MOMENT_COLUMNS_PREFIXED,
     rowToMoment: rowToMoment as (row: never) => ContextMoment,
+    analytics,
   });
   registerM3Routes(app, {
     db,
@@ -496,7 +515,9 @@ export async function buildApp({ env, pool, liveQa }: BuildAppOptions): Promise<
     redactionOn,
     momentColumns: MOMENT_COLUMNS,
     rowToMoment: rowToMoment as (row: never) => ContextMoment,
+    analytics,
   });
+  registerM4Routes(app, { db, devUserId, analytics });
 
   return app;
 }

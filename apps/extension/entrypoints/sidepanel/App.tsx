@@ -1,15 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import type { ProjectSuggestion } from "@nova/schema";
+import { CAPTURE_MODES, type CaptureMode } from "@nova/context-engine";
 import {
   fetchProjects,
   loadSettings,
   postMoment,
   saveSettings,
   suggestProjectsPreview,
+  trackEvent,
   transcribeAudio,
   TranscriptionUnavailable,
   type ExtensionSettings,
 } from "../../utils/api.js";
+import { acceptConsent, hasValidConsent, resetConsent } from "../../utils/consent.js";
+import { Onboarding } from "./Onboarding.js";
 import {
   captureActiveTab,
   toCreateMomentRequest,
@@ -35,27 +39,33 @@ export function App() {
   const [success, setSuccess] = useState<string | null>(null);
   const [listening, setListening] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  const [consented, setConsented] = useState<boolean | null>(null);
   const recorderRef = useRef(new PushToTalkRecorder());
 
   useEffect(() => {
     void loadSettings().then((s) => {
       setSettings(s);
       void fetchProjects(s).then(setProjects);
+      trackEvent(s, "extension_opened");
     });
+    void hasValidConsent().then(setConsented);
     const recorder = recorderRef.current;
     return () => recorder.release();
   }, []);
 
   async function onCapture() {
+    if (!settings) return;
     setError(null);
     setSuccess(null);
     setState("capturing");
+    trackEvent(settings, "instant_capture_started");
     try {
-      const captured = await captureActiveTab();
+      const captured = await captureActiveTab(settings.captureMode);
       setDraft(captured);
       setState("confirm");
     } catch (err) {
       setError((err as Error).message);
+      trackEvent(settings, "capture_failed", { stage: "capture" });
       setState("idle");
     }
   }
@@ -123,6 +133,7 @@ export function App() {
       setState("idle");
     } catch (err) {
       setError((err as Error).message);
+      trackEvent(settings, "capture_failed", { stage: "save" });
       setState("confirm");
     }
   }
@@ -141,6 +152,26 @@ export function App() {
     setSettings(next);
     await saveSettings(next);
     void fetchProjects(next).then(setProjects);
+  }
+
+  // M4: consent gate — capture and live mode are unusable until accepted.
+  if (consented === false) {
+    return (
+      <div className="panel">
+        <h1>Nova Context</h1>
+        <Onboarding
+          onAccept={() => {
+            void acceptConsent().then(() => {
+              setConsented(true);
+              if (settings) trackEvent(settings, "onboarding_completed");
+            });
+          }}
+        />
+      </div>
+    );
+  }
+  if (consented === null) {
+    return <div className="panel"><h1>Nova Context</h1></div>;
   }
 
   return (
@@ -281,6 +312,36 @@ export function App() {
                 void onSettingsChange({ ...settings, apiToken: e.target.value })
               }
             />
+            <label htmlFor="captureMode">Screenshots</label>
+            <select
+              id="captureMode"
+              value={settings.captureMode}
+              onChange={(e) =>
+                void onSettingsChange({
+                  ...settings,
+                  captureMode: e.target.value as CaptureMode,
+                })
+              }
+            >
+              {CAPTURE_MODES.map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+            <div className="disclosure">
+              Text redaction never covers pixels inside screenshots or live
+              frames. Use “Blur” or “Text only” if your screen may show
+              sensitive content.
+            </div>
+            <button
+              onClick={() => {
+                trackEvent(settings, "consent_reset");
+                void resetConsent().then(() => setConsented(false));
+              }}
+            >
+              Review / reset consent
+            </button>
           </div>
         </details>
       )}

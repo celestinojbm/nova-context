@@ -31,6 +31,9 @@ const envSchema = z.object({
   ANTHROPIC_API_KEY: z.string().min(10).optional().or(z.literal("").transform(() => undefined)),
   NOVA_LIVE_QA: z.enum(["auto", "off"]).default("auto"),
   NOVA_LIVE_MODEL: z.string().optional().or(z.literal("").transform(() => undefined)),
+  // M4: funnel analytics. 'local' stores allowlisted product events in
+  // Postgres (never captured content); 'off' drops them.
+  NOVA_ANALYTICS: z.enum(["local", "off"]).default("local"),
 });
 
 export type Env = z.infer<typeof envSchema>;

@@ -228,3 +228,35 @@ h3 { margin: 26px 0 10px; }
 .moment-delete button:hover {
   opacity: 1;
 }
+
+.export-form {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin: 10px 0;
+  font-size: 13px;
+}
+.export-form input {
+  font: inherit;
+  padding: 4px 8px;
+  border: 1px solid #8884;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+}
+.export-form button {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid #8884;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.detail-json {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

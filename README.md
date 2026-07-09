@@ -119,17 +119,9 @@ Full detail in [System Architecture](docs/SYSTEM_ARCHITECTURE.md).
 
 ## Project status
 
-**M3 — Live Context Mode.** Both product modes from the original vision now run:
+**M4 — private-alpha hardening.** Not new features — trust. Onboarding + consent gate the extension (capture and live mode blocked until the user reads the disclosures and accepts; reviewable/resettable in Settings). A user-visible **audit log** in the web app shows every capture, live session, cloud call, action decision, deletion, and export — content-free by contract. A **security suite** proves captured page/live content is data, never instructions: it can't execute actions, self-approve, disable redaction, reassign projects, bypass cloud-call gates, tamper with audit, or exfiltrate stored memory. **Visual-redaction safeguards**: a standing warning that text redaction doesn't cover pixels, plus per-capture modes (full / blur / text-only). **Export/delete hardening**: export by project and date range, project deletion, confirmation on destructive deletes. **Privacy-preserving funnel analytics** (allowlisted event names, numeric/short props only, NOVA_ANALYTICS=off switch). And **deploy configs** for a boring three-app Fly.io private alpha (infra/DEPLOY.md).
 
-> **Instant Capture**: capture the visible tab with a spoken/typed instruction -> capture-time redaction (emails, phones, cards, keys, SSNs — before storage, enrichment, audit, or any cloud call) -> fast storage -> async enrichment -> hybrid search -> projects -> approved actions.
->
-> **Live Context (v0)**: start an explicit, visibly-indicated live session in the extension (30-min hard cap) -> frame sampling + text snapshots into an in-memory ring buffer with strict size/time budgets -> ask questions answered ONLY from the buffer (grounded, insufficient-context honesty, captured content treated as data never instructions) -> say "save this" to turn the current segment into a normal Context Moment -> end the session and the buffer is destroyed.
-
-Plus user data controls: full JSON export and per-moment deletion (cascading tasks/actions/embeddings, audited without content).
-
-Everything degrades gracefully and every cloud call is explicitly configured: `NOVA_LIVE_QA`, `NOVA_CLOUD_ENRICHMENT`, `NOVA_REDACTION`, provider keys — all documented in `.env.example` files.
-
-Deliberately not built yet: Notion OAuth connect (adapter remains prepared and gated), mobile, marketplace, real auth, audio in live sessions. Those are M4+.
+Every cloud call is opt-in and config-gated: NOVA_LIVE_QA, NOVA_CLOUD_ENRICHMENT, NOVA_REDACTION, NOVA_ANALYTICS, provider keys — documented in each service's .env.example. Notion OAuth remains deferred (adapter prepared and gated).
 
 ### Getting started
 

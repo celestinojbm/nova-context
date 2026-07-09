@@ -13,6 +13,8 @@ const envSchema = z.object({
   NOVA_CLOUD_ENRICHMENT: z.enum(["auto", "off"]).default("auto"),
   NOVA_ENRICH_MODEL: z.string().optional().or(z.literal("").transform(() => undefined)),
   NOVA_ENRICHMENT_QUEUE: z.string().default("moment-enrichment"),
+  // M4: same semantics as the API — 'local' stores product events, 'off' drops.
+  NOVA_ANALYTICS: z.enum(["local", "off"]).default("local"),
 });
 
 export type WorkerEnv = z.infer<typeof envSchema>;

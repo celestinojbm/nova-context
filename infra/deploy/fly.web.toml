@@ -1,0 +1,24 @@
+# Fly.io config for the Nova web app.
+app = "nova-context-web" # change to your app name
+
+[build]
+  dockerfile = "infra/deploy/web.Dockerfile"
+
+[env]
+  PORT = "3000"
+# Secrets: NOVA_API_URL (the deployed API URL), NOVA_API_TOKEN (same value
+# as the API's token).
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "15s"
+    method = "GET"
+    path = "/settings"

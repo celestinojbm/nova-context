@@ -38,11 +38,12 @@ export function extractPageContext() {
 
 export type PageContext = ReturnType<typeof extractPageContext>;
 
-/** Downscale the captureVisibleTab image so the stored thumbnail stays small. */
+/** Downscale (and optionally blur — M4 visual safeguard) the screenshot. */
 export async function downscaleDataUrl(
   dataUrl: string,
   maxWidth = 800,
   quality = 0.75,
+  blur = false,
 ): Promise<string> {
   const img = new Image();
   await new Promise<void>((resolve, reject) => {
@@ -56,6 +57,7 @@ export async function downscaleDataUrl(
   canvas.height = Math.round(img.height * scale);
   const ctx = canvas.getContext("2d");
   if (!ctx) return dataUrl;
+  if (blur) ctx.filter = "blur(8px)";
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
   return canvas.toDataURL("image/jpeg", quality);
 }
@@ -65,8 +67,12 @@ export interface CaptureDraft {
   screenshotDataUrl: string | null;
 }
 
-/** Grab everything visible about the active tab: DOM extract + screenshot. */
-export async function captureActiveTab(): Promise<CaptureDraft> {
+/** Grab everything visible about the active tab: DOM extract + screenshot.
+ * captureMode (M4): 'text_only' skips the screenshot entirely; 'blurred'
+ * blurs it client-side before it ever leaves the device. */
+export async function captureActiveTab(
+  captureMode: "full" | "blurred" | "text_only" = "full",
+): Promise<CaptureDraft> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id || !tab.windowId) {
     throw new Error("No active tab to capture.");
@@ -85,11 +91,13 @@ export async function captureActiveTab(): Promise<CaptureDraft> {
 
   let screenshotDataUrl: string | null = null;
   try {
-    const raw = await chrome.tabs.captureVisibleTab(tab.windowId, {
-      format: "jpeg",
-      quality: 85,
-    });
-    screenshotDataUrl = await downscaleDataUrl(raw);
+    if (captureMode !== "text_only") {
+      const raw = await chrome.tabs.captureVisibleTab(tab.windowId, {
+        format: "jpeg",
+        quality: 85,
+      });
+      screenshotDataUrl = await downscaleDataUrl(raw, 800, 0.75, captureMode === "blurred");
+    }
   } catch {
     // Screenshot can fail on protected pages; DOM extract alone still makes
     // a useful moment. Never block capture on the thumbnail.

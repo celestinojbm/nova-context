@@ -13,6 +13,7 @@
     "NOVA_REDACTION",
     "NOVA_LIVE_QA",
     "NOVA_LIVE_MODEL",
+    "NOVA_ANALYTICS",
     "NOVA_API_URL"
   ],
   "tasks": {

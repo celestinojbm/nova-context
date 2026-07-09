@@ -25,6 +25,25 @@ import type pg from "pg";
 export interface EnrichDeps {
   enricher: AnthropicEnricher | null;
   embedder: EmbeddingProvider | null;
+  /** 'local' stores product events; 'off' drops them (M4 analytics). */
+  analytics?: "local" | "off";
+}
+
+function trackEvent(
+  db: pg.Pool,
+  deps: EnrichDeps,
+  userId: string,
+  event: string,
+  props: Record<string, unknown>,
+): void {
+  if (deps.analytics === "off") return;
+  void db
+    .query(`INSERT INTO product_events (user_id, event, props) VALUES ($1, $2, $3)`, [
+      userId,
+      event,
+      JSON.stringify(props),
+    ])
+    .catch(() => {/* analytics never break enrichment */});
 }
 
 interface MomentForEnrichment {
@@ -61,6 +80,9 @@ export async function markFailed(
      VALUES ($1, 'enrichment.failed', 'moment', $2, $3)`,
     [userId, momentId, JSON.stringify({ error: error.slice(0, 300) })],
   );
+  void db
+    .query(`INSERT INTO product_events (user_id, event, props) VALUES ($1, 'enrichment_failed', '{}')`, [userId])
+    .catch(() => {/* analytics never break failure marking */});
 }
 
 export async function enrichMoment(
@@ -174,6 +196,13 @@ export async function enrichMoment(
         candidate.title,
       ],
     );
+  }
+
+  if (draft.action_candidates.length > 0) {
+    trackEvent(db, deps, moment.user_id, "action_proposed", {
+      count: draft.action_candidates.length,
+      provider: draft.provider,
+    });
   }
 
   // 5. Project candidates (rule scoring shared with the API).

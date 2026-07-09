@@ -13,6 +13,7 @@ import { z } from "zod";
 import { AdapterRegistry } from "./adapters/types.js";
 import { NovaTaskAdapter } from "./adapters/nova-task.js";
 import { NotionAdapter } from "./adapters/notion.js";
+import type { Analytics } from "./analytics.js";
 
 export interface M2RouteDeps {
   db: pg.Pool;
@@ -21,6 +22,7 @@ export interface M2RouteDeps {
   momentColumns: string;
   momentColumnsPrefixed: string;
   rowToMoment: (row: never) => ContextMoment;
+  analytics: Analytics;
 }
 
 export function buildAdapterRegistry(): AdapterRegistry {
@@ -31,7 +33,7 @@ export function buildAdapterRegistry(): AdapterRegistry {
 }
 
 export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void {
-  const { db, devUserId, embedder, momentColumns, momentColumnsPrefixed } = deps;
+  const { db, devUserId, embedder, momentColumns, momentColumnsPrefixed, analytics } = deps;
   const rowToMoment = deps.rowToMoment as (row: unknown) => ContextMoment;
   const registry = buildAdapterRegistry();
 
@@ -168,6 +170,12 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
       }));
     }
 
+    analytics.track(userId, "search_performed", {
+      has_query: Boolean(query),
+      results: items.length,
+      fts: ftsRan,
+      vector: vectorRan,
+    });
     const response: MemorySearchResponse = {
       items,
       legs: { fts: ftsRan, vector: vectorRan },
@@ -281,6 +289,10 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
         JSON.stringify({ action_type: action.action_type, ...(ok ? {} : { result }) }),
       ],
     );
+    analytics.track(userId, "action_approved", {
+      action_type: action.action_type,
+      outcome: finalStatus,
+    });
     return { id: action.id, status: finalStatus, result };
   });
 
@@ -308,6 +320,7 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
        VALUES ($1, 'action.reject', 'action', $2, $3)`,
       [userId, action.id, JSON.stringify({ action_type: action.action_type })],
     );
+    analytics.track(userId, "action_rejected", { action_type: action.action_type });
     return { id: action.id, status: "rejected" };
   });
 

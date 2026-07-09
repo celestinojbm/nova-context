@@ -6,6 +6,7 @@ import {
   type LiveAnswerResponse,
 } from "@nova/schema";
 import type { FastifyInstance } from "fastify";
+import type { Analytics } from "./analytics.js";
 import type pg from "pg";
 import { z } from "zod";
 
@@ -16,10 +17,11 @@ export interface M3RouteDeps {
   redactionOn: boolean;
   momentColumns: string;
   rowToMoment: (row: never) => ContextMoment;
+  analytics: Analytics;
 }
 
 export function registerM3Routes(app: FastifyInstance, deps: M3RouteDeps): void {
-  const { db, devUserId, liveQa, redactionOn, momentColumns } = deps;
+  const { db, devUserId, liveQa, redactionOn, momentColumns, analytics } = deps;
   const rowToMoment = deps.rowToMoment as (row: unknown) => ContextMoment;
 
   /**
@@ -78,6 +80,10 @@ export function registerM3Routes(app: FastifyInstance, deps: M3RouteDeps): void 
           }),
         ],
       );
+      analytics.track(userId, "live_question_asked", {
+        grounding: answer.grounding,
+        frames: request.context.frames.length,
+      });
       return answer;
     } catch (err) {
       req.log.error({ err }, "live qa failed");
@@ -89,12 +95,37 @@ export function registerM3Routes(app: FastifyInstance, deps: M3RouteDeps): void 
    * Export (M3): every saved Context Moment with its tasks and actions, as
    * a single JSON document. User-owned data, out in one request.
    */
-  app.get("/v1/export", async (_req, reply) => {
+  app.get("/v1/export", async (req, reply) => {
+    const query = z
+      .object({
+        project_id: z.string().uuid().optional(),
+        from: z.coerce.date().optional(),
+        to: z.coerce.date().optional(),
+      })
+      .safeParse(req.query);
+    if (!query.success) return reply.code(400).send({ error: "invalid_request" });
     const userId = await devUserId();
+
+    const momentConditions = ["user_id = $1"];
+    const momentParams: unknown[] = [userId];
+    if (query.data.project_id) {
+      momentParams.push(query.data.project_id);
+      momentConditions.push(`project_id = $${momentParams.length}`);
+    }
+    if (query.data.from) {
+      momentParams.push(query.data.from.toISOString());
+      momentConditions.push(`captured_at >= $${momentParams.length}`);
+    }
+    if (query.data.to) {
+      momentParams.push(query.data.to.toISOString());
+      momentConditions.push(`captured_at <= $${momentParams.length}`);
+    }
+
     const [moments, tasks, actions, projects] = await Promise.all([
       db.query(
-        `SELECT ${momentColumns} FROM context_moments WHERE user_id = $1 ORDER BY captured_at ASC`,
-        [userId],
+        `SELECT ${momentColumns} FROM context_moments
+         WHERE ${momentConditions.join(" AND ")} ORDER BY captured_at ASC`,
+        momentParams,
       ),
       db.query(
         `SELECT id, project_id, moment_id, title, notes, priority, status, created_at, completed_at
@@ -112,6 +143,22 @@ export function registerM3Routes(app: FastifyInstance, deps: M3RouteDeps): void 
         [userId],
       ),
     ]);
+    await db.query(
+      `INSERT INTO audit_log (user_id, event_type, detail) VALUES ($1, 'export', $2)`,
+      [
+        userId,
+        JSON.stringify({
+          moments: moments.rowCount,
+          tasks: tasks.rowCount,
+          actions: actions.rowCount,
+          filtered: Boolean(query.data.project_id || query.data.from || query.data.to),
+        }),
+      ],
+    );
+    analytics.track(userId, "export_requested", {
+      moments: moments.rowCount ?? 0,
+      filtered: Boolean(query.data.project_id || query.data.from || query.data.to),
+    });
     reply.header(
       "content-disposition",
       `attachment; filename="nova-context-export-${new Date().toISOString().slice(0, 10)}.json"`,
@@ -119,6 +166,11 @@ export function registerM3Routes(app: FastifyInstance, deps: M3RouteDeps): void 
     return {
       exported_at: new Date().toISOString(),
       format_version: 1,
+      filters: {
+        project_id: query.data.project_id ?? null,
+        from: query.data.from?.toISOString() ?? null,
+        to: query.data.to?.toISOString() ?? null,
+      },
       projects: projects.rows,
       moments: moments.rows.map((row) => rowToMoment(row)),
       tasks: tasks.rows,
@@ -185,6 +237,7 @@ export function registerM3Routes(app: FastifyInstance, deps: M3RouteDeps): void 
     } finally {
       client.release();
     }
+    analytics.track(userId, "delete_requested", { kind: "moment" });
     return { deleted: true, tasks: deletedTasks, actions: deletedActions };
   });
 }

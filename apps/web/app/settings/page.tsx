@@ -18,6 +18,25 @@ export default function SettingsPage() {
           Export all data as JSON
         </a>
       </p>
+      <form className="export-form" action={`${API_URL}/v1/export`} method="get">
+        <label>
+          From <input type="date" name="from" />
+        </label>
+        <label>
+          To <input type="date" name="to" />
+        </label>
+        <button type="submit">Export date range</button>
+      </form>
+      <p className="muted">
+        Per-project export: open a project page and use its export link, or
+        add <code>?project_id=&lt;id&gt;</code> to the export URL.
+      </p>
+
+      <h3>Audit</h3>
+      <p className="muted">
+        The <a href="/audit">audit log</a> shows every capture, live session,
+        cloud call, action decision, deletion, and export.
+      </p>
 
       <h3>Deletion</h3>
       <p className="muted">

@@ -11,6 +11,7 @@ import {
   type TranscriptionRouter,
 } from "@nova/model-router";
 import type { FastifyInstance } from "fastify";
+import type { Analytics } from "./analytics.js";
 import type pg from "pg";
 import { z } from "zod";
 import { suggestProjects } from "@nova/context-engine";
@@ -20,10 +21,11 @@ export interface M1RouteDeps {
   devUserId: () => Promise<string>;
   intentRouter: IntentRouter;
   transcriptionRouter: TranscriptionRouter;
+  analytics: Analytics;
 }
 
 export function registerM1Routes(app: FastifyInstance, deps: M1RouteDeps): void {
-  const { db, devUserId, intentRouter, transcriptionRouter } = deps;
+  const { db, devUserId, intentRouter, transcriptionRouter, analytics } = deps;
 
   /**
    * Voice transcription. Privacy contract: the uploaded audio is held in
@@ -79,6 +81,7 @@ export function registerM1Routes(app: FastifyInstance, deps: M1RouteDeps): void 
         return reply.code(503).send({ error: "transcription_unavailable" });
       }
       req.log.error({ err }, "transcription failed");
+      analytics.track(userId, "transcription_failed", {});
       return reply.code(502).send({
         error: "transcription_failed",
         message: "Transcription failed. Type your instruction instead.",

@@ -28,7 +28,7 @@ export function buildDeps(env: WorkerEnv): EnrichDeps {
   const embedder: EmbeddingProvider | null = env.OPENAI_API_KEY
     ? new OpenAIEmbedder({ apiKey: env.OPENAI_API_KEY })
     : null;
-  return { enricher, embedder };
+  return { enricher, embedder, analytics: env.NOVA_ANALYTICS };
 }
 
 export interface StartWorkerOptions {

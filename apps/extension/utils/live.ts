@@ -1,4 +1,4 @@
-import { LiveBuffer } from "@nova/context-engine";
+import { framesAllowed, LiveBuffer, type CaptureMode } from "@nova/context-engine";
 import { LIVE_LIMITS, type LiveAnswerResponse, type LiveQaExchange } from "@nova/schema";
 import type { CreateContextMomentRequest } from "@nova/schema";
 import { extractPageContext, downscaleDataUrl, type PageContext } from "./capture.js";
@@ -39,6 +39,7 @@ export class LiveSession {
   private lastError: string | null = null;
   onUpdate: (() => void) | null = null;
   onExpired: (() => void) | null = null;
+  captureMode: CaptureMode = "full";
 
   get active(): boolean {
     return this.buffer !== null;
@@ -97,12 +98,13 @@ export class LiveSession {
   private async sampleFrame(): Promise<void> {
     if (!this.buffer || this.windowId == null) return;
     if (this.buffer.expired(Date.now())) return;
+    if (!framesAllowed(this.captureMode)) return; // text-only mode: no frames
     try {
       const raw = await chrome.tabs.captureVisibleTab(this.windowId, {
         format: "jpeg",
         quality: 60,
       });
-      const small = await downscaleDataUrl(raw, 640, 0.6);
+      const small = await downscaleDataUrl(raw, 640, 0.6, this.captureMode === "blurred");
       this.buffer.addFrame(small, Date.now());
       this.lastError = null;
     } catch {

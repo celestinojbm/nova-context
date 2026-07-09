@@ -1,0 +1,15 @@
+# Fly.io config for the Nova enrichment worker (no HTTP surface; Fly's
+# process check watches the process itself).
+app = "nova-context-worker" # change to your app name
+
+[build]
+  dockerfile = "infra/deploy/worker.Dockerfile"
+
+[env]
+  NOVA_CLOUD_ENRICHMENT = "auto"
+  NOVA_ANALYTICS = "local"
+# Secrets: DATABASE_URL, REDIS_URL, ANTHROPIC_API_KEY, OPENAI_API_KEY.
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
