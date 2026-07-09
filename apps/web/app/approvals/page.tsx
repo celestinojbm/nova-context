@@ -12,7 +12,7 @@ async function decide(formData: FormData) {
     return;
   await fetch(`${API_URL}/v1/actions/${id}/${decision}`, {
     method: "POST",
-    headers: authHeaders(),
+    headers: await authHeaders(),
   });
   revalidatePath("/approvals");
 }

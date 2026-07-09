@@ -23,13 +23,13 @@ import { z } from "zod";
 import type { Env } from "./env.js";
 import { Analytics } from "./analytics.js";
 import { createEnrichmentQueue, type EnrichmentJob } from "./queue.js";
+import { registerAuth, requireAuth } from "./auth/plugin.js";
+import { registerAuthRoutes } from "./routes-auth.js";
 import { registerM1Routes } from "./routes-m1.js";
 import { registerM2Routes } from "./routes-m2.js";
 import { registerM3Routes } from "./routes-m3.js";
 import { registerM4Routes } from "./routes-m4.js";
 import { redactDeep, suggestProjects, type RedactionType } from "@nova/context-engine";
-
-const DEV_USER_EMAIL = "dev@nova.local";
 
 interface MomentRow {
   id: string;
@@ -153,32 +153,10 @@ export async function buildApp({ env, pool, liveQa }: BuildAppOptions): Promise<
     });
   }
 
-  // Optional shared-token auth for M0. Real OAuth 2.1 + scopes is out of scope
-  // (BUILD_PLAN §14: no public API yet); this keeps a deployed dev instance
-  // from being an open write endpoint.
-  app.addHook("onRequest", async (req, reply) => {
-    if (!env.NOVA_API_TOKEN) return;
-    if (!req.url.startsWith("/v1/")) return;
-    const auth = req.headers.authorization;
-    if (auth !== `Bearer ${env.NOVA_API_TOKEN}`) {
-      return reply.code(401).send({ error: "unauthorized" });
-    }
-  });
-
-  // M0 is single-user: every request acts as the seeded dev user.
-  async function devUserId(): Promise<string> {
-    const { rows } = await db.query<{ id: string }>(
-      "SELECT id FROM users WHERE email = $1",
-      [DEV_USER_EMAIL],
-    );
-    const row = rows[0];
-    if (!row) {
-      throw new Error(
-        `Dev user missing — run migrations (pnpm db:migrate) to seed ${DEV_USER_EMAIL}`,
-      );
-    }
-    return row.id;
-  }
+  // M5: every /v1 route runs behind the session middleware (fail closed);
+  // the auth routes themselves carry the small public allowlist.
+  registerAuth(app, db);
+  registerAuthRoutes(app, { db, env });
 
   app.get("/healthz", async () => {
     await db.query("SELECT 1");
@@ -197,7 +175,7 @@ export async function buildApp({ env, pool, liveQa }: BuildAppOptions): Promise<
       });
     }
     const body = parsed.data;
-    const userId = await devUserId();
+    const userId = requireAuth(req).userId;
 
     if (body.project_id) {
       const { rowCount } = await db.query(
@@ -432,7 +410,7 @@ export async function buildApp({ env, pool, liveQa }: BuildAppOptions): Promise<
       return reply.code(400).send({ error: "invalid_request" });
     }
     const { limit, before, project_id } = parsed.data;
-    const userId = await devUserId();
+    const userId = requireAuth(req).userId;
 
     const conditions = ["user_id = $1"];
     const params: unknown[] = [userId];
@@ -467,7 +445,7 @@ export async function buildApp({ env, pool, liveQa }: BuildAppOptions): Promise<
     if (!params.success) {
       return reply.code(404).send({ error: "not_found" });
     }
-    const userId = await devUserId();
+    const userId = requireAuth(req).userId;
     const { rows } = await db.query<MomentRow>(
       `SELECT ${MOMENT_COLUMNS}
        FROM context_moments
@@ -481,8 +459,8 @@ export async function buildApp({ env, pool, liveQa }: BuildAppOptions): Promise<
     return rowToMoment(row);
   });
 
-  app.get("/v1/projects", async () => {
-    const userId = await devUserId();
+  app.get("/v1/projects", async (req) => {
+    const userId = requireAuth(req).userId;
     const { rows } = await db.query(
       `SELECT p.id, p.name, p.description, p.created_at,
               count(DISTINCT m.id)::int AS moment_count,
@@ -498,10 +476,9 @@ export async function buildApp({ env, pool, liveQa }: BuildAppOptions): Promise<
     return { items: rows };
   });
 
-  registerM1Routes(app, { db, devUserId, intentRouter, transcriptionRouter, analytics });
+  registerM1Routes(app, { db, intentRouter, transcriptionRouter, analytics });
   registerM2Routes(app, {
     db,
-    devUserId,
     embedder,
     momentColumns: MOMENT_COLUMNS,
     momentColumnsPrefixed: MOMENT_COLUMNS_PREFIXED,
@@ -510,14 +487,13 @@ export async function buildApp({ env, pool, liveQa }: BuildAppOptions): Promise<
   });
   registerM3Routes(app, {
     db,
-    devUserId,
     liveQa: liveQaProvider,
     redactionOn,
     momentColumns: MOMENT_COLUMNS,
     rowToMoment: rowToMoment as (row: never) => ContextMoment,
     analytics,
   });
-  registerM4Routes(app, { db, devUserId, analytics });
+  registerM4Routes(app, { db, analytics });
 
   return app;
 }

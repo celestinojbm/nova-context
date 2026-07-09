@@ -6,8 +6,8 @@ app = "nova-context-web" # change to your app name
 
 [env]
   PORT = "3000"
-# Secrets: NOVA_API_URL (the deployed API URL), NOVA_API_TOKEN (same value
-# as the API's token).
+# Secrets: NOVA_API_URL (the deployed API URL). Sessions ride an HttpOnly
+# cookie set by the web app itself; no shared token exists anymore (M5).
 
 [http_service]
   internal_port = 3000

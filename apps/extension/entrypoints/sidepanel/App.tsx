@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import type { ProjectSuggestion } from "@nova/schema";
 import { CAPTURE_MODES, type CaptureMode } from "@nova/context-engine";
 import {
+  disconnect,
   fetchProjects,
   loadSettings,
   postMoment,
   saveSettings,
+  SessionExpiredError,
   suggestProjectsPreview,
   trackEvent,
   transcribeAudio,
@@ -13,6 +15,7 @@ import {
   type ExtensionSettings,
 } from "../../utils/api.js";
 import { acceptConsent, hasValidConsent, resetConsent } from "../../utils/consent.js";
+import { Connect } from "./Connect.js";
 import { Onboarding } from "./Onboarding.js";
 import {
   captureActiveTab,
@@ -40,17 +43,39 @@ export function App() {
   const [listening, setListening] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [consented, setConsented] = useState<boolean | null>(null);
+  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   const recorderRef = useRef(new PushToTalkRecorder());
 
   useEffect(() => {
     void loadSettings().then((s) => {
       setSettings(s);
-      void fetchProjects(s).then(setProjects);
-      trackEvent(s, "extension_opened");
+      if (s.deviceToken) {
+        void fetchProjects(s).then(setProjects).catch(() => setProjects([]));
+        trackEvent(s, "extension_opened");
+      }
     });
     void hasValidConsent().then(setConsented);
+    // authFetch clears the stored token on any 401; reflect that here so
+    // every surface converges on the Connect screen when a session dies.
+    const onStorage = (
+      changes: Record<string, chrome.storage.StorageChange>,
+      area: string,
+    ) => {
+      if (area !== "local" || !("deviceToken" in changes)) return;
+      const next = (changes.deviceToken?.newValue as string | undefined) ?? "";
+      setSettings((prev) => (prev ? { ...prev, deviceToken: next } : prev));
+      if (!next) {
+        setState("idle");
+        setError(null);
+        setSessionNotice("Your Nova session expired or was revoked — reconnect below.");
+      }
+    };
+    chrome.storage.onChanged.addListener(onStorage);
     const recorder = recorderRef.current;
-    return () => recorder.release();
+    return () => {
+      chrome.storage.onChanged.removeListener(onStorage);
+      recorder.release();
+    };
   }, []);
 
   async function onCapture() {
@@ -151,7 +176,19 @@ export function App() {
   async function onSettingsChange(next: ExtensionSettings) {
     setSettings(next);
     await saveSettings(next);
-    void fetchProjects(next).then(setProjects);
+    if (next.deviceToken) {
+      setSessionNotice(null);
+      void fetchProjects(next).then(setProjects).catch(() => setProjects([]));
+    }
+  }
+
+  async function onDisconnect() {
+    if (!settings) return;
+    await disconnect(settings);
+    setSettings({ ...settings, deviceToken: "", accountEmail: "" });
+    setProjects([]);
+    setSessionNotice(null);
+    setState("idle");
   }
 
   // M4: consent gate — capture and live mode are unusable until accepted.
@@ -172,6 +209,20 @@ export function App() {
   }
   if (consented === null) {
     return <div className="panel"><h1>Nova Context</h1></div>;
+  }
+
+  // M5: no account paired (or the session died) — everything else waits.
+  if (settings && !settings.deviceToken) {
+    return (
+      <div className="panel">
+        <h1>Nova Context</h1>
+        <Connect
+          settings={settings}
+          onSettingsChange={onSettingsChange}
+          notice={sessionNotice}
+        />
+      </div>
+    );
   }
 
   return (
@@ -295,23 +346,12 @@ export function App() {
         <details className="settings">
           <summary>Settings</summary>
           <div>
-            <label htmlFor="apiUrl">API URL</label>
-            <input
-              id="apiUrl"
-              value={settings.apiUrl}
-              onChange={(e) =>
-                void onSettingsChange({ ...settings, apiUrl: e.target.value })
-              }
-            />
-            <label htmlFor="apiToken">API token (optional)</label>
-            <input
-              id="apiToken"
-              type="password"
-              value={settings.apiToken}
-              onChange={(e) =>
-                void onSettingsChange({ ...settings, apiToken: e.target.value })
-              }
-            />
+            <div className="meta">
+              Connected as <strong>{settings.accountEmail || "your account"}</strong>
+            </div>
+            <button onClick={() => void onDisconnect()}>
+              Disconnect from this account
+            </button>
             <label htmlFor="captureMode">Screenshots</label>
             <select
               id="captureMode"

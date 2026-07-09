@@ -6,17 +6,28 @@ describe("loadEnv", () => {
     const env = loadEnv({});
     expect(env.PORT).toBe(3001);
     expect(env.DATABASE_URL).toContain("postgres://");
-    expect(env.NOVA_API_TOKEN).toBeUndefined();
+    expect(env.isProduction).toBe(false);
+    expect(env.signupMode).toBe("open");
+    expect(env.NOVA_SESSION_TTL_HOURS).toBe(168);
+    expect(env.NOVA_EXTENSION_SESSION_TTL_HOURS).toBe(720);
   });
 
-  it("treats an empty NOVA_API_TOKEN as unset", () => {
-    const env = loadEnv({ NOVA_API_TOKEN: "" });
-    expect(env.NOVA_API_TOKEN).toBeUndefined();
+  it("defaults signup to invite-only in production", () => {
+    const env = loadEnv({ NODE_ENV: "production" });
+    expect(env.isProduction).toBe(true);
+    expect(env.signupMode).toBe("invite");
   });
 
-  it("rejects a short NOVA_API_TOKEN", () => {
-    expect(() => loadEnv({ NOVA_API_TOKEN: "short" })).toThrow(
-      /Invalid environment configuration/,
+  it("honors an explicit NOVA_SIGNUP", () => {
+    expect(loadEnv({ NODE_ENV: "production", NOVA_SIGNUP: "closed" }).signupMode).toBe("closed");
+    expect(
+      loadEnv({ NOVA_SIGNUP: "invite", NOVA_ALPHA_INVITE_CODE: "alpha-code-1" }).signupMode,
+    ).toBe("invite");
+  });
+
+  it("rejects invite mode without a code in development", () => {
+    expect(() => loadEnv({ NOVA_SIGNUP: "invite" })).toThrow(
+      /NOVA_ALPHA_INVITE_CODE/,
     );
   });
 

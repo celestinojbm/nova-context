@@ -1,11 +1,94 @@
-import { API_URL } from "../lib/api";
+import type { ListSessionsResponse, MeResponse } from "@nova/schema";
+import { revalidatePath } from "next/cache";
+import { API_URL, apiGet, authHeaders } from "../lib/api";
+import { PairExtension } from "./PairExtension";
 
 export const dynamic = "force-dynamic";
 
-export default function SettingsPage() {
+async function revokeSession(formData: FormData) {
+  "use server";
+  const id = formData.get("id");
+  if (typeof id !== "string") return;
+  await fetch(`${API_URL}/v1/auth/sessions/${id}`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  revalidatePath("/settings");
+}
+
+export default async function SettingsPage() {
+  const [me, sessions] = await Promise.all([
+    apiGet<MeResponse>("/v1/auth/me"),
+    apiGet<ListSessionsResponse>("/v1/auth/sessions"),
+  ]);
+
   return (
     <>
       <h2>Settings & data controls</h2>
+
+      <h3>Account</h3>
+      {me.ok ? (
+        <p className="muted">
+          Signed in as <strong>{me.data.user.email}</strong>
+          {me.data.user.display_name ? ` (${me.data.user.display_name})` : ""}.
+          This session expires{" "}
+          {new Date(me.data.session.expires_at).toLocaleString()}.
+        </p>
+      ) : (
+        <p className="muted">{me.message}</p>
+      )}
+
+      <h3>Browser extension</h3>
+      <p className="muted">
+        Connect the Nova extension to your account with a one-time pairing
+        code. The extension stores only its own revocable session token —
+        never your password.
+      </p>
+      <PairExtension />
+
+      <h3>Sessions & devices</h3>
+      <p className="muted">
+        Every signed-in browser and paired extension. Revoke anything you
+        don&apos;t recognize; revoked sessions stop working immediately.
+      </p>
+      {sessions.ok && sessions.data.items.length > 0 ? (
+        <table className="sessions-table">
+          <thead>
+            <tr>
+              <th>Kind</th>
+              <th>Device</th>
+              <th>Last used</th>
+              <th>Expires</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {sessions.data.items.map((s) => (
+              <tr key={s.id}>
+                <td>
+                  {s.kind === "extension" ? "Extension" : "Web"}
+                  {s.current ? " (this session)" : ""}
+                </td>
+                <td className="muted">{s.label ?? "—"}</td>
+                <td>{new Date(s.last_used_at).toLocaleString()}</td>
+                <td>{new Date(s.expires_at).toLocaleDateString()}</td>
+                <td>
+                  {!s.current && (
+                    <form action={revokeSession}>
+                      <input type="hidden" name="id" value={s.id} />
+                      <button type="submit">Revoke</button>
+                    </form>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="muted">
+          {sessions.ok ? "No active sessions." : sessions.message}
+        </p>
+      )}
 
       <h3>Export</h3>
       <p className="muted">
@@ -14,11 +97,11 @@ export default function SettingsPage() {
         context is yours (docs/FIRST_PRINCIPLES.md: export everything).
       </p>
       <p>
-        <a className="button-link" href={`${API_URL}/v1/export`} download>
+        <a className="button-link" href="/export" download>
           Export all data as JSON
         </a>
       </p>
-      <form className="export-form" action={`${API_URL}/v1/export`} method="get">
+      <form className="export-form" action="/export" method="get">
         <label>
           From <input type="date" name="from" />
         </label>
@@ -35,7 +118,7 @@ export default function SettingsPage() {
       <h3>Audit</h3>
       <p className="muted">
         The <a href="/audit">audit log</a> shows every capture, live session,
-        cloud call, action decision, deletion, and export.
+        cloud call, action decision, sign-in, deletion, and export.
       </p>
 
       <h3>Deletion</h3>

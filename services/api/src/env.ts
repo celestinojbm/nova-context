@@ -8,9 +8,19 @@ const envSchema = z.object({
     .url()
     .default("postgres://nova:nova@localhost:5432/nova"),
   PORT: z.coerce.number().int().positive().default(3001),
-  // Optional single shared token for M0. OAuth 2.1 + PKCE + scopes is
-  // deliberately NOT built yet (BUILD_PLAN §14: no public API).
-  NOVA_API_TOKEN: z.string().min(16).optional().or(z.literal("").transform(() => undefined)),
+  // M5: 'production' turns on strict behavior (signup defaults to invite-only
+  // unless NOVA_SIGNUP says otherwise). Anything else is development.
+  NODE_ENV: z.string().optional(),
+  // M5 signup policy. 'open' = anyone can sign up (local dev default);
+  // 'invite' = signup requires NOVA_ALPHA_INVITE_CODE (private alpha);
+  // 'closed' = no signup endpoint at all. Defaults: open in dev, invite in
+  // production (fail closed — a prod deploy without config takes no signups
+  // because no invite code matches).
+  NOVA_SIGNUP: z.enum(["open", "invite", "closed"]).optional(),
+  NOVA_ALPHA_INVITE_CODE: z.string().min(8).optional().or(z.literal("").transform(() => undefined)),
+  // Session lifetimes (fixed expiry; last_used_at is tracked for the UI).
+  NOVA_SESSION_TTL_HOURS: z.coerce.number().int().positive().default(24 * 7),
+  NOVA_EXTENSION_SESSION_TTL_HOURS: z.coerce.number().int().positive().default(24 * 30),
   // Optional. Used for voice transcription (Whisper) and query-time
   // embeddings for vector search. Without it: transcription returns 503
   // (clients degrade to typed input) and search runs keyword-only.
@@ -36,7 +46,10 @@ const envSchema = z.object({
   NOVA_ANALYTICS: z.enum(["local", "off"]).default("local"),
 });
 
-export type Env = z.infer<typeof envSchema>;
+export type Env = z.infer<typeof envSchema> & {
+  isProduction: boolean;
+  signupMode: "open" | "invite" | "closed";
+};
 
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   const parsed = envSchema.safeParse(source);
@@ -46,5 +59,14 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
       .join("; ");
     throw new Error(`Invalid environment configuration: ${issues}`);
   }
-  return parsed.data;
+  const isProduction = parsed.data.NODE_ENV === "production";
+  const signupMode = parsed.data.NOVA_SIGNUP ?? (isProduction ? "invite" : "open");
+  if (signupMode === "invite" && !parsed.data.NOVA_ALPHA_INVITE_CODE && !isProduction) {
+    // In dev, invite mode without a code is a config mistake worth naming.
+    // In production it fails closed instead (no code ever matches).
+    throw new Error(
+      "Invalid environment configuration: NOVA_SIGNUP=invite requires NOVA_ALPHA_INVITE_CODE",
+    );
+  }
+  return { ...parsed.data, isProduction, signupMode };
 }

@@ -8,6 +8,7 @@ import {
 } from "@nova/schema";
 import type { EmbeddingProvider } from "@nova/model-router";
 import type { FastifyInstance } from "fastify";
+import { requireAuth } from "./auth/plugin.js";
 import type pg from "pg";
 import { z } from "zod";
 import { AdapterRegistry } from "./adapters/types.js";
@@ -17,7 +18,6 @@ import type { Analytics } from "./analytics.js";
 
 export interface M2RouteDeps {
   db: pg.Pool;
-  devUserId: () => Promise<string>;
   embedder: EmbeddingProvider | null;
   momentColumns: string;
   momentColumnsPrefixed: string;
@@ -33,7 +33,7 @@ export function buildAdapterRegistry(): AdapterRegistry {
 }
 
 export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void {
-  const { db, devUserId, embedder, momentColumns, momentColumnsPrefixed, analytics } = deps;
+  const { db, embedder, momentColumns, momentColumnsPrefixed, analytics } = deps;
   const rowToMoment = deps.rowToMoment as (row: unknown) => ContextMoment;
   const registry = buildAdapterRegistry();
 
@@ -55,7 +55,7 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
       });
     }
     const input = parsed.data;
-    const userId = await devUserId();
+    const userId = requireAuth(req).userId;
 
     const conditions: string[] = ["m.user_id = $1"];
     const params: unknown[] = [userId];
@@ -192,7 +192,7 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
       })
       .safeParse(req.query);
     if (!query.success) return reply.code(400).send({ error: "invalid_request" });
-    const userId = await devUserId();
+    const userId = requireAuth(req).userId;
     const conditions = ["a.user_id = $1"];
     const params: unknown[] = [userId];
     if (query.data.status) {
@@ -230,7 +230,7 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
   app.post("/v1/actions/:id/approve", async (req, reply) => {
     const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
     if (!params.success) return reply.code(404).send({ error: "not_found" });
-    const userId = await devUserId();
+    const userId = requireAuth(req).userId;
 
     // Claim atomically: proposed → executing (prevents double-approval).
     const claim = await db.query(
@@ -299,7 +299,7 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
   app.post("/v1/actions/:id/reject", async (req, reply) => {
     const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
     if (!params.success) return reply.code(404).send({ error: "not_found" });
-    const userId = await devUserId();
+    const userId = requireAuth(req).userId;
     const { rows } = await db.query(
       `UPDATE actions SET status = 'rejected', updated_at = now()
        WHERE id = $1 AND user_id = $2 AND status = 'proposed'
@@ -327,7 +327,7 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
   app.get("/v1/projects/:id", async (req, reply) => {
     const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
     if (!params.success) return reply.code(404).send({ error: "not_found" });
-    const userId = await devUserId();
+    const userId = requireAuth(req).userId;
 
     const projectRes = await db.query(
       `SELECT id, name, description, created_at FROM projects
