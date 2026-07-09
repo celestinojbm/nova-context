@@ -68,6 +68,36 @@ Two flows dominate:
 1. **Instant Capture Mode** — invocation → capture visible context + spoken instruction → Context Moment → project link → action.
 2. **Live Context Mode** — bounded, indicated live session → rolling Context Buffer → real-time Q&A grounded in the buffer → user-confirmed promotion of slices into Context Moments.
 
+### 1.1 Walkthrough: Instant Capture
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant C as Capture client
+    participant L as Local processing
+    participant API as Ingestion API
+    participant Q as Queue
+    participant W as Workers
+    participant AE as Action Engine
+    U->>C: invoke (shortcut/button) + speak instruction
+    C->>L: frame + DOM/AX tree + app metadata + audio
+    L->>L: OCR, UI normalization, extractor, moment assembly
+    L->>L: persist to SQLite + outbox (capture confirmed < 500ms)
+    L->>API: sync moment (skipped if project is local-only)
+    API->>Q: context.moment.created
+    Q->>W: enrich → embed → link
+    W->>API: enrichment written; suggestions ready
+    API-->>C: suggested project link (user confirms)
+    C->>AE: create action (task / Notion page)
+    AE-->>U: Tier 0 executed, or Tier 1 preview shown
+```
+
+The user-facing contract: capture is confirmed locally in under half a second; everything network-bound is asynchronous backfill. Stage-level latency budgets live in [CONTEXT_ENGINE.md](./CONTEXT_ENGINE.md) §1.
+
+### 1.2 Walkthrough: Live Context
+
+A live session is explicitly started (visible indicator, hard time cap), runs the Context Buffer locally, and streams *nothing* to the cloud by default. When the user asks a question, the client sends the *question plus a minimal grounded slice* (current keyframe, relevant transcript span) — not the buffer — to the Intelligence Engine for an answer. "Save this" promotes a user-confirmed slice into a normal Context Moment, which then follows the Instant Capture path from ingestion onward. Session lifecycle events (`context.session.started/frame/ended`) carry metadata and promoted content only, never raw buffer contents.
+
 ---
 
 ## 2. The Five Engines
@@ -129,6 +159,15 @@ Local-first is an architecture decision, not a slogan. The rule: **perception an
 
 The cost of local-first: on-device perception quality varies by platform (see platform notes in [CONTEXT_ENGINE.md](./CONTEXT_ENGINE.md)), local-only projects lose cross-device sync and cloud-model quality, and we maintain two retrieval paths. We accept all three; the trust properties are the product.
 
+### 4.1 Sync Protocol
+
+Device → cloud sync is deliberately boring:
+
+- **Outbox drain**: the SQLite outbox is append-only; each row carries the moment payload, its `idempotency_key`, and a monotonic per-device sequence number. The client POSTs batches (≤50 rows) to `/v1/sync/moments`; the server acks by sequence number; acked rows are pruned. Retries with exponential backoff + jitter; duplicates are collapsed server-side by the idempotency key's unique constraint.
+- **Media upload**: separate path — client encrypts, requests a presigned PUT, uploads ciphertext, then references the object key in the moment row. A moment can sync before its media finishes; the media row stays `pending` until the hash-verified upload lands.
+- **Downstream sync** (cloud → device): cursor-based pull of enrichment results and cross-device moments, over the same authenticated channel; SSE nudges the client that a pull is worthwhile rather than pushing content.
+- **Conflict policy**: moments are immutable once created (enrichment appends, never rewrites capture-time fields), so sync has no merge problem for its core entity. Mutable entities (project names, settings) use last-writer-wins with server timestamps — acceptable because they are low-stakes and low-frequency; we did not build CRDTs for a settings page.
+
 ---
 
 ## 5. Storage Architecture
@@ -140,6 +179,30 @@ The cost of local-first: on-device perception quality varies by platform (see pl
 **SQLite on-device — cache and outbox.** Every client embeds SQLite: local moment cache for offline retrieval, the sync outbox (append-only, idempotency keys assigned at write time), local-only project storage, and settings. Outbox drains FIFO with exponential backoff when connectivity returns.
 
 **Redis — queues, cache, coordination.** BullMQ queues, hot-path caches (session state, rate-limit counters), and pub/sub fan-out for SSE. Redis is never a system of record; losing it loses in-flight jobs only, and at-least-once delivery from the outbox re-fills them.
+
+### 5.1 Core Data Model (overview)
+
+The load-bearing tables, at a glance (full DDL lives in `packages/db`):
+
+| Table | Purpose | Notable columns |
+|---|---|---|
+| `users`, `devices` | identity; per-device sync state | device public keys (media encryption) |
+| `projects` | organizing unit for context | `privacy_tier` (`standard` \| `local_only` — local_only rows exist only on-device) |
+| `moments` | Context Moments, structured fields | `intent_utterance`, `source_app`, `canonical_url`, `idempotency_key` (unique) |
+| `moment_media` | frame/audio object refs | object key, content hash, `expires_at` (TTL) |
+| `moment_text` | OCR lines, page text, transcript segments | `tsvector` column (full-text) |
+| `embeddings` | pgvector rows, multiple granularities | HNSW index; FK cascade from `moments` |
+| `entities`, `edges` | knowledge graph, relational form | typed edges: `mentions`, `about`, `same_as`, `works_with` |
+| `memories` | Memory Engine layers | `layer`, `version`, `decayed_at` |
+| `actions` | Action Engine state machine | `tier` (0/1/2), `status`, `approval_id` |
+| `audit_log` | user-facing audit trail | append-only; actor, scope, entity ref — never content |
+| `api_keys`, `grants` | platform auth | hashed keys, scope arrays |
+
+Design invariant worth naming: **every content-bearing row is reachable from exactly one user and one privacy tier**, so deletion and local-only enforcement are single-predicate queries, not archaeology.
+
+### 5.2 Scale Envelope (MVP → growth)
+
+Numbers we design against, so "will it hold" is a calculation, not a debate: an active user captures ~30 moments/day (~150 KB structured + ~2 MB media each). At 10k active users that is ~300k moments/day — trivial for Postgres writes (<10 wps sustained), ~6 GB/day of encrypted media, and ~1M embeddings/month. pgvector with HNSW comfortably serves ~10M vectors per index at our latency targets; at 10k users we hit that in roughly a year, which is why the pgvector exit criteria in §10 are defined *now*, with measurement, rather than mid-incident later.
 
 ---
 
@@ -158,6 +221,23 @@ action.approved               # human approval granted (Tier 1/2)
 action.executed               # action ran against an integration
 action.failed                 # execution failed; includes retry state
 ```
+
+Event envelope (every event, uniform):
+
+```json
+{
+  "id": "evt_01J9XQ4K7M...",
+  "type": "context.moment.created",
+  "schemaVersion": 3,
+  "occurredAt": "2026-07-09T14:32:11.402Z",
+  "userId": "usr_01H...",
+  "idempotencyKey": "01J9XQ4K7M2P...",
+  "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+  "payload": { "momentId": "cm_01J...", "projectHint": "prj_01H...", "privacyTier": "standard" }
+}
+```
+
+Payloads reference entities by ID; they do not embed content. A webhook consumer that wants the moment's text must fetch it with a scoped token — which means every content access hits the permission check and the audit log, instead of content leaking through queue plumbing.
 
 **Delivery guarantees: at-least-once, with idempotency keys.** Every event carries an `idempotency_key` (ULID, minted by the producing client or service). Workers and webhook consumers must treat processing as idempotent: workers check a processed-keys table (Postgres, unique constraint) before side effects; webhook consumers are documented to do the same and receive the key in the `Nova-Idempotency-Key` header. We chose at-least-once over exactly-once because exactly-once across process boundaries is a myth you pay for in latency and complexity; idempotency keys make duplicates harmless.
 
@@ -207,6 +287,28 @@ Details: [SECURITY_AND_PRIVACY.md](./SECURITY_AND_PRIVACY.md) and [API_AND_SDK_S
 ---
 
 ## 10. Explicit Tradeoffs
+
+### 10.0 Code and Deployable Layout
+
+The monorepo (pnpm + Turborepo, TypeScript throughout) makes the module boundaries concrete:
+
+```
+apps/
+  extension/        # Chromium MV3 (WXT + React) — MVP capture client
+  web/              # Next.js — timeline, projects, action review
+  api/              # Fastify service: ingestion + serving + Action Engine
+  worker/           # BullMQ consumers: enrich, embed, link, action, webhook-deliver
+  companion/        # local service (ASR bridge, later local models); desktop (Tauri v2) later
+packages/
+  schema/           # Zod schemas: Context Moment, events, API DTOs — single source of truth
+  events/           # thin event-emit interface (transport-swappable: BullMQ → NATS)
+  model-router/     # Intelligence Engine core: routing tables, fallback chains
+  retrieval/        # hybrid search behind one interface (pgvector | SQLite FTS5)
+  db/               # Drizzle schema + migrations
+  sdk/              # public TypeScript SDK (generated from packages/schema)
+```
+
+Two deployables (`api`, `worker`) share one schema and one database. Engines live as packages with explicit interfaces; the extraction path to services, if ever needed, follows package boundaries.
 
 **Monolith-first Fastify service vs. microservices.** We ship one Fastify (Node 22) service containing ingestion, serving, and the Action Engine, plus a separate worker process sharing the same codebase. We choose the modular monolith because at MVP scale the enemy is iteration speed and operational surface, not service coupling; two deployables (api, worker) on one schema is the whole footprint. The cost: we must enforce module boundaries in-process (each engine is a package with an explicit interface; no reaching into another engine's tables) or the eventual extraction becomes a rewrite. Extraction candidates, in order, when scale demands: workers by queue, then the Action Engine (it holds integration credentials and benefits from blast-radius isolation).
 

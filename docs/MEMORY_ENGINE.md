@@ -63,7 +63,7 @@ Seven layers, each with a distinct purpose, retention policy, and storage locati
 ### 2.5 Semantic memory
 
 - **Purpose:** distilled facts, preferences, and patterns extracted *across* moments — the layer that makes Nova feel like it knows the user rather than merely storing their history.
-- **Contents:** `memory_items` of kind `fact`, `preference`, or `pattern`. Every item carries **source-moment citations** — an array of moment IDs that justify it. An item with zero citations cannot exist (enforced at write time; this is the hallucination guard described in [INTELLIGENCE_ENGINE.md](./INTELLIGENCE_ENGINE.md#verification)).
+- **Contents:** `memory_items` of kind `fact`, `preference`, or `pattern`. Every item carries **source-moment citations** — an array of moment IDs that justify it. An item with zero citations cannot exist (enforced at write time; this is the hallucination guard described in [INTELLIGENCE_ENGINE.md](./INTELLIGENCE_ENGINE.md#8-consensus-and-verification)).
 - **Retention:** long-lived and versioned. Items are re-validated during consolidation; contradicted items are superseded, not silently edited (§5).
 - **Example:** after three separate captures involving flight searches, consolidation writes: `preference: "prefers aisle seats, avoids red-eyes" — sources: [moment 811, 902, 977]`. When the user later captures a booking page, the Action Engine can surface this without the user restating it.
 
@@ -81,6 +81,33 @@ Seven layers, each with a distinct purpose, retention policy, and storage locati
 - **Mechanism:** **consolidation jobs — Nova's sleep.** Scheduled BullMQ jobs that (a) summarize clusters of related moments into higher-level records, (b) extract/refresh semantic memory items, (c) recompute decay scores, (d) re-embed content when the embedding model changes (old vectors are useless against a new model's query vectors — re-embedding is a planned, batched migration, not an emergency), and (e) demote cold media to archival object storage.
 - **Retention:** indefinite, in progressively cheaper and coarser tiers, until decay or user action removes it.
 - **Example:** 40 moments from a finished "conference trip" project consolidate into one trip summary, eight semantic items, and archived media. Retrieval quality for "who did I meet at the conference?" stays high; storage cost drops ~90%.
+
+### 2.8 How a moment moves through the layers
+
+```mermaid
+flowchart LR
+    CB[Context Buffer\nlocal, ≤5 min] -- explicit invocation --> WM[Working memory\nmoment assembly]
+    WM -- commit --> SM[Session memory\nmoment + transcript]
+    SM -- user/auto link --> PM[Project memory]
+    SM -- enrichment workers --> KG[Entities + edges]
+    SM -- enrichment workers --> EMB[Embeddings]
+    PM -- consolidation jobs --> SEM[Semantic memory\ncited items]
+    SM -- consolidation jobs --> LTM[Long-term memory\nsummaries, cold media]
+    KG --> REL[Relationship memory\nPerson entities]
+    WM -. frames dedup/describe .-> VM[Visual memory]
+```
+
+Enrichment (entity extraction, embedding, linking) runs asynchronously on BullMQ workers after commit — capture latency never waits on it. A moment is retrievable by FTS within seconds of commit and by vector/graph retrieval within the enrichment SLO (target: under one minute at p95).
+
+Consolidation cadence:
+
+| Job | Schedule | Work |
+|---|---|---|
+| Session consolidation | Nightly, sessions > 48h old | Chunk + summarize transcripts, demote raw session state |
+| Semantic extraction | Nightly, per active project | Extract/refresh cited facts, preferences, patterns |
+| Decay recompute | Weekly | Update decay scores; mark archival candidates |
+| Media demotion | Weekly | Expire raw frames/audio per data class; move cold media |
+| Re-embedding | On embedding-model change only | Batched migration, oldest-first, dual-read during cutover |
 
 ## 3. Knowledge graph
 
@@ -150,7 +177,31 @@ score = 0.45 * vector_sim
 score *= project_boost              # ×1.5 if the query is executing inside a project context
 ```
 
+Mechanically: vector and FTS run as parallel Postgres queries returning candidate sets (~top 50 each); entity resolution + graph expansion runs as one or two indexed joins over `edges`; fusion happens in the application layer where the formula is easy to iterate on. A sketch of the graph-expansion leg:
+
+```sql
+-- moments connected (≤1 hop) to entities resolved from the query
+WITH seed AS (
+  SELECT id FROM entities
+  WHERE user_id = $1 AND name = ANY($2)          -- resolved entity names
+),
+hop1 AS (
+  SELECT DISTINCT e2.src_entity_id AS id
+  FROM edges e1 JOIN edges e2 ON e2.dst_entity_id = e1.src_entity_id
+  WHERE e1.user_id = $1 AND e1.src_entity_id IN (SELECT id FROM seed)
+)
+SELECT DISTINCT dst_moment_id, MIN(hop) AS proximity
+FROM (
+  SELECT dst_moment_id, 0 AS hop FROM edges WHERE src_entity_id IN (SELECT id FROM seed)
+  UNION ALL
+  SELECT dst_moment_id, 1 FROM edges WHERE src_entity_id IN (SELECT id FROM hop1)
+) x WHERE dst_moment_id IS NOT NULL
+GROUP BY dst_moment_id;
+```
+
 Top-k fused results go to the Intelligence Engine for answer synthesis with citations. Retrieval returns *evidence*, never prose.
+
+Retrieval quality is measured, not assumed: the eval suite in [INTELLIGENCE_ENGINE.md §9](./INTELLIGENCE_ENGINE.md#9-benchmarking) includes retrieval fixtures (query → expected moments) and tracks recall@k so weight changes to the fusion formula are regressions-tested like any other code.
 
 ## 5. Versioning
 
@@ -201,7 +252,7 @@ This is expensive to implement — which is exactly why it's designed in now. Re
 
 - **Memory browser** — a first-class UI (web app in MVP): timeline of moments, project views, entity pages ("everything involving Maya"), semantic items with their citations. Every item shows *why Nova believes it* and offers edit / correct / forget inline.
 - **Export everything** — one action produces a complete archive: Markdown per moment/project plus a machine-readable JSON dump of moments, entities, edges, and memory items (media included, embeddings excluded as model-specific). No lock-in through data hostage-taking; the moat is the ongoing intelligence, not trapped exports.
-- **Local-only pinning** — per-project. A pinned project's moments, media, and derived data never leave the device (SQLite + local files); cloud processing is skipped for them, with the quality tradeoff made explicit in the UI. Routing consequences are specified in [INTELLIGENCE_ENGINE.md](./INTELLIGENCE_ENGINE.md#routing-policy).
+- **Local-only pinning** — per-project. A pinned project's moments, media, and derived data never leave the device (SQLite + local files); cloud processing is skipped for them, with the quality tradeoff made explicit in the UI. Routing consequences are specified in [INTELLIGENCE_ENGINE.md](./INTELLIGENCE_ENGINE.md#4-routing-policy).
 - **Retention settings** — per-class expiry overrides (§6.3), per-project retention, "paranoid mode" preset (aggressive expiry, no raw media retention).
 
 ## 8. Privacy boundaries

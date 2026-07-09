@@ -19,19 +19,50 @@ The result: the exact moment when information matters most — the moment you *n
 
 The full argument is in [The Context Manifesto](docs/THE_CONTEXT_MANIFESTO.md).
 
+## What Nova is — and is not
+
+| Nova is | Nova is not |
+|---|---|
+| Human Context Infrastructure: a capture → memory → action substrate | A chatbot |
+| An API/SDK platform any assistant can plug into | A note-taking app |
+| A user-owned memory layer that outlives any single assistant | "Another assistant" competing on model quality |
+| Explicit, invoked, visibly-indicated capture | Ambient surveillance or always-on recording |
+| A subscription and platform-fee business | A data business — user context is never monetized |
+
 ## Who it serves
 
-- **Individuals** — one memory of their digital life that they own, can search, can export in full, and can delete in full. Capture anything on screen in under two seconds with a spoken instruction attached.
-- **Developers and assistant vendors** — Nova is infrastructure-first. Assistants (Dona, ChatGPT, Claude, Gemini, Copilot, Perplexity, Cursor, enterprise agents, and eventually wearables and robots) are *clients* of Nova via the Nova Developer Platform: API, SDKs, webhooks, plugins. Instead of every assistant building its own siloed capture-and-memory stack, they plug into a shared, user-controlled one.
-- **Enterprises** — organizational context with governance: SSO/SCIM, audit logs, data residency, self-host/VPC deployment, and a risk-tiered action model that keeps humans in the approval loop.
+**Individuals.**
+
+- One memory of their digital life that they own — searchable, exportable in full, deletable in full.
+- Capture anything on screen in under two seconds, with a spoken instruction attached.
+- Every capture tends toward something useful: a task, a project link, an answer later.
+
+**Developers and assistant vendors.**
+
+- Nova is infrastructure-first. Assistants — Dona, ChatGPT, Claude, Gemini, Copilot, Perplexity, Cursor, enterprise agents, and eventually wearables and robots — are *clients* of Nova via the Nova Developer Platform: API, SDKs, webhooks, plugins.
+- Instead of every assistant building its own siloed capture-and-memory stack, they plug into a shared, user-controlled one, with scoped permissions and a common approval envelope.
+
+**Enterprises.**
+
+- Organizational context with governance: SSO/SCIM, audit logs, data residency, self-host/VPC deployment.
+- A risk-tiered action model that keeps humans in the approval loop for anything consequential.
 
 ## The two modes
 
 Nova has exactly two product modes. Everything else in the system exists to serve them.
 
-1. **Instant Capture Mode** — the user invokes Nova (keyboard shortcut, floating button, toolbar). Nova captures the currently visible context — screen frame(s), the recent buffer, active app/page metadata — listens to the user's spoken instruction, stores and organizes the resulting **Context Moment**, links it to a project, and creates an action. Total interaction time: seconds.
+**1. Instant Capture Mode.**
 
-2. **Live Context Mode** — the user invokes Nova during an ongoing activity (a video, a meeting, a workflow). Nova observes a bounded live session — explicitly started, visibly indicated, explicitly ended — listens, answers questions in real time grounded in what's on screen, extracts insights, and saves relevant context as it evolves.
+- The user invokes Nova: keyboard shortcut, floating button, browser toolbar.
+- Nova captures the currently visible context — screen frame(s), the recent buffer, active app/page metadata.
+- Nova listens to the user's spoken instruction (push-to-talk), stores and organizes the resulting **Context Moment**, links it to a project, and creates an action.
+- Total interaction time: seconds.
+
+**2. Live Context Mode.**
+
+- The user invokes Nova during an ongoing activity: a video, a meeting, a workflow.
+- Nova observes a bounded live session — explicitly started, visibly indicated, explicitly ended.
+- It listens, answers questions in real time grounded in what's on screen, extracts insights, and saves relevant context as it evolves.
 
 There is no third, covert mode. **No always-on recording, ever.** The short local Context Buffer (default 60 seconds) is opt-in, bounded, RAM/encrypted-temp only, never uploaded wholesale, and auto-purged. This is an ethical commitment and a platform-policy requirement, and it is non-negotiable. See [First Principles](docs/FIRST_PRINCIPLES.md) and [Security, Privacy & Governance](docs/SECURITY_PRIVACY_GOVERNANCE.md).
 
@@ -52,6 +83,40 @@ The load-bearing commitments, in one screen (full versions with reasoning and de
 - **Minimum context necessary.** Capture, retain, and share the least that serves the user's stated intent.
 - **Infrastructure over app.** APIs are contracts; the reference client keeps the platform honest.
 
+## How the pieces fit
+
+```
+        Invocation (shortcut / button / toolbar / share sheet)
+                              │
+   ┌──────────────────────────▼───────────────────────────┐
+   │  CAPTURE CLIENTS (local-first)                       │
+   │  browser extension · desktop (Tauri, later) ·        │
+   │  Android (later) · iOS companion (later)             │
+   │  Context Buffer · frames · DOM/UI semantics · voice  │
+   └──────────────────────────┬───────────────────────────┘
+                              │  minimized Context Moments only
+   ┌──────────────────────────▼───────────────────────────┐
+   │  CONTEXT ENGINE      perception → meaning            │
+   ├──────────────────────────────────────────────────────┤
+   │  MEMORY ENGINE       layered memory · graph ·        │
+   │                      embeddings · forgetting         │
+   ├──────────────────────────────────────────────────────┤
+   │  INTELLIGENCE ENGINE model routing by task, cost,    │
+   │                      latency, privacy tier           │
+   ├──────────────────────────────────────────────────────┤
+   │  ACTION ENGINE       risk-tiered actions,            │
+   │                      human approval primitive        │
+   └──────────────────────────┬───────────────────────────┘
+                              │
+   ┌──────────────────────────▼───────────────────────────┐
+   │  NOVA DEVELOPER PLATFORM (API · SDKs · webhooks)     │
+   │  clients: Nova app (reference) · assistants ·        │
+   │  agents · integrations                               │
+   └──────────────────────────────────────────────────────┘
+```
+
+Full detail in [System Architecture](docs/SYSTEM_ARCHITECTURE.md).
+
 ## Project status
 
 **Foundation / documentation phase. Pre-code.**
@@ -65,6 +130,8 @@ What exists today:
 - A repository structure specification ([Repo Structure](docs/REPO_STRUCTURE.md)) that code will be scaffolded into next.
 
 What does not exist yet: any of the code. If you are reading this looking for something to run, come back after the 30-day prototype milestone in the [Roadmap](docs/ROADMAP.md).
+
+Where the MVP starts, in one paragraph: a **Chromium browser extension + local companion service + minimal cloud backend**, single user, English-first. Instant Capture in the browser (visible tab + DOM extract + push-to-talk instruction → Context Moment → project link → action, with Notion as the first integration), bounded Live Context on a tab (rolling 60s buffer, questions answered against it, "save this" promotion), and a Next.js web app for the memory timeline and action review. Everything else — mobile, wake word, marketplace, multi-model consensus, enterprise — is explicitly out until the core loop proves itself. Details and the full not-in-MVP list: [MVP Scope](docs/MVP_SCOPE.md).
 
 ## Documentation index
 

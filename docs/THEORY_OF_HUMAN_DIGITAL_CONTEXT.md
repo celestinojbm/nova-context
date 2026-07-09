@@ -43,10 +43,16 @@ ContextMoment = (P, M, I, C, t)
 Three properties of this definition matter:
 
 1. **P without I is a screenshot.** Perception alone has near-zero retrieval value after the working-memory window closes (hours). Intent is what converts an artifact into a commitment.
+
 2. **I is only cheap at time t.** At capture, intent costs one spoken sentence ("save this pricing model for the SaaS project, I want to compare it with what Priya sent"). One week later, reconstructing that sentence costs minutes of archaeology and usually fails. This asymmetry — intent is nearly free now and nearly impossible later — is the economic foundation of the whole product.
+
 3. **C is computable; I is not.** Connections can be inferred from M, t, and history (with user confirmation). Intent cannot be inferred without surveillance-grade behavioral modeling, which we reject (see §3.7). This is why Nova asks the user to speak and does not try to read their mind.
 
-A Context Moment is stored as a structured record, not a blob: frames and audio in object storage, extracted text/entities/embeddings/edges in the database, the intent utterance transcribed and preserved verbatim alongside its normalized interpretation. The verbatim utterance is never discarded; normalizations can be wrong and must be re-derivable.
+A Context Moment is stored as a structured record, not a blob:
+
+- Frames and audio go to object storage; extracted text, entities, embeddings, and edges go to the database.
+- The intent utterance is transcribed and preserved **verbatim** alongside its normalized interpretation.
+- The verbatim utterance is never discarded; normalizations can be wrong and must be re-derivable from source.
 
 ## 3. The dimensions of context
 
@@ -56,7 +62,12 @@ Each dimension below gets four treatments: what it is, what signals carry it, ho
 
 **Definition.** The pixel-level and structural state of what the user could see: rendered frames, the UI element hierarchy, spatial layout (what was adjacent to what), and for video, the specific frames in view.
 
-**Signals.** Screen frames; OCR text with bounding boxes; UI semantics (this region is a chat message, that is a chart, that is an ad); app and page identity; scroll position; for video, frame samples plus playback timestamp.
+**Signals.**
+- Screen frames (still or sampled from the Context Buffer)
+- OCR text with bounding boxes
+- UI semantics: this region is a chat message, that is a chart, that is an ad
+- App and page identity; scroll position; window focus
+- For video: frame samples plus playback timestamp
 
 **Capture.** Platform-dependent and honestly uneven. In the browser we get DOM structure via content scripts — far richer than OCR, since the DOM tells us "this is a `<table>` of prices" rather than "these glyphs are near each other." On desktop, ScreenCaptureKit/Graphics.Capture frames plus accessibility trees. On Android, MediaProjection frames plus the AccessibilityService view hierarchy. On iOS, only what the user pushes through the share sheet. The Context Engine normalizes all of these into one perceptual schema so downstream layers don't care about the source.
 
@@ -70,12 +81,16 @@ Each dimension below gets four treatments: what it is, what signals carry it, ho
 
 **Definition.** The sound accompanying a moment: speech from media (the YouTube narrator's actual claim), ambient speech in a meeting, and — kept strictly separate — the user's own voice.
 
-**Signals.** Tab/system audio transcripts with timestamps; speaker turns where diarization is feasible; media identity (which video, which timestamp); the user's push-to-talk utterances as a distinct, first-class stream.
+**Signals.**
+- Tab/system audio transcripts with timestamps
+- Speaker turns, where diarization is feasible
+- Media identity: which video, which timestamp
+- The user's push-to-talk utterances as a distinct, first-class stream
 
 **Capture.** Tab audio via `tabCapture` in the browser; system/app audio on desktop where permitted; the user's voice always via explicit push-to-talk or an explicitly started live session. The user-voice stream is tagged as intent, never mixed into ambient transcript — confusing "what the video said" with "what the user said about the video" corrupts both M and I.
 
 **Failure modes.**
-- *Covert capture:* any audio recorded without visible indication. Prohibited absolutely — buffer audio exists only in the opt-in, indicated [Context Buffer](./CONTEXT_ENGINE.md).
+- *Covert capture:* any audio recorded without visible indication. Prohibited absolutely — buffer audio exists only in the opt-in, indicated [Context Buffer](./CONTEXT_BUFFER.md).
 - *Speaker collapse:* attributing the podcast host's claim to the user, or vice versa. Provenance of speech is part of social context (§3.6) and must survive transcription.
 - *Transcript-as-truth:* ASR errors ("fifteen" vs "fifty") propagating into decisions. Confidence scores must travel with transcripts, and the original audio for a promoted moment is retained (per user policy) so errors are correctable.
 - *Consent blindness:* meeting audio implicates other people. Nova displays consent reminders in Live Context Mode; the legal duty is the user's, but the design duty to make it visible is ours.
@@ -84,7 +99,11 @@ Each dimension below gets four treatments: what it is, what signals carry it, ho
 
 **Definition.** The structure of dialogue: who said what, in reply to what, in which thread, with what register. A message means little without its thread; "sounds good" is content-free without the proposal it answers.
 
-**Signals.** Message text, sender identity, thread/reply structure, timestamps, platform (a Slack DM and a public tweet with identical words are different acts), and explicit tone markers present in the text itself (emphasis, punctuation, emoji as written).
+**Signals.**
+- Message text, sender identity, timestamps
+- Thread and reply structure — which message answers which
+- Platform: a Slack DM and a public tweet with identical words are different acts
+- Explicit tone markers present in the text itself: emphasis, punctuation, emoji as written
 
 **Capture.** DOM extraction in web chat clients gives us real thread structure; accessibility trees on desktop/Android give partial structure; OCR is the fallback and the weakest. We extract the visible conversation window plus whatever scrollback is in the buffer — never more than the user could see.
 
@@ -97,7 +116,11 @@ Each dimension below gets four treatments: what it is, what signals carry it, ho
 
 **Definition.** When a moment happened; where it sits in a sequence; how recently it was relevant; and the answer to the most common human memory query: "what was I doing right before this?"
 
-**Signals.** Wall-clock time; session position (the third capture in a 40-minute research session); ordering relative to adjacent moments; recency; recurrence patterns ("every Monday she reviews metrics").
+**Signals.**
+- Wall-clock time and timezone
+- Session position: the third capture in a 40-minute research session
+- Ordering relative to adjacent moments; recency
+- Recurrence patterns: "every Monday she reviews metrics"
 
 **Capture.** Trivially cheap — timestamps and monotonic sequence numbers — which is exactly why every system gets it and almost none uses it well. The value is in derived structure: session segmentation (gap-based and topic-based), sequence edges between moments, and per-dimension decay clocks (§5).
 
@@ -108,9 +131,13 @@ Each dimension below gets four treatments: what it is, what signals carry it, ho
 
 ### 3.5 Project context
 
-**Definition.** Which ongoing effort a moment belongs to. Humans do not experience information as a stream of atoms; they experience it as material for the handful of things they are trying to do. Project membership is the single highest-leverage connection in C, because it lets a moment inherit intent from its container: a pricing screenshot linked to "Q3 pricing revamp" is 80% interpreted before the user says a word.
+**Definition.** Which ongoing effort a moment belongs to. Humans do not experience information as a stream of atoms; they experience it as material for the handful of things they are trying to do. Project membership is the single highest-leverage connection in C, because it lets a moment inherit intent from its container: a pricing screenshot linked to "Q3 pricing revamp" is 80% interpreted before the user says a word. We call this **intent inheritance**: the project's standing goals become the default interpretation frame for every moment linked into it.
 
-**Signals.** Explicit assignment (the user says the project name in their utterance); lexical/semantic overlap between M and project material; temporal adjacency to other moments in the project; app/site patterns per project; people overlap.
+**Signals.**
+- Explicit assignment: the user says the project name in their utterance
+- Lexical/semantic overlap between M and project material
+- Temporal adjacency to other moments in the project
+- App/site patterns per project; people overlap
 
 **Capture.** Auto-suggest, always confirm. The Context Engine proposes a project link with a confidence score; the confirmation card lets the user accept in one tap or redirect. We never silently file a moment into a project — a confidently wrong filing is worse than an inbox, because the user stops trusting the filing.
 
@@ -123,7 +150,10 @@ Each dimension below gets four treatments: what it is, what signals carry it, ho
 
 **Definition.** The people dimension: who was involved in a moment, what the user's relationship to them is, and — critically — provenance: who is the source of a claim, and through whom did it arrive.
 
-**Signals.** Names and identities visible in the capture (meeting participants, message senders, video creators, doc authors); the user's utterance naming people ("what Priya sent"); recurrence of the same person across moments, which builds the relationship layer of the [Memory Engine](./MEMORY_ENGINE.md).
+**Signals.**
+- Names and identities visible in the capture: meeting participants, message senders, video creators, doc authors
+- The user's utterance naming people ("what Priya sent")
+- Recurrence of the same person across moments, which builds the relationship layer of the [Memory Engine](./MEMORY_ENGINE.md)
 
 **Capture.** Entity extraction from P and I, resolved against a per-user people registry that the user can see and edit. Identity resolution is conservative: two "Alexes" are distinct until evidence merges them, and merges are user-visible.
 
@@ -140,7 +170,11 @@ Each dimension below gets four treatments: what it is, what signals carry it, ho
 
 **Capture.** Ordinary NLP over I: if the user says it's urgent, the moment carries an urgency flag and the [Action Engine](./ACTION_ENGINE.md) treats deadlines accordingly. If the user says they're excited, ranking may boost the moment. That's all.
 
-**What we reject, explicitly.** We do not infer emotion from voice prosody, typing cadence, capture frequency, dwell time, facial anything, or physiological signals. Three reasons, any one of which would suffice. First, accuracy: affect inference from behavioral traces is unreliable across individuals and cultures, and a system that acts on wrong emotional guesses is worse than one that ignores emotion. Second, trust: the moment users suspect the tool is watching their mood, they change their behavior toward it — surveillance destroys the candor that makes intent utterances valuable. Third, principle: Nova's contract is "I capture what you show me and what you tell me." Inferred affect is neither. A context platform that psychoanalyzes its users has crossed from tool to watcher, and we will not cross that line even where it would be profitable.
+**What we reject, explicitly.** We do not infer emotion from voice prosody, typing cadence, capture frequency, dwell time, facial anything, or physiological signals. Three reasons, any one of which would suffice:
+
+1. **Accuracy.** Affect inference from behavioral traces is unreliable across individuals and cultures, and a system that acts on wrong emotional guesses is worse than one that ignores emotion.
+2. **Trust.** The moment users suspect the tool is watching their mood, they change their behavior toward it — surveillance destroys the candor that makes intent utterances valuable.
+3. **Principle.** Nova's contract is "I capture what you show me and what you tell me." Inferred affect is neither. A context platform that psychoanalyzes its users has crossed from tool to watcher, and we will not cross that line even where it would be profitable.
 
 **Failure mode of our own policy:** missing genuinely useful signals (a user who never says "urgent" but always is). We accept this cost. The correction channel is product design — making it effortless to state priority — not inference.
 
@@ -148,9 +182,15 @@ Each dimension below gets four treatments: what it is, what signals carry it, ho
 
 **Definition.** The structure of choices: what options were on the table, what criteria mattered, what was chosen, what was rejected, and the stated why. Organizations and individuals bleed enormous value here — decisions get made in meetings and calls, and three months later nobody can reconstruct why option B lost.
 
-**Signals.** Comparison structures visible in P (tables, pro/con lists, competing tabs); decision language in transcripts ("let's go with", "we ruled out", "the blocker was"); the user's explicit utterance ("we decided on Postgres, save the reasoning from this doc").
+**Signals.**
+- Comparison structures visible in P: tables, pro/con lists, competing tabs
+- Decision language in transcripts: "let's go with", "we ruled out", "the blocker was"
+- The user's explicit utterance: "we decided on Postgres, save the reasoning from this doc"
 
-**Capture.** Two paths. Explicit: the user invokes capture at a decision point and narrates it — highest fidelity, and the confirmation card reflects the extracted decision structure (chosen / rejected / criteria) for correction. Assisted: in Live Context Mode, the Context Engine flags decision-shaped segments of a meeting and offers them for saving. It offers; it does not autonomously record "decisions" into memory, because a hallucinated decision in long-term memory is one of the most damaging errors this system could make.
+**Capture.** Two paths.
+
+- *Explicit:* the user invokes capture at a decision point and narrates it — highest fidelity, and the confirmation card reflects the extracted decision structure (chosen / rejected / criteria) for correction.
+- *Assisted:* in Live Context Mode, the Context Engine flags decision-shaped segments of a meeting and offers them for saving. It offers; it does not autonomously record "decisions" into memory, because a hallucinated decision in long-term memory is one of the most damaging errors this system could make.
 
 **Failure modes.**
 - *Premature crystallization:* recording a tentative leaning as a final decision. Decision records carry status (proposed/decided/revisited) and are versioned.
@@ -161,7 +201,11 @@ Each dimension below gets four treatments: what it is, what signals carry it, ho
 
 **Definition.** The second-order dimension: how the meaning of a moment changes as the projects around it evolve. A capture of a competitor's pricing page meant "reference point" in March, "the thing our launch undercut" in June, and "obsolete" in October. The moment did not change; its meaning did.
 
-**Signals.** Project state transitions (active → shipped → archived); later moments that supersede, confirm, or contradict earlier ones; explicit user re-annotation; decision records that resolve what a moment was pending on.
+**Signals.**
+- Project state transitions: active → shipped → archived
+- Later moments that supersede, confirm, or contradict earlier ones
+- Explicit user re-annotation
+- Decision records that resolve what a moment was pending on
 
 **Capture.** Not captured — *maintained*. The [Memory Engine](./MEMORY_ENGINE.md) implements this as versioned interpretation: the original record (P, I verbatim, t) is immutable; the interpretive layer (M's normalization, C's links, relevance state) is versioned and re-derivable. Re-interpretation runs when projects change state and when contradicting moments arrive, and it produces annotations ("superseded by moment #4812"), never destructive edits.
 
@@ -172,11 +216,25 @@ Each dimension below gets four treatments: what it is, what signals carry it, ho
 
 ## 4. Context composition: how dimensions become meaning
 
-The dimensions are not a checklist; they are factors whose *product* is meaning. Composition has three properties that drive system design:
+The dimensions are not a checklist; they are factors whose *product* is meaning. Composition has three properties that drive system design.
 
-**Meaning is multiplicative, not additive.** A frame (visual) of a pricing table, in a competitor-research session (temporal), inside the "Q3 pricing" project (project), captured while the user said "this undercuts us, flag for Thursday" (intent + explicit urgency), from the competitor's own site (social/provenance) — each dimension multiplies the interpretability of the others. Strip any one and specific downstream actions become guesses. This is why the Context Moment is captured as a unit at time t rather than assembled later from separate stores: joining after the fact loses the cross-references that only exist at the moment of experience.
+**Meaning is multiplicative, not additive.** Consider one real composition:
 
-**Dimensions disambiguate each other.** "Send this to Alex" is under-determined by I alone. Social context resolves *which* Alex (the one on this project); conversational context resolves *this* (the message thread on screen, not the whole page); project context resolves the register (the client Alex gets a different framing than the co-founder Alex). Ranking and action synthesis must therefore operate on the composed moment, not on per-dimension indexes queried independently.
+- a frame (visual) of a pricing table,
+- in a competitor-research session (temporal),
+- inside the "Q3 pricing" project (project),
+- captured while the user said "this undercuts us, flag for Thursday" (intent + explicit urgency),
+- from the competitor's own site (social/provenance).
+
+Each dimension multiplies the interpretability of the others. Strip any one and specific downstream actions become guesses: without the project, "flag for Thursday" flags nothing in particular; without provenance, the table is just numbers; without the utterance, the frame is a screenshot. This is why the Context Moment is captured as a unit at time t rather than assembled later from separate stores: joining after the fact loses the cross-references that only exist at the moment of experience.
+
+**Dimensions disambiguate each other.** "Send this to Alex" is under-determined by I alone:
+
+- Social context resolves *which* Alex — the one on this project.
+- Conversational context resolves *this* — the message thread on screen, not the whole page.
+- Project context resolves the register — the client Alex gets a different framing than the co-founder Alex.
+
+Ranking and action synthesis must therefore operate on the composed moment, not on per-dimension indexes queried independently.
 
 **Composition is where confidence must be honest.** Each extracted element carries confidence; composition propagates it. A high-confidence OCR extraction inside a low-confidence project link yields an action proposal that must be presented tentatively. The confirmation card is the UI expression of composed confidence — it shows what Nova is sure of and what it is guessing.
 
@@ -196,25 +254,36 @@ Context loses value over time, but at radically different rates per dimension. T
 | Social/provenance | Years | Relationships and source reliability compound |
 | Historical (interpretation) | Does not decay | It *is* the record of change |
 
-Two design consequences. First, **decay is compression, not deletion**: a moment's raw frames can be demoted to a thumbnail plus extraction after the visual half-life, while its decision content persists in full — storage cost tracks residual value. Deletion happens only by user action or user-set retention policy. Second, **decay curves are per-dimension inputs to ranking**: the retrieval score of a moment is composed from per-dimension freshness, so a two-year-old decision record outranks a two-day-old screenshot for a "why did we choose X" query. Both mechanisms live in the [Context Engine](./CONTEXT_ENGINE.md); the layered storage that makes them cheap lives in the [Memory Engine](./MEMORY_ENGINE.md).
+Two design consequences:
+
+1. **Decay is compression, not deletion.** A moment's raw frames can be demoted to a thumbnail plus extraction after the visual half-life, while its decision content persists in full — storage cost tracks residual value. Deletion happens only by user action or user-set retention policy.
+2. **Decay curves are per-dimension inputs to ranking.** The retrieval score of a moment is composed from per-dimension freshness, so a two-year-old decision record outranks a two-day-old screenshot for a "why did we choose X" query.
+
+Both mechanisms live in the [Context Engine](./CONTEXT_ENGINE.md); the layered storage that makes them cheap lives in the [Memory Engine](./MEMORY_ENGINE.md).
 
 ## 6. Implications for system design
 
 This theory is falsifiable and load-bearing. Concretely:
 
 1. **Intent capture is the product's spine.** Because I is unrecoverable after time t (§2), the voice path — push-to-talk, fast ASR, verbatim retention — gets latency and reliability budgets ahead of everything else. A capture flow that drops the utterance has captured a screenshot.
+
 2. **The Context Engine ranks composed moments, not documents.** Retrieval scoring combines per-dimension decay (§5), project scope, provenance weight, and intent-match — see [CONTEXT_ENGINE.md](./CONTEXT_ENGINE.md). Pure embedding similarity over flattened text would discard exactly the structure this theory says carries meaning.
+
 3. **The Memory Engine's layers mirror the half-life table.** Working/session memory holds fast-decaying dimensions; project memory holds membership and inherited intent; relationship memory holds the slow social dimension; long-term memory holds decisions and versioned interpretation — see [MEMORY_ENGINE.md](./MEMORY_ENGINE.md). The layering is not an architectural fashion; it is the decay table implemented as storage tiers.
-4. **Confirmation is epistemically necessary, not UX politeness.** Because C is inferred and M is extracted, both are fallible; because I is authoritative, the user is the only party who can certify a composition. The confirmation card and the Action Engine's risk tiers follow directly.
-5. **The rejection of inferred affect (§3.7) and of covert capture (§3.2) are theory-level commitments.** They bound what P and I may contain, on any platform, in any tier, for any customer. Features that require violating them are out of scope permanently — see [PRIVACY_AND_TRUST.md](./PRIVACY_AND_TRUST.md).
+
+4. **Confirmation is epistemically necessary, not UX politeness.** Because C is inferred and M is extracted, both are fallible; because I is authoritative, the user is the only party who can certify a composition. The confirmation card and the [Action Engine's](./ACTION_ENGINE.md) risk tiers follow directly.
+
+5. **The rejection of inferred affect (§3.7) and of covert capture (§3.2) are theory-level commitments.** They bound what P and I may contain, on any platform, in any tier, for any customer. Features that require violating them are out of scope permanently — see [SECURITY_PRIVACY_GOVERNANCE.md](./SECURITY_PRIVACY_GOVERNANCE.md).
+
 6. **Historical re-interpretation requires immutable originals.** The append-only moment record plus versioned interpretation (§3.9) is a schema commitment made now, because it cannot be retrofitted after mutable records have destroyed provenance.
 
-What would falsify the theory? If alpha users' captures with intent utterances are not dramatically more retrieved, more project-linked, and more action-converted than utterance-less captures, then intent is not the spine we claim, and the product should be rethought. We will instrument exactly that comparison from the first prototype — see [ROADMAP.md](./ROADMAP.md).
+**What would falsify the theory?** If alpha users' captures with intent utterances are not dramatically more retrieved, more project-linked, and more action-converted than utterance-less captures, then intent is not the spine we claim, and the product should be rethought. We will instrument exactly that comparison from the first prototype — see [ROADMAP.md](./ROADMAP.md).
 
 ## 7. Related documents
 
 - [PRODUCT_VISION.md](./PRODUCT_VISION.md) — the theory expressed as user experience
 - [CONTEXT_ENGINE.md](./CONTEXT_ENGINE.md) — perception, ranking, and decay implementation
 - [MEMORY_ENGINE.md](./MEMORY_ENGINE.md) — layered memory and versioned interpretation
+- [CONTEXT_BUFFER.md](./CONTEXT_BUFFER.md) — the bounded, local, opt-in buffer in depth
 - [ACTION_ENGINE.md](./ACTION_ENGINE.md) — turning composed context into risk-tiered action
-- [PRIVACY_AND_TRUST.md](./PRIVACY_AND_TRUST.md) — the commitments in §3.2 and §3.7, in depth
+- [SECURITY_PRIVACY_GOVERNANCE.md](./SECURITY_PRIVACY_GOVERNANCE.md) — the commitments in §3.2 and §3.7, in depth
