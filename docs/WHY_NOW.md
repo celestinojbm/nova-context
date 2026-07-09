@@ -28,6 +28,15 @@ In 2021, roughly zero of these held at production quality. In 2026, all of them 
 | Assistant integration standard | None | MCP-era tool/context protocols |
 | User readiness | Talking to AI was weird | Talking to AI is Tuesday |
 
+A rough ordering of when each threshold was crossed:
+
+- **late 2022** — Whisper releases; open, near-human ASR becomes a free commodity.
+- **2023** — frontier multimodal models make arbitrary screenshots machine-legible; function calling standardizes tool use; pgvector adoption makes semantic search a Postgres feature.
+- **2024** — quantized local models and NPU-standard hardware make on-device processing real; MCP-class protocols appear; screen-share-with-AI enters mainstream assistants.
+- **2025–2026** — costs fall enough to run full understanding on *every* capture; multi-assistant fatigue becomes a mainstream, named complaint.
+
+The last threshold is the quiet one that matters most: it moved "process everything the user captures" from a venture-subsidized stunt to a sustainable unit economic (see "The unit economics crossed zero" below).
+
 The sections below take each shift in turn.
 
 ## 1. Multimodal LLMs: screens became legible

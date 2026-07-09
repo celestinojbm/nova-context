@@ -181,6 +181,18 @@ This position carries obligations, and we accept them as constraints rather than
 
 Infrastructure for human context that is not trustworthy is not infrastructure — it's surveillance with an API. The commitments are specified in [First Principles](./FIRST_PRINCIPLES.md) and enforced in [Security, Privacy & Governance](./SECURITY_PRIVACY_GOVERNANCE.md).
 
+### 3.4 What "infrastructure" means, concretely
+
+"Infrastructure" is an easy word to inflate, so here is the checklist we mean by it — the properties Stripe, Twilio, and Plaid actually have, restated for context:
+
+- **Neutral.** No preferred assistant, no house model favored by the routing layer beyond measured quality; any conforming client gets the same API the reference client uses.
+- **Durable.** A person's context outlives every app, assistant, and device in their life. The layer's schemas, export formats, and deprecation discipline have to be designed for decades, not release cycles.
+- **Standard-shaped.** Where an open standard exists for assistants to consume context and tools (the MCP era), Nova implements it rather than inventing a proprietary equivalent; where none exists, the API is documented as if it will be forked, because good infrastructure expects to be commoditized at the edges.
+- **Boring under load.** The differentiation budget goes into capture semantics, memory quality, and the approval primitive — never into exotic plumbing. Postgres, queues, object storage; things that fail in understood ways.
+- **Auditable.** Every access to a user's context — by an assistant, an integration, or Nova itself — is logged and surfaced to the user. Infrastructure that can't show its work doesn't deserve the traffic.
+
+If Nova ever stops satisfying this checklist, it has stopped being what this document argues for, whatever the marketing says.
+
 ## 4. Objections we take seriously
 
 A manifesto that cannot state its best counterarguments is advertising. These are the four strongest objections we know, with our actual answers. (The full adversarial treatment is in [Risks & Red Team](./RISKS_AND_RED_TEAM.md).)

@@ -19,6 +19,16 @@ State these plainly, because the failure modes are catastrophic:
 - **Not uploaded wholesale.** Buffer contents never leave the device as a blob. Ever. Only user-confirmed slices, promoted explicitly into a Context Moment, enter storage or sync ([CONTEXT_ENGINE.md](./CONTEXT_ENGINE.md) §10).
 - **Not storage.** Nothing in the buffer is durable. It is a perception aid with the lifetime of a session, not a memory tier.
 
+The five guarantees, referenced throughout this document and tested as invariants (§13):
+
+| # | Guarantee | Where specified |
+|---|---|---|
+| G1 | The buffer exists only when the user explicitly enabled it, and is always visibly indicated | §3 |
+| G2 | Buffer contents never leave the device except as user-confirmed promoted slices | §5 |
+| G3 | All contents are destroyed by overwrite or purge within the window/session lifetime | §6 |
+| G4 | Any disk spill is unreadable once the in-memory key is discarded | §7 |
+| G5 | Secure surfaces and denied apps/sites never enter the buffer at all | §10 |
+
 ## 3. Lifecycle
 
 ```mermaid
@@ -155,6 +165,18 @@ There is deliberately no "restore buffer" feature. If we could restore it, it wa
 - **If spilled to disk** (mobile memory pressure, or desktop configurations where the ring exceeds the RAM budget): every session generates a fresh ephemeral key (XChaCha20-Poly1305), held **in memory only** — never keychain, never disk, never synced. Spill files are ciphertext chunks named by slot index.
 - **Key discarded = data unrecoverable.** Purge is therefore O(1): drop the key, then unlink files opportunistically. Even if unlink is interrupted (crash, power loss), what remains on disk is noise.
 - Keys are held in locked pages where the OS allows (`mlock`/`VirtualLock`) to keep them out of swap.
+
+Key lifecycle, end to end:
+
+1. Session enable → generate 256-bit key from the platform CSPRNG; `mlock` the page.
+2. Spill event → encrypt chunk (slot index as AAD, random nonce per chunk), write ciphertext.
+3. Read-back (freeze/scrub) → decrypt in memory; plaintext never re-written to disk.
+4. Any purge trigger → zeroize the key bytes, then zeroize slots, then unlink spill files.
+5. Process death at any step → key is gone with the process; remaining ciphertext is noise.
+
+There is deliberately no key escrow, no key sync, and no "recover my session" path. Support tickets asking us to recover buffer data get the same answer the subpoena does (§12): the data does not exist.
+
+**Buffer and the Developer Platform:** third-party clients have *no* buffer access — no scope grants it, no SDK method exposes it, and the invocation UI that shows candidate context is first-party client code only. An assistant integrating Nova receives context exclusively as promoted Context Moments through `context:read` ([API_AND_SDK_SPEC.md](./API_AND_SDK_SPEC.md)). This is structural, not policy: the ring lives in a process the platform surface cannot reach.
 
 ## 8. Memory Limits
 
