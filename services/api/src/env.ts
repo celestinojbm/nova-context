@@ -57,6 +57,16 @@ const envSchema = z.object({
   // unset = tesseract.js default CDN. Per-image OCR time budget.
   NOVA_OCR_LANG_PATH: z.string().optional().or(z.literal("").transform(() => undefined)),
   NOVA_OCR_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
+  // M8: media pipeline object storage. 'fs' (default) writes encrypted
+  // blobs under NOVA_MEDIA_FS_ROOT; 's3' targets any S3-compatible API
+  // (MinIO locally, S3/R2 in production).
+  NOVA_MEDIA_STORE: z.enum(["fs", "s3"]).default("fs"),
+  NOVA_MEDIA_FS_ROOT: z.string().default("./var/media"),
+  NOVA_MEDIA_S3_BUCKET: z.string().optional().or(z.literal("").transform(() => undefined)),
+  NOVA_MEDIA_S3_REGION: z.string().default("us-east-1"),
+  NOVA_MEDIA_S3_ENDPOINT: z.string().url().optional().or(z.literal("").transform(() => undefined)),
+  NOVA_MEDIA_S3_ACCESS_KEY_ID: z.string().optional().or(z.literal("").transform(() => undefined)),
+  NOVA_MEDIA_S3_SECRET_ACCESS_KEY: z.string().optional().or(z.literal("").transform(() => undefined)),
   // M7: credential-surface rate limit (attempts per 15-minute window per IP)
   // and the Redis key namespace (override mainly for test isolation).
   NOVA_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
@@ -94,6 +104,24 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
       "Invalid environment configuration: NOTION_CLIENT_ID is set in production without NOVA_ENCRYPTION_KEY",
     );
   }
+  if (isProduction && !parsed.data.NOVA_ENCRYPTION_KEY) {
+    // M8: the media pipeline (and integrations) encrypt at rest with this
+    // key. A production deploy without it would silently drop screenshots —
+    // fail closed and loudly instead.
+    throw new Error(
+      "Invalid environment configuration: NOVA_ENCRYPTION_KEY is required in production (media + integration encryption at rest)",
+    );
+  }
+  if (
+    parsed.data.NOVA_MEDIA_STORE === "s3" &&
+    (!parsed.data.NOVA_MEDIA_S3_BUCKET ||
+      !parsed.data.NOVA_MEDIA_S3_ACCESS_KEY_ID ||
+      !parsed.data.NOVA_MEDIA_S3_SECRET_ACCESS_KEY)
+  ) {
+    throw new Error(
+      "Invalid environment configuration: NOVA_MEDIA_STORE=s3 requires NOVA_MEDIA_S3_BUCKET, NOVA_MEDIA_S3_ACCESS_KEY_ID, NOVA_MEDIA_S3_SECRET_ACCESS_KEY",
+    );
+  }
   if (
     isProduction &&
     parsed.data.NOTION_REDIRECT_URI &&
@@ -124,6 +152,7 @@ export function securitySummary(env: Env): string {
     `image_redaction=${env.NOVA_IMAGE_REDACTION}`,
     `screenshot_storage=${env.NOVA_SCREENSHOT_STORAGE}`,
     `token_encryption=${env.NOVA_ENCRYPTION_KEY ? "on" : "OFF"}`,
+    `media=${env.NOVA_ENCRYPTION_KEY ? env.NOVA_MEDIA_STORE : "UNAVAILABLE (no key)"}`,
     `rate_limit=${env.REDIS_URL ? "redis" : "in-memory"}`,
     `notion=${env.NOTION_CLIENT_ID ? "configured" : "off"}`,
     `live_qa=${env.NOVA_LIVE_QA}`,

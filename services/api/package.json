@@ -11,10 +11,12 @@
     "db:migrate": "tsx src/db/migrate.ts",
     "db:seed-dev": "tsx src/db/seed-dev.ts",
     "auth:reset-password": "tsx src/db/reset-password.ts",
+    "media:backfill": "tsx src/db/backfill-media.ts",
     "test": "vitest run --dir src",
     "test:integration": "vitest run --dir test"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1084.0",
     "@fastify/cors": "^10.0.0",
     "@fastify/multipart": "^9.0.0",
     "@nova/context-engine": "workspace:*",

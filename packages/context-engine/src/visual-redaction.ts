@@ -166,6 +166,9 @@ export interface RedactImageResult {
   dataUrl: string;
   masked: number;
   tally: Record<string, number>;
+  /** M8: OCR text with every sensitive word REMOVED (never redact-marked —
+   * plain omission), for search indexing. Empty when OCR found nothing. */
+  safeText: string;
 }
 
 const BOX_PADDING = 3;
@@ -187,8 +190,9 @@ export async function redactImageDataUrl(
     throw new ImageRedactionError(`ocr failed: ${(err as Error).message.slice(0, 120)}`);
   }
   const { boxes, tally } = classifySensitiveWords(ocr.words);
+  const safeText = safeOcrText(ocr.words, boxes);
   if (!boxes.length) {
-    return { dataUrl, masked: 0, tally: {} };
+    return { dataUrl, masked: 0, tally: {}, safeText };
   }
 
   let image: Awaited<ReturnType<typeof Jimp.fromBuffer>>;
@@ -219,5 +223,21 @@ export async function redactImageDataUrl(
     dataUrl: `data:${outMime};base64,${out.toString("base64")}`,
     masked: boxes.length,
     tally,
+    safeText,
   };
+}
+
+/** Words that were not masked, in reading order — the searchable remainder. */
+function safeOcrText(words: OcrWord[], boxes: SensitiveBox[]): string {
+  const masked = new Set(boxes.map((b) => `${b.x0}:${b.y0}:${b.x1}:${b.y1}`));
+  return toLines(words)
+    .map((line) =>
+      line.words
+        .filter((w) => !masked.has(`${w.x0}:${w.y0}:${w.x1}:${w.y1}`))
+        .map((w) => w.text)
+        .join(" "),
+    )
+    .filter(Boolean)
+    .join("\n")
+    .slice(0, 50_000);
 }

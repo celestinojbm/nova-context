@@ -83,15 +83,35 @@ export default async function TimelinePage({
             {query ? ` matching “${query}” · ${legsNote}` : ", newest first"}
           </p>
           {items.map((m) => {
-            const screenshot = m.payload.screenshot_data_url;
+            // M8: media pipeline refs first; legacy pre-backfill moments may
+            // still carry an inline (already redacted) payload screenshot.
+            const mediaShot = (m as { media?: Array<{ id: string; thumbnail_url: string | null }> })
+              .media?.[0];
+            const legacyShot = m.payload.screenshot_data_url;
+            const imageState = (m.image_redaction?.state as string | undefined) ?? undefined;
+            const blockedNote =
+              imageState === "blocked_strict"
+                ? "Screenshot blocked by strict redaction"
+                : imageState === "storage_disabled"
+                  ? "Screenshot storage is disabled"
+                  : imageState === "media_unavailable"
+                    ? "Screenshot dropped — media pipeline unavailable"
+                    : null;
             const title = m.source_meta.title ?? "Untitled capture";
             return (
               <article className="moment-card" key={m.id}>
-                {typeof screenshot === "string" && (
-                  // Data-URL thumbnails in M0-M2; object storage arrives later.
+                {mediaShot ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={screenshot} alt={`Screenshot of ${title}`} />
-                )}
+                  <img
+                    src={`/media/${mediaShot.id}${mediaShot.thumbnail_url ? "?variant=thumb" : ""}`}
+                    alt={`Screenshot of ${title}`}
+                  />
+                ) : typeof legacyShot === "string" ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={legacyShot} alt={`Screenshot of ${title}`} />
+                ) : blockedNote ? (
+                  <div className="media-note">{blockedNote}</div>
+                ) : null}
                 <div className="moment-body">
                   <p className="moment-title">
                     {title}

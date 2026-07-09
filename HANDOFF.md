@@ -2,12 +2,13 @@
 
 > Working notes to resume without losing the thread. Not a design doc — the
 > real design lives in `docs/`. This file tracks *where we are* and *what's next*.
-> **Last updated: end of M7 (Visual Redaction v1 + alpha hardening).**
+> **Last updated: end of M8 (Media Pipeline v1).**
 
 ## Where we are
 
-**Milestones M0 → M7 are complete.** M0–M6 are MERGED to `main` (PR #1:
-docs+M0–M4; PR #2: M5+M6). **M7 lives on branch `claude/m7-nova-context`.**
+**Milestones M0 → M8 are complete.** M0–M7 are MERGED to `main` (PR #1:
+docs+M0–M4; PR #2: M5+M6; PR #3: M7). **M8 lives on branch
+`claude/m8-nova-context`.**
 
 | Milestone | What shipped | Commit |
 |---|---|---|
@@ -19,7 +20,8 @@ docs+M0–M4; PR #2: M5+M6). **M7 lives on branch `claude/m7-nova-context`.**
 | M4 | Onboarding+consent, user-visible audit log, security/prompt-injection suite, visual-redaction safeguards, export/delete hardening, Fly deploy configs, funnel analytics | `cd809bc` |
 | M5 | Real auth (scrypt passwords + opaque revocable sessions), HttpOnly-cookie web sessions, extension pairing-code flow, fail-closed /v1 middleware, per-user isolation + suite, signup policy (invite-only prod), sessions UI | `1d15faf` |
 | M6 | Notion OAuth per user (state-validated, AES-256-GCM tokens), job-based external action execution (proposed→queued→executing→done/failed, idempotent, retries), preview cards, connect/disconnect UI, audit chain incl. external ids | `79aa23e` |
-| M7 | Visual Redaction v1 (Tesseract OCR-box masking before storage/live/export, strict mode, storage kill switch, values-free reports+audit), Notion destination selector + content hardening, auth hardening (password change, revoke-all, operator reset, Redis rate limit, prod checks) | this branch |
+| M7 | Visual Redaction v1 (Tesseract OCR-box masking before storage/live/export, strict mode, storage kill switch, values-free reports+audit), Notion destination selector + content hardening, auth hardening (password change, revoke-all, operator reset, Redis rate limit, prod checks) | `3847feb` |
+| M8 | Media Pipeline v1: moment_media as source of truth, AES-256-GCM-encrypted blobs in object storage (fs default / any S3-compatible via abstraction, MinIO in compose), proxied user-scoped `/v1/media/:id` + thumbnails, delete/export lifecycle, manual legacy backfill, search over safe OCR text + media filters + golden fixtures, prod fail-closed on missing key | this branch |
 
 ## Repo shape (pnpm + Turborepo monorepo)
 
@@ -33,7 +35,10 @@ packages/
 services/
   api/             Fastify /v1 — auth/ (passwords, sessions, plugin), routes-auth.ts,
                    routes-integrations.ts (M6 Notion OAuth + preview),
-                   routes-m1..m4.ts; migrations/*.sql (latest 0006_m6_notion.sql)
+                   routes-m1..m4.ts, routes-media.ts (M8 proxied media),
+                   media/ (object-store.ts fs+s3, media-service.ts),
+                   db/backfill-media.ts (manual legacy migration);
+                   migrations/*.sql (latest 0008_m8_media_pipeline.sql)
   worker/          BullMQ consumers: enrichment + action execution (actions.ts,
                    notion-client.ts) — decrypts per-user tokens, idempotent
 apps/
@@ -41,7 +46,7 @@ apps/
   web/             Next.js — /login, middleware guard, cookie session, settings (pairing +
                    session revocation), /export proxy, timeline/tasks/projects/approvals/audit
 infra/
-  docker-compose.dev.yml   Postgres16+pgvector, Redis
+  docker-compose.dev.yml   Postgres16+pgvector, Redis, optional MinIO (profile media-s3)
   deploy/                  Dockerfiles + fly.{api,worker,web}.toml (NODE_ENV=production on API)
   DEPLOY.md                private-alpha deploy guide
 ```
@@ -51,7 +56,7 @@ infra/
 ```bash
 pnpm install
 pnpm db:up                         # Postgres+pgvector + Redis via Docker
-pnpm db:migrate                    # forward-only; latest 0006_m6_notion.sql
+pnpm db:migrate                    # forward-only; latest 0008_m8_media_pipeline.sql
 pnpm --filter @nova/api db:seed-dev  # gives dev@nova.local a password (local only)
 pnpm --filter @nova/api dev        # :3001
 pnpm --filter @nova/worker dev     # enrichment worker
@@ -61,7 +66,7 @@ pnpm --filter @nova/extension build  # load .output/chrome-mv3; connect via Sett
 
 Tests:
 - `pnpm test` — unit (~110: schema, engines incl. visual redaction, env, auth helpers)
-- `DATABASE_URL=postgres://nova:nova@localhost:5432/nova REDIS_URL=redis://localhost:6379 pnpm test:integration` — 110 API (+1 gated) + 21 worker (M0–M7)
+- `DATABASE_URL=postgres://nova:nova@localhost:5432/nova REDIS_URL=redis://localhost:6379 pnpm test:integration` — 127 API (+1 gated) + 21 worker (M0–M8; media, search-golden, backfill suites are M8)
 - `NOVA_OCR_E2E=1 DATABASE_URL=... pnpm --filter @nova/api exec vitest run test/integration/ocr-e2e.test.ts` — real-Tesseract proof (downloads ~2MB language data once)
 - CI (`.github/workflows/ci.yml`) provisions Postgres+Redis and runs build → typecheck → unit → migrate → integration.
 
@@ -102,36 +107,67 @@ Note: the Docker daemon in this environment sometimes needs `sudo dockerd &` bef
   stored-external-id short-circuit. secret-box is a SUBPATH export
   (`@nova/context-engine/secret-box`) so the browser extension bundle never
   pulls node:crypto.
+- **Media pipeline is REAL (M8, docs/AUTH.md §Media pipeline)**: pixels
+  live in `moment_media` + object storage, NEVER in payload JSONB. Order
+  is sacred: capture → text redaction → visual redaction → encrypt+store →
+  DB reference → everything else. Blobs are AES-256-GCM sealed in the API
+  process (`NOVA_ENCRYPTION_KEY`, same secret-box as tokens; version byte
+  = rotation hook); the store never sees plaintext. `ObjectStore` is a
+  3-method interface — `FsObjectStore` (default) / `S3ObjectStore`
+  (AWS/MinIO/R2). Access is proxied `GET /v1/media/:id` (auth + user
+  scope + decrypt per request; NO signed/public URLs). Missing key fails
+  closed: images dropped (`media_unavailable`), prod refuses to boot.
+  Safe OCR words land in `context_moments.ocr_text` (tsv weight C);
+  masked words never reach the index. Legacy inline media moves ONLY via
+  the manual `media:backfill` command (skips what it can't prove redacted).
 - **Live sessions are client-side only**; server stateless for Q&A.
-- **DB migrations are forward-only**; latest `0006_m6_notion.sql`.
+- **DB migrations are forward-only**; latest `0008_m8_media_pipeline.sql`.
 - **API integration tests run file-serial** (`services/api/vitest.config.ts`); regression suites log in as the dev user, auth/isolation suites create fresh accounts.
 
-## Recommended next work — M8 (in priority order)
+## Recommended next work — M9 (in priority order)
 
-1. **Media pipeline v1** — move screenshots out of jsonb into moment_media +
-   object storage (schema exists since M0), with client-side encryption at
-   rest; unlocks bigger captures and Notion screenshot upload (via Notion's
-   file-upload API) under the existing approve+redact gates.
+1. **Notion screenshot upload** — the media pipeline now exposes everything
+   needed (per-media redaction state, stable ids, decrypted export access).
+   M9 designs the consent: explicitly approved per action, redacted media
+   only, reflected in the preview card, audited. Notion's file-upload API
+   avoids public hosting.
 2. **Notion database-property mapping** — when the destination is a
    database, map tags/priority/source to real properties.
-3. **Search quality pass** — tune the FTS/vector fusion with a golden set;
-   embed enrichment summaries; interpretation versioning.
+3. **Media housekeeping** — orphan-blob sweep (crash between blob write and
+   DB row), storage usage per user, and the key-rotation sweep tool
+   (strategy documented in docs/AUTH.md §Media pipeline).
+4. **Enrichment versioning** — enrichment re-runs still overwrite
+   summary/tags; no interpretation history.
+
+## Future roadmap note (do NOT build yet)
+
+**M12 — Nova Browser / Native Context Browser.**
+Definition: Explore a dedicated Chromium-based browser experience where
+Nova Context is integrated natively into browsing, context capture, live
+context, memory, redaction, search, approvals, and external actions.
+Constraints: Do not build it now. Do not design a browser from scratch.
+Treat it as a future experimental surface after extension, web, memory,
+actions, privacy, media pipeline, and private alpha usage are validated.
+This is only a roadmap note.
 
 ## Known weaknesses carried forward
 
-- Login rate limiting is in-process (per-instance) — fine single-instance.
 - Duplicate-page window exists if the worker dies between the Notion create
   call and the one-statement DB completion (Notion has no idempotency keys).
-- No password reset flow (operator resets `password_hash` manually in alpha).
-- Search fusion weights (0.6 FTS / 0.4 vector) still untuned; no golden set.
+- No password reset flow (operator resets via `auth:reset-password` in alpha).
+- Search fusion weights (0.6 FTS / 0.4 vector) untuned, but golden fixtures
+  now pin expected retrieval (`test/integration/search-golden.test.ts`).
 - Enrichment re-runs overwrite summary/tags; no interpretation versioning.
+- Media blob writes are not transactional with the DB row — a crash can
+  orphan an (encrypted, unreadable) blob; no cleanup sweep yet.
+- Fs media store has no replication — production should use the s3 backend.
 - CSS blur is not cryptographic redaction.
 - Security suite covers structural containment, not model-level jailbreaks.
 
 ## Operational reminders for the next session
 
-- M7 branch: `claude/m7-nova-context` (based on merged main with M0–M6).
-- If the M7 PR gets **merged**, treat follow-up as fresh work: restart from
+- M8 branch: `claude/m8-nova-context` (based on merged main with M0–M7).
+- If the M8 PR gets **merged**, treat follow-up as fresh work: restart from
   the latest main and open a new PR.
 - Commit message trailers in use:
   `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>` and the `Claude-Session:` line.

@@ -13,13 +13,34 @@ describe("loadEnv", () => {
   });
 
   it("defaults signup to invite-only in production", () => {
-    const env = loadEnv({ NODE_ENV: "production" });
+    const env = loadEnv({ NODE_ENV: "production", NOVA_ENCRYPTION_KEY: "a".repeat(64) });
     expect(env.isProduction).toBe(true);
     expect(env.signupMode).toBe("invite");
   });
 
+  it("production without NOVA_ENCRYPTION_KEY fails closed at boot (M8)", () => {
+    expect(() => loadEnv({ NODE_ENV: "production" })).toThrow(/NOVA_ENCRYPTION_KEY/);
+  });
+
+  it("s3 media store requires its credentials", () => {
+    expect(() => loadEnv({ NOVA_MEDIA_STORE: "s3" })).toThrow(/NOVA_MEDIA_S3_BUCKET/);
+    const env = loadEnv({
+      NOVA_MEDIA_STORE: "s3",
+      NOVA_MEDIA_S3_BUCKET: "nova-media",
+      NOVA_MEDIA_S3_ACCESS_KEY_ID: "minio",
+      NOVA_MEDIA_S3_SECRET_ACCESS_KEY: "minio-secret",
+    });
+    expect(env.NOVA_MEDIA_STORE).toBe("s3");
+  });
+
   it("honors an explicit NOVA_SIGNUP", () => {
-    expect(loadEnv({ NODE_ENV: "production", NOVA_SIGNUP: "closed" }).signupMode).toBe("closed");
+    expect(
+      loadEnv({
+        NODE_ENV: "production",
+        NOVA_SIGNUP: "closed",
+        NOVA_ENCRYPTION_KEY: "a".repeat(64),
+      }).signupMode,
+    ).toBe("closed");
     expect(
       loadEnv({ NOVA_SIGNUP: "invite", NOVA_ALPHA_INVITE_CODE: "alpha-code-1" }).signupMode,
     ).toBe("invite");
@@ -50,10 +71,11 @@ describe("loadEnv", () => {
   });
 
   it("summarizes the security posture for boot logs", () => {
-    const summary = securitySummary(loadEnv({ NODE_ENV: "production" }));
-    expect(summary).toContain("mode=production");
-    expect(summary).toContain("signup=invite");
+    const summary = securitySummary(loadEnv({}));
+    expect(summary).toContain("mode=development");
+    expect(summary).toContain("signup=open");
     expect(summary).toContain("token_encryption=OFF");
+    expect(summary).toContain("media=UNAVAILABLE (no key)");
     expect(summary).toContain("image_redaction=on");
     expect(summary).toContain("rate_limit=in-memory");
   });

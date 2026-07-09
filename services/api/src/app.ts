@@ -12,6 +12,8 @@ import {
 import {
   createContextMomentRequestSchema,
   type ContextMoment,
+  type ContextMomentWithMedia,
+  type MomentMediaRef,
   type CreateContextMomentResponse,
   type EnrichmentResult,
   type ListContextMomentsResponse,
@@ -25,7 +27,10 @@ import { Analytics } from "./analytics.js";
 import { createActionQueue, createEnrichmentQueue, type EnrichmentJob } from "./queue.js";
 import { registerAuth, requireAuth } from "./auth/plugin.js";
 import { createRateLimiter } from "./auth/rate-limit.js";
-import { redactPayloadImages } from "./image-redaction.js";
+import { extractPayloadImages, redactPayloadImages } from "./image-redaction.js";
+import { MediaService } from "./media/media-service.js";
+import { FsObjectStore, S3ObjectStore, type ObjectStore } from "./media/object-store.js";
+import { registerMediaRoutes } from "./routes-media.js";
 import { TesseractOcrEngine } from "./ocr.js";
 import { HttpNotionApiClient, type NotionApiClient } from "./integrations/notion-api.js";
 import { HttpNotionOAuthClient, type NotionOAuthClient } from "./integrations/notion-oauth.js";
@@ -36,6 +41,7 @@ import { registerM2Routes } from "./routes-m2.js";
 import { registerM3Routes } from "./routes-m3.js";
 import { registerM4Routes } from "./routes-m4.js";
 import { redactDeep, suggestProjects, type RedactionType } from "@nova/context-engine";
+import { parseEncryptionKey } from "@nova/context-engine/secret-box";
 import type { OcrEngine } from "@nova/context-engine/visual-redaction";
 
 interface MomentRow {
@@ -109,6 +115,8 @@ export interface BuildAppOptions {
   ocr?: OcrEngine | null;
   /** Test override for the read-only Notion API client (M7 destinations). */
   notionApi?: NotionApiClient | null;
+  /** Test override for the media object store (M8). */
+  objectStore?: ObjectStore;
 }
 
 export async function buildApp({
@@ -118,6 +126,7 @@ export async function buildApp({
   notionOauth,
   ocr,
   notionApi,
+  objectStore,
 }: BuildAppOptions): Promise<FastifyInstance> {
   const db = pool ?? new pg.Pool({ connectionString: env.DATABASE_URL, max: 10 });
   const app = Fastify({
@@ -173,6 +182,30 @@ export async function buildApp({
     });
   }
   const screenshotStorageOn = env.NOVA_SCREENSHOT_STORAGE === "on";
+  // M8: media pipeline — encrypted blobs in object storage, metadata in
+  // moment_media. Without the encryption key the pipeline is UNAVAILABLE
+  // and captures strip images (state 'media_unavailable') rather than
+  // storing pixels outside it. Production refuses to boot without the key.
+  const mediaKey = env.NOVA_ENCRYPTION_KEY ? parseEncryptionKey(env.NOVA_ENCRYPTION_KEY) : null;
+  const mediaStore: ObjectStore =
+    objectStore ??
+    (env.NOVA_MEDIA_STORE === "s3"
+      ? new S3ObjectStore({
+          bucket: env.NOVA_MEDIA_S3_BUCKET!,
+          region: env.NOVA_MEDIA_S3_REGION,
+          endpoint: env.NOVA_MEDIA_S3_ENDPOINT,
+          accessKeyId: env.NOVA_MEDIA_S3_ACCESS_KEY_ID!,
+          secretAccessKey: env.NOVA_MEDIA_S3_SECRET_ACCESS_KEY!,
+        })
+      : new FsObjectStore(env.NOVA_MEDIA_FS_ROOT));
+  const media = mediaKey ? new MediaService(db, mediaStore, mediaKey) : null;
+  /** Attach media refs to a batch of API-shaped moments (single query). */
+  async function attachMedia<T extends { id: string }>(
+    items: T[],
+  ): Promise<Array<T & { media: MomentMediaRef[] }>> {
+    const map = media ? await media.listForMoments(items.map((m) => m.id)) : new Map();
+    return items.map((m) => ({ ...m, media: map.get(m.id) ?? [] }));
+  }
   // M4: privacy-preserving funnel analytics (allowlisted events, no content).
   const analytics = new Analytics(db, env.NOVA_ANALYTICS === "local");
 
@@ -237,6 +270,7 @@ export async function buildApp({
     notionOauth: notionOauthClient,
     notionApi: notionApiClient,
   });
+  registerMediaRoutes(app, { media });
 
   app.get("/healthz", async () => {
     await db.query("SELECT 1");
@@ -299,6 +333,16 @@ export async function buildApp({
     body.payload = imageOutcome.payload;
     const imageReport = imageOutcome.report;
 
+    // M8: pixels leave the JSON payload here — redacted images go to the
+    // media pipeline (encrypted object storage + moment_media). If the
+    // pipeline is unavailable, images are DROPPED, never stored inline.
+    const extraction = extractPayloadImages(body.payload);
+    body.payload = extraction.payload;
+    if (extraction.images.length && !media) {
+      imageReport.state = "media_unavailable";
+      extraction.images.length = 0;
+    }
+
     // Synchronous parse is heuristic-only (local, sub-millisecond); the
     // worker refines it with an LLM asynchronously when configured.
     let intent: ParsedIntent | null = null;
@@ -328,8 +372,8 @@ export async function buildApp({
 
     const { rows } = await db.query<MomentRow>(
       `INSERT INTO context_moments
-         (user_id, project_id, source_mode, source_meta, payload, extracted_text, intent_text, intent_parsed, enrichment_status, redaction_state, image_redaction)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         (user_id, project_id, source_mode, source_meta, payload, extracted_text, intent_text, intent_parsed, enrichment_status, redaction_state, image_redaction, ocr_text)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING ${MOMENT_COLUMNS}`,
       [
         userId,
@@ -343,9 +387,26 @@ export async function buildApp({
         enrichmentQueue ? "pending" : "skipped",
         redactionOn ? "applied" : "skipped",
         JSON.stringify(imageReport),
+        imageOutcome.ocrText,
       ],
     );
     const moment = rowToMoment(rows[0]!);
+
+    // M8: persist redacted images through the pipeline and reference them.
+    let momentMedia: MomentMediaRef[] = [];
+    if (extraction.images.length && media) {
+      try {
+        momentMedia = await media.storeMomentImages(
+          userId,
+          moment.id,
+          extraction.images,
+          imageReport.state,
+        );
+      } catch (err) {
+        // Media failure must not lose the capture; the moment stands, imageless.
+        req.log.error({ err }, "media pipeline store failed");
+      }
+    }
 
     // Enqueue async enrichment. A queue failure must never fail the capture:
     // downgrade the moment to 'skipped' and move on.
@@ -460,6 +521,7 @@ export async function buildApp({
           images_masked: imageReport.masked,
           image_storage_disabled: !screenshotStorageOn,
           strict_blocked: imageReport.state === "blocked_strict",
+          media_stored: momentMedia.length,
         }),
       ],
     );
@@ -490,6 +552,7 @@ export async function buildApp({
         : { status: "skipped", job_id: null },
       suggested_projects: moment.project_id ? [] : suggestions,
       image_redaction: imageReport,
+      media: momentMedia,
       links: { self: `/v1/context/moments/${moment.id}` },
       intent,
       task,
@@ -531,7 +594,7 @@ export async function buildApp({
        LIMIT $${params.length}`,
       params,
     );
-    const items = rows.map(rowToMoment);
+    const items = await attachMedia(rows.map(rowToMoment));
     const response: ListContextMomentsResponse = {
       items,
       next_before: items.length === limit ? items[items.length - 1]!.captured_at : null,
@@ -555,7 +618,8 @@ export async function buildApp({
     if (!row) {
       return reply.code(404).send({ error: "not_found" });
     }
-    return rowToMoment(row);
+    const [withMedia] = await attachMedia([rowToMoment(row)]);
+    return withMedia;
   });
 
   app.get("/v1/projects", async (req) => {
@@ -584,6 +648,7 @@ export async function buildApp({
     rowToMoment: rowToMoment as (row: never) => ContextMoment,
     analytics,
     actionQueue,
+    attachMedia,
   });
   registerM3Routes(app, {
     db,
@@ -593,8 +658,9 @@ export async function buildApp({
     momentColumns: MOMENT_COLUMNS,
     rowToMoment: rowToMoment as (row: never) => ContextMoment,
     analytics,
+    media,
   });
-  registerM4Routes(app, { db, analytics });
+  registerM4Routes(app, { db, analytics, media });
 
   return app;
 }

@@ -323,7 +323,7 @@ describe.skipIf(!databaseUrl)("M3: redaction, live Q&A, save-from-live, export/d
         expect(res.statusCode).toBe(200);
         expect(res.headers["content-disposition"]).toContain("attachment");
         const body = res.json();
-        expect(body.format_version).toBe(1);
+        expect(body.format_version).toBe(2); // M8: media rides along
         expect(body.moments.map((m: { id: string }) => m.id)).toContain(created.id);
         expect(body.tasks.some((t: { moment_id: string }) => t.moment_id === created.id)).toBe(true);
         expect(body.projects.length).toBeGreaterThan(0);

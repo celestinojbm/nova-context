@@ -44,16 +44,19 @@ export function parseEncryptionKey(value: string): Buffer {
   );
 }
 
-export function encryptSecret(key: Buffer, plaintext: string): Buffer {
+/** M8: media blobs use the same box as string secrets — one format, one
+ * key, one rotation story (the version byte is the rotation hook: v2 =
+ * next key/format; rotation = decrypt-with-old, re-encrypt-with-new). */
+export function encryptBytes(key: Buffer, plaintext: Buffer): Buffer {
   if (key.length !== KEY_LEN) throw new SecretBoxError("encryption key must be 32 bytes");
   const iv = randomBytes(IV_LEN);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
-  const data = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+  const data = Buffer.concat([cipher.update(plaintext), cipher.final()]);
   const tag = cipher.getAuthTag();
   return Buffer.concat([Buffer.from([VERSION]), iv, tag, data]);
 }
 
-export function decryptSecret(key: Buffer, box: Buffer): string {
+export function decryptBytes(key: Buffer, box: Buffer): Buffer {
   if (key.length !== KEY_LEN) throw new SecretBoxError("encryption key must be 32 bytes");
   if (box.length < 1 + IV_LEN + TAG_LEN || box[0] !== VERSION) {
     throw new SecretBoxError("unrecognized ciphertext format");
@@ -64,9 +67,17 @@ export function decryptSecret(key: Buffer, box: Buffer): string {
   const decipher = createDecipheriv("aes-256-gcm", key, iv);
   decipher.setAuthTag(tag);
   try {
-    return Buffer.concat([decipher.update(data), decipher.final()]).toString("utf8");
+    return Buffer.concat([decipher.update(data), decipher.final()]);
   } catch {
     // Wrong key or tampered ciphertext — same error either way, no oracle.
     throw new SecretBoxError("decryption failed (wrong key or corrupted data)");
   }
+}
+
+export function encryptSecret(key: Buffer, plaintext: string): Buffer {
+  return encryptBytes(key, Buffer.from(plaintext, "utf8"));
+}
+
+export function decryptSecret(key: Buffer, box: Buffer): string {
+  return decryptBytes(key, box).toString("utf8");
 }
