@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parsedIntentSchema, projectSuggestionSchema } from "./intent.js";
 
 /**
  * Contracts for the Context Moment ingestion path (M0 surface).
@@ -74,6 +75,9 @@ export const contextMomentSchema = z.object({
   summary: z.string().nullable(),
   captured_at: z.string().datetime({ offset: true }),
   redaction_state: z.enum(["pending", "applied", "skipped"]),
+  // M1: structured intent stored with the moment; null when no intent_text
+  // was provided or the moment predates intent parsing.
+  intent_parsed: parsedIntentSchema.nullable().optional(),
 });
 export type ContextMoment = z.infer<typeof contextMomentSchema>;
 
@@ -86,16 +90,20 @@ export const createContextMomentResponseSchema = contextMomentSchema
     redaction_state: true,
   })
   .extend({
-    // Enrichment is not built in M0; status is reported as such so clients
-    // written now keep working when the worker arrives in M2.
+    // Async enrichment (summary, entities, embeddings) arrives in M2; status
+    // is reported honestly so clients written now keep working then.
     enrichment: z.object({
       status: z.enum(["queued", "done", "skipped"]),
       job_id: z.string().nullable(),
     }),
-    suggested_projects: z.array(
-      z.object({ id: z.string().uuid(), name: z.string(), confidence: z.number() }),
-    ),
+    suggested_projects: z.array(projectSuggestionSchema),
     links: z.object({ self: z.string() }),
+    // M1: intent parsed synchronously at capture; null when no intent_text.
+    intent: parsedIntentSchema.nullable(),
+    // M1: Tier-0 auto-executed task, when the intent called for one.
+    task: z
+      .object({ id: z.string().uuid(), title: z.string() })
+      .nullable(),
   });
 export type CreateContextMomentResponse = z.infer<
   typeof createContextMomentResponseSchema

@@ -119,17 +119,18 @@ Full detail in [System Architecture](docs/SYSTEM_ARCHITECTURE.md).
 
 ## Project status
 
-**M0 — walking skeleton.** The first full thread works end to end:
+**M1 — voice, intent, projects, tasks.** The full thread now runs:
 
-> Browser extension captures the visible tab → user types an instruction → `POST /v1/context/moments` → Postgres stores the Context Moment → the web timeline displays it.
+> Browser extension captures the visible tab → user speaks (push-to-talk → Whisper transcript, editable) or types an instruction → the Intelligence Engine parses it into a structured intent (LLM with deterministic heuristic fallback) → Nova suggests a project (rule-based, user confirms or overrides — overrides logged) → Postgres stores the Context Moment with its intent → a Tier-0 Nova task is auto-created when the intent calls for one → timeline and task list display it all.
 
 What exists today:
 
 - 19 foundation documents (indexed below), internally consistent on vocabulary, architecture, and scope.
 - A locked MVP definition ([MVP Scope](docs/MVP_SCOPE.md)) and a sequenced build plan ([Build Plan](docs/BUILD_PLAN.md)).
-- The M0 monorepo per [Repo Structure](docs/REPO_STRUCTURE.md): `packages/schema` (Zod contracts), `services/api` (Fastify + Postgres/pgvector), `apps/extension` (WXT MV3 side panel), `apps/web` (Next.js timeline), `infra/` (dev compose stack), plus unit and integration tests for the ingestion path.
+- The monorepo per [Repo Structure](docs/REPO_STRUCTURE.md): `packages/schema` (Zod contracts), `packages/model-router` (provider-agnostic intent parsing + transcription with fallback chains), `services/api` (Fastify + Postgres/pgvector), `apps/extension` (WXT MV3 side panel with push-to-talk), `apps/web` (Next.js timeline + tasks), `infra/` (dev compose stack), plus unit and integration tests.
+- Both model providers are optional: no `OPENAI_API_KEY` → transcription returns 503 and the UI degrades to typed input; no `ANTHROPIC_API_KEY` → intent parsing uses the local heuristic parser.
 
-Deliberately not built yet (per [Build Plan §14](docs/BUILD_PLAN.md)): voice input, AI enrichment, project auto-suggest, Notion, live mode, auth beyond a shared dev token. Those are M1–M3.
+Deliberately not built yet (per [Build Plan §14](docs/BUILD_PLAN.md)): Notion/external integrations, async enrichment workers, embeddings, live context mode, real auth. Those are M2–M3.
 
 ### Getting started (M0)
 

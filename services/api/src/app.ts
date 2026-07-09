@@ -1,14 +1,24 @@
 import cors from "@fastify/cors";
+import multipart from "@fastify/multipart";
+import {
+  AnthropicIntentParser,
+  IntentRouter,
+  OpenAITranscriber,
+  TranscriptionRouter,
+} from "@nova/model-router";
 import {
   createContextMomentRequestSchema,
   type ContextMoment,
   type CreateContextMomentResponse,
   type ListContextMomentsResponse,
+  type ParsedIntent,
 } from "@nova/schema";
 import Fastify, { type FastifyInstance } from "fastify";
 import pg from "pg";
 import { z } from "zod";
 import type { Env } from "./env.js";
+import { registerM1Routes } from "./routes-m1.js";
+import { suggestProjects } from "./suggest.js";
 
 const DEV_USER_EMAIL = "dev@nova.local";
 
@@ -23,6 +33,7 @@ interface MomentRow {
   summary: string | null;
   captured_at: Date;
   redaction_state: "pending" | "applied" | "skipped";
+  intent_parsed: ParsedIntent | null;
 }
 
 function rowToMoment(row: MomentRow): ContextMoment {
@@ -37,8 +48,17 @@ function rowToMoment(row: MomentRow): ContextMoment {
     summary: row.summary,
     captured_at: row.captured_at.toISOString(),
     redaction_state: row.redaction_state,
+    intent_parsed: row.intent_parsed,
   };
 }
+
+const MOMENT_COLUMNS = `id, project_id, source_mode, source_meta, payload,
+              extracted_text, intent_text, summary, captured_at, redaction_state, intent_parsed`;
+
+/** Intent action types that auto-execute a Tier-0 Nova task. A reminder is a
+ * task with a follow-up flavor in M1; scheduling arrives with calendar
+ * integration (M2+, per docs/ACTION_ENGINE.md). */
+const TASK_CREATING_ACTIONS = new Set(["create_task", "remind_follow_up"]);
 
 export interface BuildAppOptions {
   env: Env;
@@ -56,6 +76,29 @@ export async function buildApp({ env, pool }: BuildAppOptions): Promise<FastifyI
   // The extension (chrome-extension:// origin) and the web app both call the
   // API cross-origin in dev. M0 is single-user local; tighten with real auth.
   await app.register(cors, { origin: true });
+  // Voice uploads (POST /v1/transcriptions). Push-to-talk clips are short;
+  // 15MB comfortably covers minutes of webm/opus.
+  await app.register(multipart, {
+    limits: { fileSize: 15 * 1024 * 1024, files: 1 },
+  });
+
+  // M1 model routing. Both providers are optional; the intent chain always
+  // terminates in the deterministic heuristic parser.
+  const intentRouter = new IntentRouter(
+    env.ANTHROPIC_API_KEY
+      ? [
+          new AnthropicIntentParser({
+            apiKey: env.ANTHROPIC_API_KEY,
+            model: env.NOVA_INTENT_MODEL,
+          }),
+        ]
+      : [],
+  );
+  const transcriptionRouter = new TranscriptionRouter(
+    env.OPENAI_API_KEY
+      ? [new OpenAITranscriber({ apiKey: env.OPENAI_API_KEY })]
+      : [],
+  );
 
   if (!pool) {
     app.addHook("onClose", async () => {
@@ -122,12 +165,40 @@ export async function buildApp({ env, pool }: BuildAppOptions): Promise<FastifyI
       }
     }
 
+    // M1: parse the instruction into a structured intent before storing.
+    // The router falls back to the local heuristic parser, so this cannot
+    // fail; with an LLM provider configured it adds latency, which moves to
+    // the async enrichment worker in M2.
+    let intent: ParsedIntent | null = null;
+    if (body.intent_text?.trim()) {
+      const projectNames = (
+        await db.query<{ name: string }>(
+          "SELECT name FROM projects WHERE user_id = $1 AND archived = false",
+          [userId],
+        )
+      ).rows.map((r) => r.name);
+      const parseResult = await intentRouter.parse({
+        text: body.intent_text,
+        pageTitle: (body.source_meta["title"] as string | undefined) ?? null,
+        knownProjects: projectNames,
+      });
+      intent = parseResult.intent;
+      for (const failure of parseResult.failures) {
+        req.log.warn({ failure }, "intent provider failed; fell back");
+      }
+    }
+
+    // Rule-based project suggestions — the same scoring the UI previewed.
+    const suggestions = await suggestProjects(db, userId, {
+      projectHint: intent?.project_hint ?? null,
+      url: (body.source_meta["url"] as string | undefined) ?? null,
+    });
+
     const { rows } = await db.query<MomentRow>(
       `INSERT INTO context_moments
-         (user_id, project_id, source_mode, source_meta, payload, extracted_text, intent_text)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, project_id, source_mode, source_meta, payload,
-                 extracted_text, intent_text, summary, captured_at, redaction_state`,
+         (user_id, project_id, source_mode, source_meta, payload, extracted_text, intent_text, intent_parsed)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING ${MOMENT_COLUMNS}`,
       [
         userId,
         body.project_id ?? null,
@@ -136,9 +207,81 @@ export async function buildApp({ env, pool }: BuildAppOptions): Promise<FastifyI
         JSON.stringify(body.payload),
         body.extracted_text ?? null,
         body.intent_text ?? null,
+        intent ? JSON.stringify(intent) : null,
       ],
     );
     const moment = rowToMoment(rows[0]!);
+
+    // Override logging (BUILD_PLAN §12): the user linked a project different
+    // from the top suggestion — retained as a training signal.
+    const topSuggestion = suggestions[0];
+    if (body.project_id && topSuggestion && topSuggestion.id !== body.project_id) {
+      await db.query(
+        `INSERT INTO audit_log (user_id, event_type, subject_kind, subject_id, detail)
+         VALUES ($1, 'project.link.override', 'moment', $2, $3)`,
+        [
+          userId,
+          moment.id,
+          JSON.stringify({
+            chosen_project_id: body.project_id,
+            suggested_project_id: topSuggestion.id,
+            suggested_confidence: topSuggestion.confidence,
+          }),
+        ],
+      );
+    }
+
+    // Tier-0 action (docs/ACTION_ENGINE.md): internal + reversible, so it
+    // auto-executes — a task in Nova's own list, linked to the moment.
+    // External targets (Notion etc.) are Tier-1 and arrive in M2.
+    let task: { id: string; title: string } | null = null;
+    if (intent && TASK_CREATING_ACTIONS.has(intent.action_type)) {
+      const actionRow = await db.query<{ id: string }>(
+        `INSERT INTO actions (user_id, moment_id, project_id, action_type, risk_tier, status, payload)
+         VALUES ($1, $2, $3, 'nova_task', 0, 'done', $4)
+         RETURNING id`,
+        [
+          userId,
+          moment.id,
+          moment.project_id,
+          JSON.stringify({ title: intent.summary, priority: intent.priority_guess }),
+        ],
+      );
+      const actionId = actionRow.rows[0]!.id;
+      const taskRow = await db.query<{ id: string; title: string }>(
+        `INSERT INTO tasks (user_id, project_id, moment_id, action_id, title, notes, priority)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, title`,
+        [
+          userId,
+          moment.project_id,
+          moment.id,
+          actionId,
+          intent.summary,
+          body.intent_text ?? null,
+          intent.priority_guess,
+        ],
+      );
+      task = taskRow.rows[0]!;
+      await db.query(
+        `UPDATE actions SET result = $1, updated_at = now() WHERE id = $2`,
+        [JSON.stringify({ task_id: task.id }), actionId],
+      );
+      await db.query(
+        `INSERT INTO audit_log (user_id, event_type, subject_kind, subject_id, detail)
+         VALUES ($1, 'action.execute', 'action', $2, $3)`,
+        [
+          userId,
+          actionId,
+          JSON.stringify({
+            action_type: "nova_task",
+            risk_tier: 0,
+            task_id: task.id,
+            intent_parser: intent.parser,
+          }),
+        ],
+      );
+    }
 
     // Audit trail from day one (SECURITY_PRIVACY_GOVERNANCE): event metadata
     // only — no payload, no extracted text.
@@ -151,6 +294,8 @@ export async function buildApp({ env, pool }: BuildAppOptions): Promise<FastifyI
         JSON.stringify({
           source_mode: moment.source_mode,
           url_host: safeHost(moment.source_meta),
+          intent_action: intent?.action_type ?? null,
+          intent_parser: intent?.parser ?? null,
         }),
       ],
     );
@@ -161,11 +306,13 @@ export async function buildApp({ env, pool }: BuildAppOptions): Promise<FastifyI
       summary: null,
       captured_at: moment.captured_at,
       redaction_state: moment.redaction_state,
-      // No enrichment worker in M0 — reported honestly so clients built now
-      // keep working when it arrives in M2.
+      // Async enrichment (summary, entities, embeddings) arrives in M2 —
+      // reported honestly so clients built now keep working then.
       enrichment: { status: "skipped", job_id: null },
-      suggested_projects: [],
+      suggested_projects: moment.project_id ? [] : suggestions,
       links: { self: `/v1/context/moments/${moment.id}` },
+      intent,
+      task,
     };
     return reply.code(201).send(response);
   });
@@ -197,8 +344,7 @@ export async function buildApp({ env, pool }: BuildAppOptions): Promise<FastifyI
     params.push(limit);
 
     const { rows } = await db.query<MomentRow>(
-      `SELECT id, project_id, source_mode, source_meta, payload,
-              extracted_text, intent_text, summary, captured_at, redaction_state
+      `SELECT ${MOMENT_COLUMNS}
        FROM context_moments
        WHERE ${conditions.join(" AND ")}
        ORDER BY captured_at DESC
@@ -220,8 +366,7 @@ export async function buildApp({ env, pool }: BuildAppOptions): Promise<FastifyI
     }
     const userId = await devUserId();
     const { rows } = await db.query<MomentRow>(
-      `SELECT id, project_id, source_mode, source_meta, payload,
-              extracted_text, intent_text, summary, captured_at, redaction_state
+      `SELECT ${MOMENT_COLUMNS}
        FROM context_moments
        WHERE id = $1 AND user_id = $2`,
       [params.data.id, userId],
@@ -244,6 +389,8 @@ export async function buildApp({ env, pool }: BuildAppOptions): Promise<FastifyI
     );
     return { items: rows };
   });
+
+  registerM1Routes(app, { db, devUserId, intentRouter, transcriptionRouter });
 
   return app;
 }

@@ -13,7 +13,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <body>
         <header className="site-header">
           <strong>Nova Context</strong>
-          <span className="muted">memory timeline</span>
+          <nav className="site-nav">
+            <a href="/">Timeline</a>
+            <a href="/tasks">Tasks</a>
+          </nav>
         </header>
         <main>{children}</main>
       </body>

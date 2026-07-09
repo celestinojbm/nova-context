@@ -1,9 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { ProjectSuggestion } from "@nova/schema";
 import {
   fetchProjects,
   loadSettings,
   postMoment,
   saveSettings,
+  suggestProjectsPreview,
+  transcribeAudio,
+  TranscriptionUnavailable,
   type ExtensionSettings,
 } from "../../utils/api.js";
 import {
@@ -11,10 +15,11 @@ import {
   toCreateMomentRequest,
   type CaptureDraft,
 } from "../../utils/capture.js";
+import { PushToTalkRecorder } from "../../utils/voice.js";
 
-// M0 side-panel state machine (docs/BUILD_PLAN.md §6):
-// idle → capturing → confirm-card → (submit) → idle.
-// Voice ("listening") and live mode arrive in M1/M3.
+// M1 side-panel state machine (docs/BUILD_PLAN.md §6):
+// idle → capturing → confirm-card ↔ listening → (submit) → idle.
+// Live mode arrives in M3.
 type PanelState = "idle" | "capturing" | "confirm" | "submitting";
 
 export function App() {
@@ -23,15 +28,21 @@ export function App() {
   const [intent, setIntent] = useState("");
   const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
   const [projectId, setProjectId] = useState<string>("");
+  const [suggestion, setSuggestion] = useState<ProjectSuggestion | null>(null);
   const [settings, setSettings] = useState<ExtensionSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [listening, setListening] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const recorderRef = useRef(new PushToTalkRecorder());
 
   useEffect(() => {
     void loadSettings().then((s) => {
       setSettings(s);
       void fetchProjects(s).then(setProjects);
     });
+    const recorder = recorderRef.current;
+    return () => recorder.release();
   }, []);
 
   async function onCapture() {
@@ -48,6 +59,52 @@ export function App() {
     }
   }
 
+  /** Ask the server which project this likely belongs to, and preselect it.
+   * The user can always override; overrides are logged server-side. */
+  async function refreshSuggestion(text: string, currentDraft: CaptureDraft | null) {
+    if (!settings) return;
+    const suggestions = await suggestProjectsPreview(settings, {
+      intent_text: text.trim() || null,
+      url: currentDraft?.page.url ?? null,
+    });
+    const top = suggestions[0] ?? null;
+    setSuggestion(top);
+    if (top) setProjectId((prev) => prev || top.id);
+  }
+
+  async function onTalkStart() {
+    setError(null);
+    try {
+      await recorderRef.current.start();
+      setListening(true);
+    } catch {
+      setError("Microphone unavailable or permission denied — type instead.");
+    }
+  }
+
+  async function onTalkStop() {
+    if (!listening || !settings) return;
+    setListening(false);
+    const clip = await recorderRef.current.stop();
+    if (!clip) return;
+    setTranscribing(true);
+    try {
+      const { transcript } = await transcribeAudio(settings, clip);
+      // Transcript is editable text — append to whatever was already typed.
+      const nextText = [intent.trim(), transcript].filter(Boolean).join(" ");
+      setIntent(nextText);
+      void refreshSuggestion(nextText, draft);
+    } catch (err) {
+      setError(
+        err instanceof TranscriptionUnavailable
+          ? err.message
+          : (err as Error).message,
+      );
+    } finally {
+      setTranscribing(false);
+    }
+  }
+
   async function onSubmit() {
     if (!draft || !settings) return;
     setState("submitting");
@@ -55,9 +112,13 @@ export function App() {
     try {
       const body = toCreateMomentRequest(draft, intent, projectId || null);
       const created = await postMoment(settings, body);
-      setSuccess(`Saved. Moment ${created.id.slice(0, 8)}… is in your timeline.`);
+      const parts = [`Saved moment ${created.id.slice(0, 8)}…`];
+      if (created.task) parts.push(`Task created: “${created.task.title}”`);
+      setSuccess(parts.join(" "));
       setDraft(null);
       setIntent("");
+      setSuggestion(null);
+      setProjectId("");
       setState("idle");
     } catch (err) {
       setError((err as Error).message);
@@ -66,8 +127,12 @@ export function App() {
   }
 
   function onCancel() {
+    recorderRef.current.release();
+    setListening(false);
     setDraft(null);
     setIntent("");
+    setSuggestion(null);
+    setProjectId("");
     setState("idle");
   }
 
@@ -105,13 +170,33 @@ export function App() {
             {draft.page.url}
           </div>
 
-          <label htmlFor="intent">Why does this matter? (your instruction)</label>
+          <label htmlFor="intent">Why does this matter? (speak or type)</label>
+          <div className="row">
+            <button
+              className={listening ? "talking" : ""}
+              onMouseDown={() => void onTalkStart()}
+              onMouseUp={() => void onTalkStop()}
+              onMouseLeave={() => listening && void onTalkStop()}
+              onTouchStart={() => void onTalkStart()}
+              onTouchEnd={() => void onTalkStop()}
+              disabled={state === "submitting" || transcribing}
+              title="Hold to talk"
+            >
+              {listening ? "● Listening… release to stop" : "🎤 Hold to talk"}
+            </button>
+            {transcribing && <span className="meta">Transcribing…</span>}
+          </div>
+          <div className="disclosure">
+            Voice is transcribed by a cloud service (OpenAI Whisper). Audio is
+            not stored. Typing works just as well.
+          </div>
           <textarea
             id="intent"
             rows={3}
-            placeholder="e.g. remember this for the pricing project"
+            placeholder="e.g. create a task to compare this with alternatives, for the pricing project"
             value={intent}
             onChange={(e) => setIntent(e.target.value)}
+            onBlur={() => void refreshSuggestion(intent, draft)}
             disabled={state === "submitting"}
           />
 
@@ -126,9 +211,17 @@ export function App() {
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
+                {suggestion?.id === p.id
+                  ? ` (suggested · ${Math.round(suggestion.confidence * 100)}%)`
+                  : ""}
               </option>
             ))}
           </select>
+          {suggestion && (
+            <div className="meta">
+              Suggested: {suggestion.name} — {suggestion.reason}
+            </div>
+          )}
 
           <div className="row">
             <button

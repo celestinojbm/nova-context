@@ -63,7 +63,14 @@ export default async function TimelinePage() {
               <img src={screenshot} alt={`Screenshot of ${title}`} />
             )}
             <div className="moment-body">
-              <p className="moment-title">{title}</p>
+              <p className="moment-title">
+                {title}
+                {m.intent_parsed && (
+                  <span className="badge">
+                    {m.intent_parsed.action_type.replace(/_/g, " ")}
+                  </span>
+                )}
+              </p>
               {m.source_meta.url && (
                 <div className="moment-url">
                   <a href={m.source_meta.url} target="_blank" rel="noreferrer">
