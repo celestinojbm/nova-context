@@ -2,10 +2,14 @@
   "$schema": "https://turbo.build/schema.json",
   "globalEnv": [
     "DATABASE_URL",
+    "REDIS_URL",
     "NOVA_API_TOKEN",
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "NOVA_INTENT_MODEL",
+    "NOVA_ENRICH_MODEL",
+    "NOVA_CLOUD_ENRICHMENT",
+    "NOVA_ENRICHMENT_QUEUE",
     "NOVA_API_URL"
   ],
   "tasks": {

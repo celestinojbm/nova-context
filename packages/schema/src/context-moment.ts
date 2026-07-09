@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { enrichmentResultSchema, enrichmentStatusSchema } from "./enrichment.js";
 import { parsedIntentSchema, projectSuggestionSchema } from "./intent.js";
 
 /**
@@ -78,6 +79,9 @@ export const contextMomentSchema = z.object({
   // M1: structured intent stored with the moment; null when no intent_text
   // was provided or the moment predates intent parsing.
   intent_parsed: parsedIntentSchema.nullable().optional(),
+  // M2: async enrichment lifecycle + result.
+  enrichment_status: enrichmentStatusSchema.optional(),
+  enrichment: enrichmentResultSchema.nullable().optional(),
 });
 export type ContextMoment = z.infer<typeof contextMomentSchema>;
 

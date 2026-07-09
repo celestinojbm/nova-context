@@ -11,13 +11,17 @@ const envSchema = z.object({
   // Optional single shared token for M0. OAuth 2.1 + PKCE + scopes is
   // deliberately NOT built yet (BUILD_PLAN §14: no public API).
   NOVA_API_TOKEN: z.string().min(16).optional().or(z.literal("").transform(() => undefined)),
-  // M1 provider keys — both optional. Without OPENAI_API_KEY, transcription
-  // returns 503 and clients degrade to typed input. Without ANTHROPIC_API_KEY,
-  // intent parsing uses the deterministic heuristic parser only.
+  // Optional. Used for voice transcription (Whisper) and query-time
+  // embeddings for vector search. Without it: transcription returns 503
+  // (clients degrade to typed input) and search runs keyword-only.
+  // LLM enrichment keys (ANTHROPIC_API_KEY) belong to services/worker now —
+  // the API never calls an LLM on the capture path.
   OPENAI_API_KEY: z.string().min(10).optional().or(z.literal("").transform(() => undefined)),
-  ANTHROPIC_API_KEY: z.string().min(10).optional().or(z.literal("").transform(() => undefined)),
-  // Override the intent-parsing model (default: claude-opus-4-8).
-  NOVA_INTENT_MODEL: z.string().optional().or(z.literal("").transform(() => undefined)),
+  // M2: Redis connection for the enrichment queue. Optional for the API —
+  // without it, captures are stored with enrichment_status 'skipped'.
+  REDIS_URL: z.string().optional().or(z.literal("").transform(() => undefined)),
+  // Queue name override (mainly for test isolation).
+  NOVA_ENRICHMENT_QUEUE: z.string().default("moment-enrichment"),
 });
 
 export type Env = z.infer<typeof envSchema>;

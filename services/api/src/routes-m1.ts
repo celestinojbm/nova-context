@@ -13,7 +13,7 @@ import {
 import type { FastifyInstance } from "fastify";
 import type pg from "pg";
 import { z } from "zod";
-import { suggestProjects } from "./suggest.js";
+import { suggestProjects } from "@nova/context-engine";
 
 export interface M1RouteDeps {
   db: pg.Pool;

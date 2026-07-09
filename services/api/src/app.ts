@@ -1,15 +1,17 @@
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import {
-  AnthropicIntentParser,
   IntentRouter,
+  OpenAIEmbedder,
   OpenAITranscriber,
   TranscriptionRouter,
+  type EmbeddingProvider,
 } from "@nova/model-router";
 import {
   createContextMomentRequestSchema,
   type ContextMoment,
   type CreateContextMomentResponse,
+  type EnrichmentResult,
   type ListContextMomentsResponse,
   type ParsedIntent,
 } from "@nova/schema";
@@ -17,8 +19,10 @@ import Fastify, { type FastifyInstance } from "fastify";
 import pg from "pg";
 import { z } from "zod";
 import type { Env } from "./env.js";
+import { createEnrichmentQueue, type EnrichmentJob } from "./queue.js";
 import { registerM1Routes } from "./routes-m1.js";
-import { suggestProjects } from "./suggest.js";
+import { registerM2Routes } from "./routes-m2.js";
+import { suggestProjects } from "@nova/context-engine";
 
 const DEV_USER_EMAIL = "dev@nova.local";
 
@@ -34,6 +38,8 @@ interface MomentRow {
   captured_at: Date;
   redaction_state: "pending" | "applied" | "skipped";
   intent_parsed: ParsedIntent | null;
+  enrichment_status: "pending" | "processing" | "completed" | "failed" | "skipped";
+  enrichment: EnrichmentResult | null;
 }
 
 function rowToMoment(row: MomentRow): ContextMoment {
@@ -49,11 +55,28 @@ function rowToMoment(row: MomentRow): ContextMoment {
     captured_at: row.captured_at.toISOString(),
     redaction_state: row.redaction_state,
     intent_parsed: row.intent_parsed,
+    enrichment_status: row.enrichment_status,
+    enrichment: row.enrichment,
   };
 }
 
-const MOMENT_COLUMNS = `id, project_id, source_mode, source_meta, payload,
-              extracted_text, intent_text, summary, captured_at, redaction_state, intent_parsed`;
+const MOMENT_COLUMN_NAMES = [
+  "id",
+  "project_id",
+  "source_mode",
+  "source_meta",
+  "payload",
+  "extracted_text",
+  "intent_text",
+  "summary",
+  "captured_at",
+  "redaction_state",
+  "intent_parsed",
+  "enrichment_status",
+  "enrichment",
+];
+const MOMENT_COLUMNS = MOMENT_COLUMN_NAMES.join(", ");
+const MOMENT_COLUMNS_PREFIXED = MOMENT_COLUMN_NAMES.map((c) => `m.${c}`).join(", ");
 
 /** Intent action types that auto-execute a Tier-0 Nova task. A reminder is a
  * task with a follow-up flavor in M1; scheduling arrives with calendar
@@ -82,23 +105,28 @@ export async function buildApp({ env, pool }: BuildAppOptions): Promise<FastifyI
     limits: { fileSize: 15 * 1024 * 1024, files: 1 },
   });
 
-  // M1 model routing. Both providers are optional; the intent chain always
-  // terminates in the deterministic heuristic parser.
-  const intentRouter = new IntentRouter(
-    env.ANTHROPIC_API_KEY
-      ? [
-          new AnthropicIntentParser({
-            apiKey: env.ANTHROPIC_API_KEY,
-            model: env.NOVA_INTENT_MODEL,
-          }),
-        ]
-      : [],
-  );
+  // M2: the capture path stays fast — the API runs ONLY the local heuristic
+  // intent parser synchronously; LLM refinement happens in services/worker.
+  const intentRouter = new IntentRouter([]);
   const transcriptionRouter = new TranscriptionRouter(
     env.OPENAI_API_KEY
       ? [new OpenAITranscriber({ apiKey: env.OPENAI_API_KEY })]
       : [],
   );
+  // Query-time embeddings for the vector search leg (optional).
+  const embedder: EmbeddingProvider | null = env.OPENAI_API_KEY
+    ? new OpenAIEmbedder({ apiKey: env.OPENAI_API_KEY })
+    : null;
+  // Enrichment queue producer (optional): without Redis, moments store with
+  // enrichment_status 'skipped' and everything else keeps working.
+  const enrichmentQueue = env.REDIS_URL
+    ? createEnrichmentQueue(env.REDIS_URL, env.NOVA_ENRICHMENT_QUEUE)
+    : null;
+  if (enrichmentQueue) {
+    app.addHook("onClose", async () => {
+      await enrichmentQueue.close();
+    });
+  }
 
   if (!pool) {
     app.addHook("onClose", async () => {
@@ -165,10 +193,8 @@ export async function buildApp({ env, pool }: BuildAppOptions): Promise<FastifyI
       }
     }
 
-    // M1: parse the instruction into a structured intent before storing.
-    // The router falls back to the local heuristic parser, so this cannot
-    // fail; with an LLM provider configured it adds latency, which moves to
-    // the async enrichment worker in M2.
+    // Synchronous parse is heuristic-only (local, sub-millisecond); the
+    // worker refines it with an LLM asynchronously when configured.
     let intent: ParsedIntent | null = null;
     if (body.intent_text?.trim()) {
       const projectNames = (
@@ -196,8 +222,8 @@ export async function buildApp({ env, pool }: BuildAppOptions): Promise<FastifyI
 
     const { rows } = await db.query<MomentRow>(
       `INSERT INTO context_moments
-         (user_id, project_id, source_mode, source_meta, payload, extracted_text, intent_text, intent_parsed)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         (user_id, project_id, source_mode, source_meta, payload, extracted_text, intent_text, intent_parsed, enrichment_status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING ${MOMENT_COLUMNS}`,
       [
         userId,
@@ -208,9 +234,30 @@ export async function buildApp({ env, pool }: BuildAppOptions): Promise<FastifyI
         body.extracted_text ?? null,
         body.intent_text ?? null,
         intent ? JSON.stringify(intent) : null,
+        enrichmentQueue ? "pending" : "skipped",
       ],
     );
     const moment = rowToMoment(rows[0]!);
+
+    // Enqueue async enrichment. A queue failure must never fail the capture:
+    // downgrade the moment to 'skipped' and move on.
+    let enrichmentJobId: string | null = null;
+    if (enrichmentQueue) {
+      try {
+        const job = await enrichmentQueue.add("enrich", {
+          momentId: moment.id,
+          userId,
+        } satisfies EnrichmentJob);
+        enrichmentJobId = job.id ?? null;
+      } catch (err) {
+        req.log.warn({ err }, "enrichment enqueue failed; marking skipped");
+        await db.query(
+          "UPDATE context_moments SET enrichment_status = 'skipped' WHERE id = $1",
+          [moment.id],
+        );
+        moment.enrichment_status = "skipped";
+      }
+    }
 
     // Override logging (BUILD_PLAN §12): the user linked a project different
     // from the top suggestion — retained as a training signal.
@@ -306,9 +353,9 @@ export async function buildApp({ env, pool }: BuildAppOptions): Promise<FastifyI
       summary: null,
       captured_at: moment.captured_at,
       redaction_state: moment.redaction_state,
-      // Async enrichment (summary, entities, embeddings) arrives in M2 —
-      // reported honestly so clients built now keep working then.
-      enrichment: { status: "skipped", job_id: null },
+      enrichment: enrichmentJobId
+        ? { status: "queued", job_id: enrichmentJobId }
+        : { status: "skipped", job_id: null },
       suggested_projects: moment.project_id ? [] : suggestions,
       links: { self: `/v1/context/moments/${moment.id}` },
       intent,
@@ -381,16 +428,29 @@ export async function buildApp({ env, pool }: BuildAppOptions): Promise<FastifyI
   app.get("/v1/projects", async () => {
     const userId = await devUserId();
     const { rows } = await db.query(
-      `SELECT id, name, description, created_at
-       FROM projects
-       WHERE user_id = $1 AND archived = false
-       ORDER BY created_at ASC`,
+      `SELECT p.id, p.name, p.description, p.created_at,
+              count(DISTINCT m.id)::int AS moment_count,
+              count(DISTINCT t.id)::int AS task_count
+       FROM projects p
+       LEFT JOIN context_moments m ON m.project_id = p.id
+       LEFT JOIN tasks t ON t.project_id = p.id
+       WHERE p.user_id = $1 AND p.archived = false
+       GROUP BY p.id
+       ORDER BY p.created_at ASC`,
       [userId],
     );
     return { items: rows };
   });
 
   registerM1Routes(app, { db, devUserId, intentRouter, transcriptionRouter });
+  registerM2Routes(app, {
+    db,
+    devUserId,
+    embedder,
+    momentColumns: MOMENT_COLUMNS,
+    momentColumnsPrefixed: MOMENT_COLUMNS_PREFIXED,
+    rowToMoment: rowToMoment as (row: never) => ContextMoment,
+  });
 
   return app;
 }

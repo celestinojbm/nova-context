@@ -119,27 +119,28 @@ Full detail in [System Architecture](docs/SYSTEM_ARCHITECTURE.md).
 
 ## Project status
 
-**M1 — voice, intent, projects, tasks.** The full thread now runs:
+**M2 — the full core loop.** Capture → fast storage → asynchronous enrichment → searchable memory → project organization → approved actions:
 
-> Browser extension captures the visible tab → user speaks (push-to-talk → Whisper transcript, editable) or types an instruction → the Intelligence Engine parses it into a structured intent (LLM with deterministic heuristic fallback) → Nova suggests a project (rule-based, user confirms or overrides — overrides logged) → Postgres stores the Context Moment with its intent → a Tier-0 Nova task is auto-created when the intent calls for one → timeline and task list display it all.
+> The extension captures the visible tab with a spoken or typed instruction → the API stores the Context Moment in <300ms (heuristic intent only, no LLM on the capture path) and enqueues enrichment → `services/worker` enriches asynchronously (summary, entities, tags, action candidates, project candidates, priority, embedding — LLM when configured, local heuristics otherwise, with retries and failure logging) → hybrid memory search (Postgres full-text + pgvector) with project/domain/action/priority/status filters → project detail pages → an approval queue where worker-proposed actions execute only on your explicit approval.
 
 What exists today:
 
 - 19 foundation documents (indexed below), internally consistent on vocabulary, architecture, and scope.
 - A locked MVP definition ([MVP Scope](docs/MVP_SCOPE.md)) and a sequenced build plan ([Build Plan](docs/BUILD_PLAN.md)).
-- The monorepo per [Repo Structure](docs/REPO_STRUCTURE.md): `packages/schema` (Zod contracts), `packages/model-router` (provider-agnostic intent parsing + transcription with fallback chains), `services/api` (Fastify + Postgres/pgvector), `apps/extension` (WXT MV3 side panel with push-to-talk), `apps/web` (Next.js timeline + tasks), `infra/` (dev compose stack), plus unit and integration tests.
-- Both model providers are optional: no `OPENAI_API_KEY` → transcription returns 503 and the UI degrades to typed input; no `ANTHROPIC_API_KEY` → intent parsing uses the local heuristic parser.
+- The monorepo per [Repo Structure](docs/REPO_STRUCTURE.md): `packages/schema`, `packages/model-router` (intent, transcription, enrichment, embeddings — all provider-agnostic with fallbacks), `packages/context-engine` (shared ranking + local enrichment), `services/api` (Fastify), `services/worker` (BullMQ enrichment consumer), `apps/extension` (WXT MV3 side panel with push-to-talk), `apps/web` (timeline + search, tasks, projects, approvals), `infra/`, and 100+ tests.
+- Everything degrades gracefully: no Redis → enrichment 'skipped'; no ANTHROPIC key (or `NOVA_CLOUD_ENRICHMENT=off`) → local heuristic enrichment; no OPENAI key → keyword-only search and typed-input-only capture.
 
-Deliberately not built yet (per [Build Plan §14](docs/BUILD_PLAN.md)): Notion/external integrations, async enrichment workers, embeddings, live context mode, real auth. Those are M2–M3.
+Deliberately not built yet: Notion OAuth connect flow (the adapter interface, preview, and approval gating are ready — see `services/api/src/adapters/`), live context mode, mobile, marketplace, real auth. Those are M3+.
 
-### Getting started (M0)
+### Getting started
 
 ```bash
 pnpm install
 pnpm db:up            # Postgres 16 + pgvector, Redis (Docker)
 pnpm db:migrate       # applies schema + seeds the single dev user
-pnpm --filter @nova/api dev     # API on :3001
-pnpm --filter @nova/web dev     # timeline on :3000
+pnpm --filter @nova/api dev      # API on :3001 (set REDIS_URL to enable enrichment)
+pnpm --filter @nova/worker dev   # enrichment worker (reads services/worker/.env)
+pnpm --filter @nova/web dev      # web app on :3000
 pnpm --filter @nova/extension build   # then load apps/extension/.output/chrome-mv3 via chrome://extensions → Load unpacked
 ```
 
