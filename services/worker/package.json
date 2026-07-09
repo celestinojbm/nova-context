@@ -1,0 +1,29 @@
+{
+  "name": "@nova/worker",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run --dir src --passWithNoTests",
+    "test:integration": "vitest run --dir test"
+  },
+  "dependencies": {
+    "@nova/context-engine": "workspace:*",
+    "@nova/model-router": "workspace:*",
+    "@nova/schema": "workspace:*",
+    "bullmq": "^5.34.0",
+    "pg": "^8.13.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.11.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

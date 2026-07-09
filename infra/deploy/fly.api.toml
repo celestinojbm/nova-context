@@ -1,0 +1,32 @@
+# Fly.io config for the Nova API (private alpha).
+#   fly launch --no-deploy -c infra/deploy/fly.api.toml
+#   fly deploy -c infra/deploy/fly.api.toml
+app = "nova-context-api" # change to your app name
+
+[build]
+  dockerfile = "infra/deploy/api.Dockerfile"
+
+[deploy]
+  # Forward-only migrations run before the new version takes traffic.
+  release_command = "node services/api/dist/db/migrate.js"
+
+[env]
+  PORT = "3001"
+  NOVA_REDACTION = "on"
+  NOVA_ANALYTICS = "local"
+# Secrets (set via `fly secrets set KEY=...`): DATABASE_URL, REDIS_URL,
+# NOVA_API_TOKEN (recommended in alpha!), OPENAI_API_KEY, ANTHROPIC_API_KEY.
+
+[http_service]
+  internal_port = 3001
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/healthz"
