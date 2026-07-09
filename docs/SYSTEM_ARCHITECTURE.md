@@ -284,7 +284,7 @@ The migration is bounded by design: producers emit through a thin `packages/even
 - Third parties can never bypass the Action Engine's risk tiers: `action:execute` executes *approved* actions; it does not skip approval.
 - Every grant, key, and scope use is visible in the user-facing audit log (§9).
 
-Details: [SECURITY_AND_PRIVACY.md](./SECURITY_AND_PRIVACY.md) and [API_AND_SDK_SPEC.md](./API_AND_SDK_SPEC.md).
+Details: [SECURITY_PRIVACY_GOVERNANCE.md](./SECURITY_PRIVACY_GOVERNANCE.md) and [API_AND_SDK_SPEC.md](./API_AND_SDK_SPEC.md).
 
 ---
 
@@ -380,5 +380,5 @@ Design rule underneath all of it: **the capture path has no synchronous cloud de
 - [INTELLIGENCE_ENGINE.md](./INTELLIGENCE_ENGINE.md) — model routing, fallbacks, benchmarking
 - [ACTION_ENGINE.md](./ACTION_ENGINE.md) — risk tiers, approval primitive, integrations
 - [API_AND_SDK_SPEC.md](./API_AND_SDK_SPEC.md) — Developer Platform surface
-- [SECURITY_AND_PRIVACY.md](./SECURITY_AND_PRIVACY.md) — full threat model and data handling
+- [SECURITY_PRIVACY_GOVERNANCE.md](./SECURITY_PRIVACY_GOVERNANCE.md) — full threat model and data handling
 - [MVP_SCOPE.md](./MVP_SCOPE.md) / [BUILD_PLAN.md](./BUILD_PLAN.md) — what we're building first and in what order
