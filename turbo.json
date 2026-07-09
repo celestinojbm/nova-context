@@ -10,6 +10,9 @@
     "NOVA_ENRICH_MODEL",
     "NOVA_CLOUD_ENRICHMENT",
     "NOVA_ENRICHMENT_QUEUE",
+    "NOVA_REDACTION",
+    "NOVA_LIVE_QA",
+    "NOVA_LIVE_MODEL",
     "NOVA_API_URL"
   ],
   "tasks": {

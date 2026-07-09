@@ -22,6 +22,15 @@ const envSchema = z.object({
   REDIS_URL: z.string().optional().or(z.literal("").transform(() => undefined)),
   // Queue name override (mainly for test isolation).
   NOVA_ENRICHMENT_QUEUE: z.string().default("moment-enrichment"),
+  // M3: capture-time redaction of obvious sensitive data (emails, phones,
+  // cards, keys, SSNs) BEFORE storage/enrichment/audit. Default on.
+  NOVA_REDACTION: z.enum(["on", "off"]).default("on"),
+  // M3: live Q&A. The ONLY place the API sends captured content to a cloud
+  // model, and only when explicitly enabled: 'auto' = on iff key present,
+  // 'off' = never (endpoint returns 503).
+  ANTHROPIC_API_KEY: z.string().min(10).optional().or(z.literal("").transform(() => undefined)),
+  NOVA_LIVE_QA: z.enum(["auto", "off"]).default("auto"),
+  NOVA_LIVE_MODEL: z.string().optional().or(z.literal("").transform(() => undefined)),
 });
 
 export type Env = z.infer<typeof envSchema>;

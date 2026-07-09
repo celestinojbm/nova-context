@@ -13,7 +13,8 @@
   "dependencies": {
     "@nova/schema": "workspace:*",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "@nova/context-engine": "workspace:*"
   },
   "devDependencies": {
     "@types/chrome": "^0.2.2",

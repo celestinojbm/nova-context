@@ -133,9 +133,12 @@ describe.skipIf(!databaseUrl)("M2: capture queue, search, actions, projects", ()
       const body = res.json();
       expect(body.legs).toEqual({ fts: true, vector: false });
       expect(body.items.length).toBeGreaterThan(0);
-      expect(body.items[0].id).toBe(quantumId);
+      // The database accumulates identical fixtures across local runs, so
+      // assert membership + relevance rather than exact first place.
+      expect(body.items.map((m: { id: string }) => m.id)).toContain(quantumId);
       expect(body.items[0].match).toBe("fts");
       expect(body.items[0].score).toBeGreaterThan(0);
+      expect(body.items[0].extracted_text).toContain("uantum");
       expect(
         body.items.some((m: { source_meta: { url: string } }) =>
           m.source_meta.url.includes("recipes"),

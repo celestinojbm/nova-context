@@ -91,3 +91,53 @@ label {
   font-size: 12px;
   opacity: 0.8;
 }
+
+.live-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.live-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: #dc2626;
+  font-size: 13px;
+}
+.live-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #dc2626;
+  animation: live-pulse 1.2s ease-in-out infinite;
+}
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.qa-log {
+  max-height: 260px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.qa-item {
+  border: 1px solid #8883;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+.qa-q {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.muted-small {
+  font-size: 12px;
+  opacity: 0.65;
+}
+button.danger {
+  border-color: #dc2626;
+  color: #dc2626;
+}

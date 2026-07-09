@@ -6,3 +6,4 @@ export * from "./transcription/openai.js";
 export * from "./transcription/router.js";
 export * from "./embedding/openai.js";
 export * from "./enrichment/anthropic.js";
+export * from "./live/anthropic.js";

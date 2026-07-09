@@ -2,9 +2,21 @@ import type {
   ListContextMomentsResponse,
   MemorySearchResponse,
 } from "@nova/schema";
-import { apiGet, apiPost } from "./lib/api";
+import { revalidatePath } from "next/cache";
+import { API_URL, apiGet, apiPost, authHeaders } from "./lib/api";
 
 export const dynamic = "force-dynamic";
+
+async function deleteMoment(formData: FormData) {
+  "use server";
+  const id = formData.get("id");
+  if (typeof id !== "string") return;
+  await fetch(`${API_URL}/v1/context/moments/${id}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  revalidatePath("/");
+}
 
 export default async function TimelinePage({
   searchParams,
@@ -102,12 +114,19 @@ export default async function TimelinePage({
                     </div>
                   )}
                   <div className="muted">
-                    {new Date(m.captured_at).toLocaleString()} · {m.source_mode}
+                    {new Date(m.captured_at).toLocaleString()} ·{" "}
+                    {m.source_mode === "live_context" ? "live session" : "capture"}
                     {m.match && m.match !== "filter" ? ` · match: ${m.match}` : ""}
                   </div>
                   {m.intent_text && (
                     <p className="moment-intent">“{m.intent_text}”</p>
                   )}
+                  <form action={deleteMoment} className="moment-delete">
+                    <input type="hidden" name="id" value={m.id} />
+                    <button type="submit" title="Delete this moment and everything derived from it">
+                      Delete
+                    </button>
+                  </form>
                 </div>
               </article>
             );

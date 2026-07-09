@@ -1,11 +1,13 @@
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import {
+  AnthropicLiveQa,
   IntentRouter,
   OpenAIEmbedder,
   OpenAITranscriber,
   TranscriptionRouter,
   type EmbeddingProvider,
+  type LiveQaProvider,
 } from "@nova/model-router";
 import {
   createContextMomentRequestSchema,
@@ -22,7 +24,8 @@ import type { Env } from "./env.js";
 import { createEnrichmentQueue, type EnrichmentJob } from "./queue.js";
 import { registerM1Routes } from "./routes-m1.js";
 import { registerM2Routes } from "./routes-m2.js";
-import { suggestProjects } from "@nova/context-engine";
+import { registerM3Routes } from "./routes-m3.js";
+import { redactDeep, suggestProjects, type RedactionType } from "@nova/context-engine";
 
 const DEV_USER_EMAIL = "dev@nova.local";
 
@@ -86,9 +89,11 @@ const TASK_CREATING_ACTIONS = new Set(["create_task", "remind_follow_up"]);
 export interface BuildAppOptions {
   env: Env;
   pool?: pg.Pool;
+  /** Test override for the live Q&A provider (bypasses env wiring). */
+  liveQa?: LiveQaProvider | null;
 }
 
-export async function buildApp({ env, pool }: BuildAppOptions): Promise<FastifyInstance> {
+export async function buildApp({ env, pool, liveQa }: BuildAppOptions): Promise<FastifyInstance> {
   const db = pool ?? new pg.Pool({ connectionString: env.DATABASE_URL, max: 10 });
   const app = Fastify({
     logger: true,
@@ -117,6 +122,16 @@ export async function buildApp({ env, pool }: BuildAppOptions): Promise<FastifyI
   const embedder: EmbeddingProvider | null = env.OPENAI_API_KEY
     ? new OpenAIEmbedder({ apiKey: env.OPENAI_API_KEY })
     : null;
+  // Live Q&A (M3): explicit config gate — the only API path that sends
+  // captured content to a cloud model (docs/SECURITY_PRIVACY_GOVERNANCE.md).
+  const liveQaProvider: LiveQaProvider | null =
+    liveQa !== undefined
+      ? liveQa
+      : env.NOVA_LIVE_QA === "auto" && env.ANTHROPIC_API_KEY
+        ? new AnthropicLiveQa({ apiKey: env.ANTHROPIC_API_KEY, model: env.NOVA_LIVE_MODEL })
+        : null;
+  const redactionOn = env.NOVA_REDACTION === "on";
+
   // Enrichment queue producer (optional): without Redis, moments store with
   // enrichment_status 'skipped' and everything else keeps working.
   const enrichmentQueue = env.REDIS_URL
@@ -193,6 +208,25 @@ export async function buildApp({ env, pool }: BuildAppOptions): Promise<FastifyI
       }
     }
 
+    // M3: capture-time redaction BEFORE anything else touches the content —
+    // intent parsing, suggestions, storage, enrichment, and audit all see
+    // only the redacted form. Screenshots (data: URLs) pass through; visual
+    // redaction is a documented v0 gap.
+    let redactionTally: Map<RedactionType, number> | null = null;
+    if (redactionOn) {
+      redactionTally = new Map();
+      body.extracted_text = body.extracted_text
+        ? redactDeep(body.extracted_text, redactionTally)
+        : body.extracted_text;
+      body.intent_text = body.intent_text
+        ? redactDeep(body.intent_text, redactionTally)
+        : body.intent_text;
+      body.payload = redactDeep(body.payload, redactionTally);
+      if (body.source_meta.title) {
+        body.source_meta.title = redactDeep(body.source_meta.title, redactionTally);
+      }
+    }
+
     // Synchronous parse is heuristic-only (local, sub-millisecond); the
     // worker refines it with an LLM asynchronously when configured.
     let intent: ParsedIntent | null = null;
@@ -222,8 +256,8 @@ export async function buildApp({ env, pool }: BuildAppOptions): Promise<FastifyI
 
     const { rows } = await db.query<MomentRow>(
       `INSERT INTO context_moments
-         (user_id, project_id, source_mode, source_meta, payload, extracted_text, intent_text, intent_parsed, enrichment_status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         (user_id, project_id, source_mode, source_meta, payload, extracted_text, intent_text, intent_parsed, enrichment_status, redaction_state)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING ${MOMENT_COLUMNS}`,
       [
         userId,
@@ -235,6 +269,7 @@ export async function buildApp({ env, pool }: BuildAppOptions): Promise<FastifyI
         body.intent_text ?? null,
         intent ? JSON.stringify(intent) : null,
         enrichmentQueue ? "pending" : "skipped",
+        redactionOn ? "applied" : "skipped",
       ],
     );
     const moment = rowToMoment(rows[0]!);
@@ -343,6 +378,9 @@ export async function buildApp({ env, pool }: BuildAppOptions): Promise<FastifyI
           url_host: safeHost(moment.source_meta),
           intent_action: intent?.action_type ?? null,
           intent_parser: intent?.parser ?? null,
+          redactions: redactionTally
+            ? Object.fromEntries(redactionTally)
+            : null,
         }),
       ],
     );
@@ -449,6 +487,14 @@ export async function buildApp({ env, pool }: BuildAppOptions): Promise<FastifyI
     embedder,
     momentColumns: MOMENT_COLUMNS,
     momentColumnsPrefixed: MOMENT_COLUMNS_PREFIXED,
+    rowToMoment: rowToMoment as (row: never) => ContextMoment,
+  });
+  registerM3Routes(app, {
+    db,
+    devUserId,
+    liveQa: liveQaProvider,
+    redactionOn,
+    momentColumns: MOMENT_COLUMNS,
     rowToMoment: rowToMoment as (row: never) => ContextMoment,
   });
 

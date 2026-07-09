@@ -53,7 +53,7 @@ describe.skipIf(!databaseUrl)("ingestion path (integration)", () => {
     const body = res.json();
     expect(body.id).toMatch(/^[0-9a-f-]{36}$/);
     expect(body.project_id).toBeNull();
-    expect(body.redaction_state).toBe("pending");
+    expect(body.redaction_state).toBe("applied"); // M3: capture-time redaction runs by default
     expect(body.enrichment.status).toBe("skipped");
     expect(body.links.self).toBe(`/v1/context/moments/${body.id}`);
   });

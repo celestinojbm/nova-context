@@ -47,6 +47,19 @@ export const capturePayloadSchema = z
       .regex(/^data:image\/(jpeg|png|webp);base64,/)
       .max(1_500_000)
       .optional(),
+    // M3: metadata of the live session a moment was saved from (validated
+    // fully by liveSessionMetaSchema in live.ts; loose here to avoid a cycle).
+    live_session: z
+      .object({
+        started_at: z.string(),
+        saved_at: z.string(),
+        duration_ms: z.number().int().min(0),
+        frame_count: z.number().int().min(0),
+        qa: z.array(
+          z.object({ question: z.string(), answer: z.string(), at: z.string() }),
+        ),
+      })
+      .optional(),
   })
   .passthrough();
 export type CapturePayload = z.infer<typeof capturePayloadSchema>;

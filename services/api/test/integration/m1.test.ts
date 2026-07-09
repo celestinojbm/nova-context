@@ -129,7 +129,7 @@ describe.skipIf(!databaseUrl)("M1: intent, tasks, suggestions (integration)", ()
     ).json();
     expect(created.intent).toBeNull();
     expect(created.task).toBeNull();
-    expect(created.redaction_state).toBe("pending");
+    expect(created.redaction_state).toBe("applied"); // M3: redaction on by default
   });
 
   it("suggests a project from the intent's project hint", async () => {

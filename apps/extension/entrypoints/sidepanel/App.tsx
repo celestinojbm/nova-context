@@ -15,12 +15,13 @@ import {
   toCreateMomentRequest,
   type CaptureDraft,
 } from "../../utils/capture.js";
+import { LivePanel } from "./LivePanel.js";
 import { PushToTalkRecorder } from "../../utils/voice.js";
 
 // M1 side-panel state machine (docs/BUILD_PLAN.md §6):
 // idle → capturing → confirm-card ↔ listening → (submit) → idle.
 // Live mode arrives in M3.
-type PanelState = "idle" | "capturing" | "confirm" | "submitting";
+type PanelState = "idle" | "capturing" | "confirm" | "submitting" | "live";
 
 export function App() {
   const [state, setState] = useState<PanelState>("idle");
@@ -151,8 +152,27 @@ export function App() {
           <button className="primary" onClick={() => void onCapture()}>
             Capture this page
           </button>
+          <button
+            onClick={() => {
+              setError(null);
+              setSuccess(null);
+              setState("live");
+            }}
+          >
+            ● Start live session
+          </button>
           {success && <div className="success">{success}</div>}
         </>
+      )}
+
+      {state === "live" && settings && (
+        <LivePanel
+          settings={settings}
+          onExit={(message) => {
+            setSuccess(message);
+            setState("idle");
+          }}
+        />
       )}
 
       {state === "capturing" && <div>Capturing the visible tab…</div>}

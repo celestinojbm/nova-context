@@ -119,18 +119,17 @@ Full detail in [System Architecture](docs/SYSTEM_ARCHITECTURE.md).
 
 ## Project status
 
-**M2 — the full core loop.** Capture → fast storage → asynchronous enrichment → searchable memory → project organization → approved actions:
+**M3 — Live Context Mode.** Both product modes from the original vision now run:
 
-> The extension captures the visible tab with a spoken or typed instruction → the API stores the Context Moment in <300ms (heuristic intent only, no LLM on the capture path) and enqueues enrichment → `services/worker` enriches asynchronously (summary, entities, tags, action candidates, project candidates, priority, embedding — LLM when configured, local heuristics otherwise, with retries and failure logging) → hybrid memory search (Postgres full-text + pgvector) with project/domain/action/priority/status filters → project detail pages → an approval queue where worker-proposed actions execute only on your explicit approval.
+> **Instant Capture**: capture the visible tab with a spoken/typed instruction -> capture-time redaction (emails, phones, cards, keys, SSNs — before storage, enrichment, audit, or any cloud call) -> fast storage -> async enrichment -> hybrid search -> projects -> approved actions.
+>
+> **Live Context (v0)**: start an explicit, visibly-indicated live session in the extension (30-min hard cap) -> frame sampling + text snapshots into an in-memory ring buffer with strict size/time budgets -> ask questions answered ONLY from the buffer (grounded, insufficient-context honesty, captured content treated as data never instructions) -> say "save this" to turn the current segment into a normal Context Moment -> end the session and the buffer is destroyed.
 
-What exists today:
+Plus user data controls: full JSON export and per-moment deletion (cascading tasks/actions/embeddings, audited without content).
 
-- 19 foundation documents (indexed below), internally consistent on vocabulary, architecture, and scope.
-- A locked MVP definition ([MVP Scope](docs/MVP_SCOPE.md)) and a sequenced build plan ([Build Plan](docs/BUILD_PLAN.md)).
-- The monorepo per [Repo Structure](docs/REPO_STRUCTURE.md): `packages/schema`, `packages/model-router` (intent, transcription, enrichment, embeddings — all provider-agnostic with fallbacks), `packages/context-engine` (shared ranking + local enrichment), `services/api` (Fastify), `services/worker` (BullMQ enrichment consumer), `apps/extension` (WXT MV3 side panel with push-to-talk), `apps/web` (timeline + search, tasks, projects, approvals), `infra/`, and 100+ tests.
-- Everything degrades gracefully: no Redis → enrichment 'skipped'; no ANTHROPIC key (or `NOVA_CLOUD_ENRICHMENT=off`) → local heuristic enrichment; no OPENAI key → keyword-only search and typed-input-only capture.
+Everything degrades gracefully and every cloud call is explicitly configured: `NOVA_LIVE_QA`, `NOVA_CLOUD_ENRICHMENT`, `NOVA_REDACTION`, provider keys — all documented in `.env.example` files.
 
-Deliberately not built yet: Notion OAuth connect flow (the adapter interface, preview, and approval gating are ready — see `services/api/src/adapters/`), live context mode, mobile, marketplace, real auth. Those are M3+.
+Deliberately not built yet: Notion OAuth connect (adapter remains prepared and gated), mobile, marketplace, real auth, audio in live sessions. Those are M4+.
 
 ### Getting started
 
