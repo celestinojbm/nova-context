@@ -31,9 +31,16 @@ export interface AdapterResult {
 export interface ActionAdapter {
   readonly actionType: string;
   readonly riskTier: 0 | 1 | 2;
+  /** M6: external adapters do NOT execute inline on approval — the approve
+   * endpoint enqueues a job for services/worker instead. */
+  readonly external: boolean;
+  /** Integration provider required for execution (e.g. 'notion'). */
+  readonly provider?: string;
   /** Human-readable preview shown on the approval card. */
   preview(action: ActionInput): { title: string; description: string };
-  /** Execute the approved action. Throwing marks the action 'failed'. */
+  /** Execute the approved action. Throwing marks the action 'failed'.
+   * Only called inline for internal adapters; external ones run in the
+   * worker's action consumer. */
   execute(ctx: AdapterContext, action: ActionInput): Promise<AdapterResult>;
 }
 

@@ -12,6 +12,7 @@ export const actionStatusSchema = z.enum([
   "proposed",
   "awaiting_approval",
   "approved",
+  "queued", // M6: approved external action waiting for the execution worker
   "executing",
   "done",
   "failed",

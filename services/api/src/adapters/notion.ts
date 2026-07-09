@@ -12,19 +12,19 @@ const payloadSchema = z.object({
 });
 
 /**
- * Tier-1 external adapter: create a Notion page — PREPARED, NOT CONNECTED.
+ * Tier-1 external adapter: create a Notion page (connected in M6).
  *
- * The interface, preview card, approval gating, and result/audit plumbing
- * are complete; execute() requires an active 'notion' row in
- * integration_connections, and the OAuth connect flow that would create one
- * is deliberately not built in M2 (it needs a registered Notion OAuth app:
- * client id/secret + redirect through the web app, plus token encryption at
- * rest). Until then, approving a notion_page action fails cleanly with
- * 'notion_not_connected' rather than pretending. Full connect flow: M3.
+ * Approval-side metadata only. On approve, routes-m2 verifies an active
+ * per-user Notion connection and enqueues an action-execution job; the
+ * provider call itself happens in services/worker (see its notion client),
+ * using the user's token decrypted from integration_connections. The rich
+ * pre-approval preview lives at GET /v1/actions/:id/preview.
  */
 export class NotionAdapter implements ActionAdapter {
   readonly actionType = "notion_page";
   readonly riskTier = 1 as const;
+  readonly external = true;
+  readonly provider = "notion";
 
   preview(action: ActionInput) {
     const parsed = payloadSchema.safeParse(action.payload);
@@ -35,26 +35,13 @@ export class NotionAdapter implements ActionAdapter {
     };
   }
 
-  async execute(ctx: AdapterContext, action: ActionInput): Promise<AdapterResult> {
-    payloadSchema.parse(action.payload);
-    const { rows } = await ctx.db.query(
-      `SELECT id FROM integration_connections
-       WHERE user_id = $1 AND provider = 'notion' AND status = 'active'`,
-      [ctx.userId],
-    );
-    if (!rows.length) {
-      return {
-        ok: false,
-        result: {
-          error: "notion_not_connected",
-          message: "Connect Notion in settings first (OAuth connect flow lands in M3).",
-        },
-      };
-    }
-    // Unreachable in M2: no connect flow can create an active connection yet.
+  async execute(_ctx: AdapterContext, _action: ActionInput): Promise<AdapterResult> {
+    // M6: external adapters never execute inline — the approve endpoint
+    // enqueues a job and services/worker performs the provider call with
+    // the user's decrypted connection. Defensive guard, not a code path.
     return {
       ok: false,
-      result: { error: "notion_execution_not_implemented" },
+      result: { error: "external_adapter_executes_in_worker" },
     };
   }
 }

@@ -22,9 +22,11 @@ import pg from "pg";
 import { z } from "zod";
 import type { Env } from "./env.js";
 import { Analytics } from "./analytics.js";
-import { createEnrichmentQueue, type EnrichmentJob } from "./queue.js";
+import { createActionQueue, createEnrichmentQueue, type EnrichmentJob } from "./queue.js";
 import { registerAuth, requireAuth } from "./auth/plugin.js";
+import { HttpNotionOAuthClient, type NotionOAuthClient } from "./integrations/notion-oauth.js";
 import { registerAuthRoutes } from "./routes-auth.js";
+import { registerIntegrationRoutes } from "./routes-integrations.js";
 import { registerM1Routes } from "./routes-m1.js";
 import { registerM2Routes } from "./routes-m2.js";
 import { registerM3Routes } from "./routes-m3.js";
@@ -93,9 +95,16 @@ export interface BuildAppOptions {
   pool?: pg.Pool;
   /** Test override for the live Q&A provider (bypasses env wiring). */
   liveQa?: LiveQaProvider | null;
+  /** Test override for the Notion OAuth client (bypasses env wiring). */
+  notionOauth?: NotionOAuthClient | null;
 }
 
-export async function buildApp({ env, pool, liveQa }: BuildAppOptions): Promise<FastifyInstance> {
+export async function buildApp({
+  env,
+  pool,
+  liveQa,
+  notionOauth,
+}: BuildAppOptions): Promise<FastifyInstance> {
   const db = pool ?? new pg.Pool({ connectionString: env.DATABASE_URL, max: 10 });
   const app = Fastify({
     logger: true,
@@ -146,6 +155,28 @@ export async function buildApp({ env, pool, liveQa }: BuildAppOptions): Promise<
       await enrichmentQueue.close();
     });
   }
+  // M6: approved external actions execute via this queue in services/worker.
+  // Without Redis, approving an external action returns 503 (fail closed).
+  const actionQueue = env.REDIS_URL
+    ? createActionQueue(env.REDIS_URL, env.NOVA_ACTION_QUEUE)
+    : null;
+  if (actionQueue) {
+    app.addHook("onClose", async () => {
+      await actionQueue.close();
+    });
+  }
+  // M6: Notion OAuth — enabled only when the app is registered AND the
+  // token-encryption key exists; otherwise the routes answer 503.
+  const notionOauthClient: NotionOAuthClient | null =
+    notionOauth !== undefined
+      ? notionOauth
+      : env.NOTION_CLIENT_ID && env.NOTION_CLIENT_SECRET && env.NOTION_REDIRECT_URI
+        ? new HttpNotionOAuthClient({
+            clientId: env.NOTION_CLIENT_ID,
+            clientSecret: env.NOTION_CLIENT_SECRET,
+            redirectUri: env.NOTION_REDIRECT_URI,
+          })
+        : null;
 
   if (!pool) {
     app.addHook("onClose", async () => {
@@ -157,6 +188,7 @@ export async function buildApp({ env, pool, liveQa }: BuildAppOptions): Promise<
   // the auth routes themselves carry the small public allowlist.
   registerAuth(app, db);
   registerAuthRoutes(app, { db, env });
+  registerIntegrationRoutes(app, { db, env, notionOauth: notionOauthClient });
 
   app.get("/healthz", async () => {
     await db.query("SELECT 1");
@@ -484,6 +516,7 @@ export async function buildApp({ env, pool, liveQa }: BuildAppOptions): Promise<
     momentColumnsPrefixed: MOMENT_COLUMNS_PREFIXED,
     rowToMoment: rowToMoment as (row: never) => ContextMoment,
     analytics,
+    actionQueue,
   });
   registerM3Routes(app, {
     db,

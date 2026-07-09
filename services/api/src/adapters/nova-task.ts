@@ -16,6 +16,7 @@ const payloadSchema = z.object({
 export class NovaTaskAdapter implements ActionAdapter {
   readonly actionType = "nova_task";
   readonly riskTier = 0 as const;
+  readonly external = false;
 
   preview(action: ActionInput) {
     const parsed = payloadSchema.safeParse(action.payload);

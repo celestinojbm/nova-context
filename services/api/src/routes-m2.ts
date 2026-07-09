@@ -15,6 +15,8 @@ import { AdapterRegistry } from "./adapters/types.js";
 import { NovaTaskAdapter } from "./adapters/nova-task.js";
 import { NotionAdapter } from "./adapters/notion.js";
 import type { Analytics } from "./analytics.js";
+import type { Queue } from "bullmq";
+import type { ActionJob } from "./queue.js";
 
 export interface M2RouteDeps {
   db: pg.Pool;
@@ -23,6 +25,8 @@ export interface M2RouteDeps {
   momentColumnsPrefixed: string;
   rowToMoment: (row: never) => ContextMoment;
   analytics: Analytics;
+  /** M6: external actions enqueue here on approval; null = no Redis. */
+  actionQueue: Queue<ActionJob> | null;
 }
 
 export function buildAdapterRegistry(): AdapterRegistry {
@@ -33,7 +37,7 @@ export function buildAdapterRegistry(): AdapterRegistry {
 }
 
 export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void {
-  const { db, embedder, momentColumns, momentColumnsPrefixed, analytics } = deps;
+  const { db, embedder, momentColumns, momentColumnsPrefixed, analytics, actionQueue } = deps;
   const rowToMoment = deps.rowToMoment as (row: unknown) => ContextMoment;
   const registry = buildAdapterRegistry();
 
@@ -223,14 +227,94 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
   });
 
   /**
-   * Approve → execute. Only 'proposed' actions can be approved; execution
-   * runs through the adapter registry and the outcome (done/failed) plus the
-   * adapter result land on the action row. Every transition is audited.
+   * Approve. Only 'proposed' actions can be approved. Internal adapters
+   * (nova_task) still execute inline — fast, reversible, no provider call.
+   * External adapters (M6) are QUEUED for services/worker instead: the
+   * claim is atomic (double approval loses), the job id equals the action
+   * id (duplicate enqueue collapses), and every transition is audited.
    */
   app.post("/v1/actions/:id/approve", async (req, reply) => {
     const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
     if (!params.success) return reply.code(404).send({ error: "not_found" });
     const userId = requireAuth(req).userId;
+
+    const existing = await db.query(
+      "SELECT id, action_type, status FROM actions WHERE id = $1 AND user_id = $2",
+      [params.data.id, userId],
+    );
+    if (!existing.rows.length) return reply.code(404).send({ error: "not_found" });
+    const adapterForType = registry.get(existing.rows[0].action_type);
+
+    if (adapterForType?.external) {
+      // Fail BEFORE any state change: no connection or no queue means the
+      // action stays 'proposed' and the UI can explain what's missing.
+      if (adapterForType.provider) {
+        const conn = await db.query(
+          `SELECT 1 FROM integration_connections
+           WHERE user_id = $1 AND provider = $2 AND status = 'active'`,
+          [userId, adapterForType.provider],
+        );
+        if (!conn.rows.length) {
+          return reply.code(409).send({
+            error: `${adapterForType.provider}_not_connected`,
+            message: `Connect ${adapterForType.provider} in Settings before approving this action.`,
+          });
+        }
+      }
+      if (!actionQueue) {
+        return reply.code(503).send({
+          error: "action_queue_unavailable",
+          message: "External actions need the execution queue (set REDIS_URL on the API).",
+        });
+      }
+
+      const claim = await db.query(
+        `UPDATE actions
+         SET status = 'queued', approved_by = $1, approved_at = now(), updated_at = now()
+         WHERE id = $2 AND user_id = $1 AND status = 'proposed'
+         RETURNING id, action_type`,
+        [userId, params.data.id],
+      );
+      const queuedAction = claim.rows[0];
+      if (!queuedAction) {
+        const now = await db.query(
+          "SELECT status FROM actions WHERE id = $1 AND user_id = $2",
+          [params.data.id, userId],
+        );
+        return reply.code(409).send({
+          error: "invalid_state",
+          status: now.rows[0]?.status,
+          message: "Only proposed actions can be approved.",
+        });
+      }
+      await db.query(
+        `INSERT INTO audit_log (user_id, event_type, subject_kind, subject_id, detail)
+         VALUES ($1, 'action.approve', 'action', $2, $3),
+                ($1, 'action.queued', 'action', $2, $3)`,
+        [userId, queuedAction.id, JSON.stringify({ action_type: queuedAction.action_type })],
+      );
+      try {
+        await actionQueue.add(
+          "execute",
+          { actionId: queuedAction.id, userId } satisfies ActionJob,
+          { jobId: queuedAction.id },
+        );
+      } catch (err) {
+        // Enqueue failed: revert so the approval can be retried cleanly.
+        req.log.error({ err }, "action enqueue failed; reverting to proposed");
+        await db.query(
+          `UPDATE actions SET status = 'proposed', approved_by = NULL, approved_at = NULL,
+             updated_at = now() WHERE id = $1`,
+          [queuedAction.id],
+        );
+        return reply.code(503).send({ error: "action_queue_unavailable" });
+      }
+      analytics.track(userId, "action_approved", {
+        action_type: queuedAction.action_type,
+        outcome: "queued",
+      });
+      return { id: queuedAction.id, status: "queued" };
+    }
 
     // Claim atomically: proposed → executing (prevents double-approval).
     const claim = await db.query(

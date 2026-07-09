@@ -338,3 +338,15 @@ h3 { margin: 26px 0 10px; }
   color: inherit;
   cursor: pointer;
 }
+
+/* --- M6 notion preview ---------------------------------------------------- */
+.notion-preview {
+  border: 1px solid #8883;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 8px 0;
+}
+.notion-preview details {
+  margin-top: 6px;
+  font-size: 13px;
+}

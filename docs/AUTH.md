@@ -127,6 +127,9 @@ run `pnpm --filter @nova/api db:seed-dev` (sets a password for
 | `NOVA_EXTENSION_SESSION_TTL_HOURS` | api | 720 | Extension session lifetime |
 | `NODE_ENV` | api, web | — | `production` switches signup default to invite-only and marks the web cookie `Secure` |
 | `NOVA_DEV_PASSWORD` | api (script) | `nova-dev-password` | Password set by `db:seed-dev` |
+| `NOVA_ENCRYPTION_KEY` | api, worker | unset | 32-byte key (hex/base64) for integration tokens at rest; required for Notion; fail-closed |
+| `NOTION_CLIENT_ID` / `NOTION_CLIENT_SECRET` / `NOTION_REDIRECT_URI` | api | unset | Notion OAuth app; redirect URI = web app `/integrations/notion/callback` |
+| `NOVA_ACTION_QUEUE` | api, worker | `action-execution` | Queue carrying approved external actions |
 | ~~`NOVA_API_TOKEN`~~ | — | **removed** | The M0 shared token is gone from API, web, and extension |
 
 Development vs production, concretely: dev = open signup, non-Secure
@@ -141,27 +144,58 @@ New payload-free audit events: `auth.signup`, `auth.login`, `auth.logout`,
 `auth.session.revoke`, `auth.extension.paired`. Tokens, codes, and password
 material never appear in the audit log (asserted in the auth suite).
 
-## Notion OAuth — design notes only (deliberately not built)
+## Notion integration (M6 — implemented)
 
-Per the M5 scope, external writes stay gated. When M6 activates the
-prepared `NotionAdapter`:
+Notion is the first Tier-1 external adapter, executed only through
+approved, auditable, per-user jobs.
 
-1. **Connect flow**: web Settings → "Connect Notion" → standard OAuth
-   authorization-code flow against `api.notion.com/v1/oauth/authorize`,
-   redirect URI on the **web app** (`/integrations/notion/callback`), which
-   forwards the code to the API. PKCE isn't supported by Notion's
-   integration OAuth today; the client secret lives only in the API env.
-2. **Storage**: exchange the code server-side; encrypt the access token
-   with a KMS/`NOVA_KMS_KEY`-derived key into the existing
-   `integration_connections.token_ciphertext` (schema already has
-   provider/scopes/status and `UNIQUE (user_id, provider)`).
-3. **Isolation**: connections are per-user rows; the adapter must load the
-   connection by the *authenticated* user id at execute time — never a
-   global token.
-4. **Execution**: keep preview → approve → execute → audit exactly as the
-   adapter interface already defines; `integration.call` audit events with
-   metadata only. Disconnect = revoke via Notion API + status `revoked`.
-5. **Failure modes to design for**: token expiry/rotation, workspace
-   permission changes mid-flight, and rate limits — execution should move
-   to a worker job (approvals currently execute inline; fine for
-   `nova_task`, not for network calls to Notion).
+**Connect flow.** Web Settings → "Connect Notion" → the API mints a
+single-use `state` (random 256-bit, stored as SHA-256, bound to the
+initiating user, 10-minute TTL) and returns Notion's authorize URL; the
+browser is redirected there. Notion redirects to the WEB APP callback
+(`/integrations/notion/callback`), which relays `code`+`state` to the API.
+The API claims the state atomically (unknown / expired / replayed /
+another user's state → 400), exchanges the code (client secret never
+leaves the API), and upserts the connection. PKCE is not offered by
+Notion's integration OAuth; the single-use user-bound state is the CSRF
+defense. Only `web`-kind sessions can start or complete the flow — the
+extension has no OAuth surface at all.
+
+**Token encryption.** `NOVA_ENCRYPTION_KEY` (32 bytes) drives AES-256-GCM
+(`@nova/context-engine/secret-box`, layout `[ver][iv][tag][ct]`, random
+nonce per encryption, tamper-detecting). Tokens exist ONLY as ciphertext
+in `integration_connections.token_ciphertext`. Missing key ⇒ integration
+endpoints answer 503 and worker execution fails closed; in production,
+`NOTION_CLIENT_ID` without the key refuses to boot. Disconnect revokes the
+row AND overwrites the ciphertext with an empty value.
+
+**Job-based execution.** Approving an external action no longer executes
+inline. The approve endpoint verifies an active per-user connection
+(otherwise 409 `notion_not_connected` and the action stays `proposed`),
+atomically transitions `proposed → queued`, audits
+`action.approve`+`action.queued`, and enqueues a BullMQ job whose id IS
+the action id (duplicate enqueue collapses). The worker claims
+`queued → executing` (audited), loads the OWNER's connection, decrypts,
+composes the page with the same builder the preview used, creates it, and
+completes `executing → done` storing the external page id in the same
+statement (audited as `action.execute` with `external_id`). Transient
+provider errors (429/5xx/network) retry up to 3 times with backoff; a
+stored external id short-circuits any retry/redelivery so no duplicate
+pages are created. Terminal problems (no/revoked connection, undecryptable
+token, provider 4xx, no shared page) mark the action `failed` (audited)
+and stop retrying. `nova_task` (internal, Tier-0) still executes inline.
+
+**Preview.** `GET /v1/actions/:id/preview` returns the destination
+workspace, source URL/host, linked moment, the user's instruction, tags,
+and the EXACT sections the worker will write — the approval card renders
+this, and the user must explicitly approve. Captured content remains data:
+page content is quoted, never interpreted, and screenshots are never
+uploaded.
+
+**Known limitations (documented, not hidden).** The page lands under the
+most recently edited page the user shared with the integration (no
+destination picker yet). If the worker crashes in the window between the
+Notion create call and the DB write, a retry could produce a duplicate
+page (Notion has no idempotency keys); the window is one statement wide.
+Notion tokens don't expire but can be revoked workspace-side — that
+surfaces as a terminal 4xx failure on the next execution.

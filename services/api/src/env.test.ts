@@ -25,6 +25,19 @@ describe("loadEnv", () => {
     ).toBe("invite");
   });
 
+  it("fails closed in production when Notion is configured without an encryption key", () => {
+    expect(() =>
+      loadEnv({ NODE_ENV: "production", NOTION_CLIENT_ID: "notion-client-1" }),
+    ).toThrow(/NOVA_ENCRYPTION_KEY/);
+    // With a key it boots.
+    const env = loadEnv({
+      NODE_ENV: "production",
+      NOTION_CLIENT_ID: "notion-client-1",
+      NOVA_ENCRYPTION_KEY: "a".repeat(64),
+    });
+    expect(env.NOTION_CLIENT_ID).toBe("notion-client-1");
+  });
+
   it("rejects invite mode without a code in development", () => {
     expect(() => loadEnv({ NOVA_SIGNUP: "invite" })).toThrow(
       /NOVA_ALPHA_INVITE_CODE/,

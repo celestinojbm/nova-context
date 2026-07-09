@@ -301,17 +301,14 @@ describe.skipIf(!databaseUrl)("M2: capture queue, search, actions, projects", ()
       expect(approve.statusCode).toBe(409);
     });
 
-    it("notion_page approval fails cleanly while Notion is not connected", async () => {
+    it("notion_page approval fails cleanly while Notion is not connected (M6: 409, stays proposed)", async () => {
       const id = await proposeAction("notion_page", { title: "Whitepaper notes" });
       const res = await inject({ method: "POST", url: `/v1/actions/${id}/approve` });
-      expect(res.statusCode).toBe(200);
-      expect(res.json().status).toBe("failed");
-      expect(res.json().result.error).toBe("notion_not_connected");
-      const audit = await db.query(
-        `SELECT 1 FROM audit_log WHERE subject_id = $1 AND event_type = 'action.execute.failed'`,
-        [id],
-      );
-      expect(audit.rows).toHaveLength(1);
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe("notion_not_connected");
+      // Nothing changed: the user can connect Notion and approve later.
+      const status = await db.query("SELECT status FROM actions WHERE id = $1", [id]);
+      expect(status.rows[0].status).toBe("proposed");
     });
 
     it("404s on foreign/unknown action ids", async () => {
