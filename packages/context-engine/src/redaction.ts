@@ -77,6 +77,32 @@ const DETECTORS: Detector[] = [
   },
 ];
 
+export interface SensitiveRange {
+  start: number;
+  end: number;
+  type: RedactionType;
+}
+
+/** Character ranges the detectors would redact — used by visual redaction
+ * (M7) to map OCR line text back onto word bounding boxes. Same detectors,
+ * same precision guarantees as redactText. */
+export function findSensitiveRanges(text: string): SensitiveRange[] {
+  const ranges: SensitiveRange[] = [];
+  for (const detector of DETECTORS) {
+    const pattern = new RegExp(detector.pattern.source, detector.pattern.flags);
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(text)) !== null) {
+      if (match[0].length === 0) {
+        pattern.lastIndex += 1;
+        continue;
+      }
+      if (detector.validate && !detector.validate(match[0])) continue;
+      ranges.push({ start: match.index, end: match.index + match[0].length, type: detector.type });
+    }
+  }
+  return ranges;
+}
+
 export function redactText(input: string): RedactionResult {
   let text = input;
   const counts = new Map<RedactionType, number>();

@@ -370,10 +370,21 @@ export function App() {
               ))}
             </select>
             <div className="disclosure">
-              Text redaction never covers pixels inside screenshots or live
-              frames. Use “Blur” or “Text only” if your screen may show
-              sensitive content.
+              Screenshots are OCR-scanned server-side and sensitive regions
+              (emails, cards, keys, codes…) are masked before storage. Use
+              “Blur” or “Text only” for extra caution.
             </div>
+            <label className="row">
+              <input
+                type="checkbox"
+                checked={settings.strictRedaction}
+                onChange={(e) =>
+                  void onSettingsChange({ ...settings, strictRedaction: e.target.checked })
+                }
+              />
+              Strict image redaction — if masking fails, don&apos;t store the
+              screenshot at all
+            </label>
             <button
               onClick={() => {
                 trackEvent(settings, "consent_reset");

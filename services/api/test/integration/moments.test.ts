@@ -19,7 +19,8 @@ describe.skipIf(!databaseUrl)("ingestion path (integration)", () => {
 
   beforeAll(async () => {
     await migrate(databaseUrl!);
-    app = await buildApp({ env: loadEnv({ DATABASE_URL: databaseUrl }) });
+    app = await buildApp({
+      ocr: null, env: loadEnv({ DATABASE_URL: databaseUrl }) });
     await app.ready();
     const dev = await loginAsDevUser(app, databaseUrl!);
     inject = dev.inject;

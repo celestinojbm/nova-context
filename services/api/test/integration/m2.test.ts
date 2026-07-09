@@ -28,9 +28,11 @@ describe.skipIf(!databaseUrl)("M2: capture queue, search, actions, projects", ()
   beforeAll(async () => {
     await migrate(databaseUrl!);
     app = await buildApp({
+      ocr: null,
       env: loadEnv({
         DATABASE_URL: databaseUrl,
-        ...(redisUrl ? { REDIS_URL: redisUrl, NOVA_ENRICHMENT_QUEUE: QUEUE } : {}),
+        ...(redisUrl ? { REDIS_URL: redisUrl,
+        NOVA_RATE_LIMIT_PREFIX: `test-rl-${Date.now()}`, NOVA_ENRICHMENT_QUEUE: QUEUE } : {}),
       }),
     });
     await app.ready();

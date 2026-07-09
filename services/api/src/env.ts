@@ -47,6 +47,20 @@ const envSchema = z.object({
   // M3: capture-time redaction of obvious sensitive data (emails, phones,
   // cards, keys, SSNs) BEFORE storage/enrichment/audit. Default on.
   NOVA_REDACTION: z.enum(["on", "off"]).default("on"),
+  // M7: OCR-box masking of screenshots/frames BEFORE storage, live Q&A,
+  // export, or adapter use. Default on (Tesseract, on-process).
+  NOVA_IMAGE_REDACTION: z.enum(["on", "off"]).default("on"),
+  // M7: server-side screenshot kill switch — 'off' strips every image
+  // payload before storage regardless of client settings.
+  NOVA_SCREENSHOT_STORAGE: z.enum(["on", "off"]).default("on"),
+  // M7: Tesseract language-data location (vendor for air-gapped deploys);
+  // unset = tesseract.js default CDN. Per-image OCR time budget.
+  NOVA_OCR_LANG_PATH: z.string().optional().or(z.literal("").transform(() => undefined)),
+  NOVA_OCR_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
+  // M7: credential-surface rate limit (attempts per 15-minute window per IP)
+  // and the Redis key namespace (override mainly for test isolation).
+  NOVA_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
+  NOVA_RATE_LIMIT_PREFIX: z.string().default("nova:ratelimit"),
   // M3: live Q&A. The ONLY place the API sends captured content to a cloud
   // model, and only when explicitly enabled: 'auto' = on iff key present,
   // 'off' = never (endpoint returns 503).
@@ -80,6 +94,16 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
       "Invalid environment configuration: NOTION_CLIENT_ID is set in production without NOVA_ENCRYPTION_KEY",
     );
   }
+  if (
+    isProduction &&
+    parsed.data.NOTION_REDIRECT_URI &&
+    !parsed.data.NOTION_REDIRECT_URI.startsWith("https://")
+  ) {
+    // OAuth codes must never transit plaintext HTTP in production.
+    throw new Error(
+      "Invalid environment configuration: NOTION_REDIRECT_URI must be https:// in production",
+    );
+  }
   if (signupMode === "invite" && !parsed.data.NOVA_ALPHA_INVITE_CODE && !isProduction) {
     // In dev, invite mode without a code is a config mistake worth naming.
     // In production it fails closed instead (no code ever matches).
@@ -88,4 +112,21 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     );
   }
   return { ...parsed.data, isProduction, signupMode };
+}
+
+/** One-line security posture, logged at boot so a misconfigured production
+ * deploy is visible in the first screen of logs. */
+export function securitySummary(env: Env): string {
+  return [
+    `mode=${env.isProduction ? "production" : "development"}`,
+    `signup=${env.signupMode}`,
+    `redaction=${env.NOVA_REDACTION}`,
+    `image_redaction=${env.NOVA_IMAGE_REDACTION}`,
+    `screenshot_storage=${env.NOVA_SCREENSHOT_STORAGE}`,
+    `token_encryption=${env.NOVA_ENCRYPTION_KEY ? "on" : "OFF"}`,
+    `rate_limit=${env.REDIS_URL ? "redis" : "in-memory"}`,
+    `notion=${env.NOTION_CLIENT_ID ? "configured" : "off"}`,
+    `live_qa=${env.NOVA_LIVE_QA}`,
+    `analytics=${env.NOVA_ANALYTICS}`,
+  ].join(" ");
 }

@@ -73,9 +73,11 @@ describe.skipIf(!databaseUrl || !redisUrl)("M6: Notion OAuth + queued actions", 
     await migrate(databaseUrl!);
     oauth = fakeOauth();
     app = await buildApp({
+      ocr: null,
       env: loadEnv({
         DATABASE_URL: databaseUrl,
         REDIS_URL: redisUrl,
+        NOVA_RATE_LIMIT_PREFIX: `test-rl-${Date.now()}`,
         NOVA_ENCRYPTION_KEY: ENCRYPTION_KEY_HEX,
         NOVA_ACTION_QUEUE: QUEUE_NAME,
       }),
@@ -119,6 +121,7 @@ describe.skipIf(!databaseUrl || !redisUrl)("M6: Notion OAuth + queued actions", 
 
   it("rejects the OAuth surface without configuration (fail closed)", async () => {
     const bare = await buildApp({
+      ocr: null,
       env: loadEnv({ DATABASE_URL: databaseUrl }),
     });
     await bare.ready();
@@ -272,6 +275,7 @@ describe.skipIf(!databaseUrl || !redisUrl)("M6: Notion OAuth + queued actions", 
       connected: true,
       provider: "notion",
       workspace: "Test Workspace",
+      destination: null, // M7: no default saved in this suite
     });
     expect(preview.title).toBe("Save paper to Notion");
     expect(preview.source_host).toBe("research.example.com");

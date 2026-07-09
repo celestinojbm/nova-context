@@ -18,7 +18,7 @@ The `.env.example` in each service is the documentation of record:
 
 | Service | Required | Optional |
 |---|---|---|
-| API (`services/api/.env.example`) | `DATABASE_URL` | `REDIS_URL` (enables enrichment), `NOVA_ALPHA_INVITE_CODE` (**production signups are invite-only by default**), `NOVA_SIGNUP` / session TTLs (see `docs/AUTH.md`), `NOVA_ENCRYPTION_KEY` + `NOTION_CLIENT_ID`/`NOTION_CLIENT_SECRET`/`NOTION_REDIRECT_URI` (M6 Notion; key REQUIRED with client id in prod), `OPENAI_API_KEY` (transcription + search embeddings), `ANTHROPIC_API_KEY` + `NOVA_LIVE_QA` (live answers), `NOVA_REDACTION` (default on), `NOVA_ANALYTICS` (default local), `NOVA_LIVE_MODEL` |
+| API (`services/api/.env.example`) | `DATABASE_URL` | `REDIS_URL` (enables enrichment), `NOVA_ALPHA_INVITE_CODE` (**production signups are invite-only by default**), `NOVA_SIGNUP` / session TTLs (see `docs/AUTH.md`), `NOVA_ENCRYPTION_KEY` + `NOTION_CLIENT_ID`/`NOTION_CLIENT_SECRET`/`NOTION_REDIRECT_URI` (M6 Notion; key REQUIRED with client id in prod), `OPENAI_API_KEY` (transcription + search embeddings), `ANTHROPIC_API_KEY` + `NOVA_LIVE_QA` (live answers), `NOVA_REDACTION` (default on), `NOVA_IMAGE_REDACTION`/`NOVA_SCREENSHOT_STORAGE`/`NOVA_OCR_*` (M7 visual redaction), `NOVA_RATE_LIMIT_MAX` (M7), `NOVA_ANALYTICS` (default local), `NOVA_LIVE_MODEL` |
 | Worker (`services/worker/.env.example`) | `DATABASE_URL`, `REDIS_URL` | `NOVA_ENCRYPTION_KEY` (same as API — required for Notion execution), `ANTHROPIC_API_KEY` + `NOVA_CLOUD_ENRICHMENT` (cloud enrichment), `OPENAI_API_KEY` (embeddings), `NOVA_ENRICH_MODEL`, `NOVA_ANALYTICS` |
 | Web | `NOVA_API_URL` | — (auth rides an HttpOnly session cookie set by the web app) |
 

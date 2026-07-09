@@ -19,7 +19,8 @@ describe.skipIf(!databaseUrl)("M5: authentication", () => {
 
   beforeAll(async () => {
     await migrate(databaseUrl!);
-    app = await buildApp({ env: loadEnv({ DATABASE_URL: databaseUrl }) });
+    app = await buildApp({
+      ocr: null, env: loadEnv({ DATABASE_URL: databaseUrl }) });
     await app.ready();
     db = new pg.Client({ connectionString: databaseUrl });
     await db.connect();
@@ -234,6 +235,7 @@ describe.skipIf(!databaseUrl)("M5: authentication", () => {
 
   it("enforces the signup policy (invite and closed modes)", async () => {
     const inviteApp = await buildApp({
+      ocr: null,
       env: loadEnv({
         DATABASE_URL: databaseUrl,
         NOVA_SIGNUP: "invite",
@@ -273,6 +275,7 @@ describe.skipIf(!databaseUrl)("M5: authentication", () => {
     }
 
     const closedApp = await buildApp({
+      ocr: null,
       env: loadEnv({ DATABASE_URL: databaseUrl, NOVA_SIGNUP: "closed" }),
     });
     await closedApp.ready();

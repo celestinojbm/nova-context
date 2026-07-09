@@ -13,6 +13,10 @@
     "./secret-box": {
       "types": "./dist/secret-box.d.ts",
       "import": "./dist/secret-box.js"
+    },
+    "./visual-redaction": {
+      "types": "./dist/visual-redaction.d.ts",
+      "import": "./dist/visual-redaction.js"
     }
   },
   "scripts": {
@@ -21,7 +25,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@nova/schema": "workspace:*"
+    "@nova/schema": "workspace:*",
+    "jimp": "^1.6.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

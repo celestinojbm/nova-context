@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadEnv } from "./env.js";
+import { loadEnv, securitySummary } from "./env.js";
 
 describe("loadEnv", () => {
   it("applies defaults for local dev", () => {
@@ -36,6 +36,26 @@ describe("loadEnv", () => {
       NOVA_ENCRYPTION_KEY: "a".repeat(64),
     });
     expect(env.NOTION_CLIENT_ID).toBe("notion-client-1");
+  });
+
+  it("rejects a plaintext-HTTP Notion redirect URI in production", () => {
+    expect(() =>
+      loadEnv({
+        NODE_ENV: "production",
+        NOTION_CLIENT_ID: "notion-client-1",
+        NOVA_ENCRYPTION_KEY: "a".repeat(64),
+        NOTION_REDIRECT_URI: "http://insecure.example.com/callback",
+      }),
+    ).toThrow(/https/);
+  });
+
+  it("summarizes the security posture for boot logs", () => {
+    const summary = securitySummary(loadEnv({ NODE_ENV: "production" }));
+    expect(summary).toContain("mode=production");
+    expect(summary).toContain("signup=invite");
+    expect(summary).toContain("token_encryption=OFF");
+    expect(summary).toContain("image_redaction=on");
+    expect(summary).toContain("rate_limit=in-memory");
   });
 
   it("rejects invite mode without a code in development", () => {

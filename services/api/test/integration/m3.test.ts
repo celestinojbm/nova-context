@@ -44,6 +44,7 @@ describe.skipIf(!databaseUrl)("M3: redaction, live Q&A, save-from-live, export/d
     liveQa?: LiveQaProvider | null;
   }): Promise<FastifyInstance> {
     const app = await buildApp({
+      ocr: null,
       env: loadEnv({
         DATABASE_URL: databaseUrl,
         NOVA_REDACTION: opts.redaction ?? "on",

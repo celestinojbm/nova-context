@@ -7,7 +7,9 @@ import {
 } from "@nova/schema";
 import type { FastifyInstance } from "fastify";
 import { requireAuth } from "./auth/plugin.js";
+import { redactFrames } from "./image-redaction.js";
 import type { Analytics } from "./analytics.js";
+import type { OcrEngine } from "@nova/context-engine/visual-redaction";
 import type pg from "pg";
 import { z } from "zod";
 
@@ -15,13 +17,15 @@ export interface M3RouteDeps {
   db: pg.Pool;
   liveQa: LiveQaProvider | null;
   redactionOn: boolean;
+  /** M7: OCR engine for frame masking; null = image redaction off. */
+  ocr: OcrEngine | null;
   momentColumns: string;
   rowToMoment: (row: never) => ContextMoment;
   analytics: Analytics;
 }
 
 export function registerM3Routes(app: FastifyInstance, deps: M3RouteDeps): void {
-  const { db, liveQa, redactionOn, momentColumns, analytics } = deps;
+  const { db, liveQa, redactionOn, ocr, momentColumns, analytics } = deps;
   const rowToMoment = deps.rowToMoment as (row: unknown) => ContextMoment;
 
   /**
@@ -49,9 +53,10 @@ export function registerM3Routes(app: FastifyInstance, deps: M3RouteDeps): void 
       });
     }
     const userId = requireAuth(req).userId;
-    // Redact all text legs of the context (frames are visual — see docs:
-    // image redaction is a known v0 gap, disclosed in the extension UI).
-    const request = redactionOn
+    // Redact all text legs of the context, then (M7) OCR-box mask the frames
+    // themselves. A frame that cannot be redacted is DROPPED — unredacted
+    // pixels never reach the model.
+    const textRedacted = redactionOn
       ? {
           question: parsed.data.question,
           context: {
@@ -64,6 +69,11 @@ export function registerM3Routes(app: FastifyInstance, deps: M3RouteDeps): void 
           },
         }
       : parsed.data;
+    const frameResult = await redactFrames(textRedacted.context.frames, ocr);
+    const request = {
+      ...textRedacted,
+      context: { ...textRedacted.context, frames: frameResult.frames },
+    };
 
     try {
       const answer: LiveAnswerResponse = await liveQa.answer(request);
@@ -75,6 +85,9 @@ export function registerM3Routes(app: FastifyInstance, deps: M3RouteDeps): void 
           JSON.stringify({
             frames: request.context.frames.length,
             snippets: request.context.text_snippets.length,
+            image_redaction: frameResult.redacted ? "applied" : "skipped",
+            frames_masked_regions: frameResult.masked,
+            frames_dropped: frameResult.dropped,
             grounding: answer.grounding,
             model: answer.model,
           }),

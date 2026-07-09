@@ -10,23 +10,27 @@
     "start": "node dist/index.js",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:seed-dev": "tsx src/db/seed-dev.ts",
+    "auth:reset-password": "tsx src/db/reset-password.ts",
     "test": "vitest run --dir src",
     "test:integration": "vitest run --dir test"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.0",
-    "@nova/schema": "workspace:*",
-    "fastify": "^5.1.0",
-    "pg": "^8.13.0",
-    "zod": "^3.24.0",
     "@fastify/multipart": "^9.0.0",
+    "@nova/context-engine": "workspace:*",
     "@nova/model-router": "workspace:*",
+    "@nova/schema": "workspace:*",
     "bullmq": "^5.34.0",
-    "@nova/context-engine": "workspace:*"
+    "fastify": "^5.1.0",
+    "ioredis": "^5.11.1",
+    "pg": "^8.13.0",
+    "tesseract.js": "^7.0.0",
+    "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/pg": "^8.11.0",
+    "jimp": "^1.6.1",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"

@@ -33,6 +33,7 @@ class FakeNotion implements NotionClient {
   failCreatesRemaining = 0;
   parent: NotionParent | null = { type: "page_id", id: "parent-1", title: "Home" };
   lastContent: NotionPageContent | null = null;
+  lastParent: NotionParent | null = null;
 
   async findParent(token: string): Promise<NotionParent | null> {
     this.findCalls += 1;
@@ -42,7 +43,7 @@ class FakeNotion implements NotionClient {
 
   async createPage(
     token: string,
-    _parent: NotionParent,
+    parent: NotionParent,
     content: NotionPageContent,
   ): Promise<CreatedNotionPage> {
     if (token !== TOKEN) throw new Error("wrong token reached the provider");
@@ -51,6 +52,7 @@ class FakeNotion implements NotionClient {
       throw new NotionTransientError("simulated 503");
     }
     this.createCalls += 1;
+    this.lastParent = parent;
     this.lastContent = content;
     return { id: `page-${this.createCalls}`, url: "https://notion.test/page" };
   }
@@ -66,6 +68,7 @@ describe.skipIf(!databaseUrl)("M6: action execution worker", () => {
     status = "queued",
     owner = userId,
     result: Record<string, unknown> | null = null,
+    payloadExtra: Record<string, unknown> = {},
   ): Promise<string> {
     const { rows } = await db.query<{ id: string }>(
       `INSERT INTO actions (user_id, moment_id, action_type, risk_tier, status, payload, result)
@@ -74,7 +77,7 @@ describe.skipIf(!databaseUrl)("M6: action execution worker", () => {
         owner,
         owner === userId ? momentId : null,
         status,
-        JSON.stringify({ title: "Worker test page", detail: "detail text" }),
+        JSON.stringify({ title: "Worker test page", detail: "detail text", ...payloadExtra }),
         result ? JSON.stringify(result) : null,
       ],
     );
@@ -280,6 +283,83 @@ describe.skipIf(!databaseUrl)("M6: action execution worker", () => {
     expect(notion.createCalls).toBe(0);
     const { rows } = await db.query("SELECT status FROM actions WHERE id = $1", [actionId]);
     expect(rows[0].status).toBe("queued"); // untouched
+  });
+
+  it("M7: uses the owner's saved default destination as the parent", async () => {
+    const notion = new FakeNotion();
+    await db.query(
+      `UPDATE integration_connections
+       SET meta = jsonb_set(meta, '{default_destination}', $2::jsonb)
+       WHERE user_id = $1 AND provider = 'notion'`,
+      [userId, JSON.stringify({ id: "dest-default", type: "page_id", title: "My Notes" })],
+    );
+    try {
+      const actionId = await makeAction();
+      await executeAction(db, deps(notion), { actionId, userId });
+      expect(notion.lastParent).toEqual({ type: "page_id", id: "dest-default", title: "My Notes" });
+      expect(notion.findCalls).toBe(0); // no fallback search needed
+      const audit = await db.query(
+        `SELECT detail FROM audit_log WHERE subject_id = $1 AND event_type = 'action.execute'`,
+        [actionId],
+      );
+      expect(audit.rows[0].detail.destination_title).toBe("My Notes");
+    } finally {
+      await db.query(
+        `UPDATE integration_connections SET meta = meta - 'default_destination' WHERE user_id = $1`,
+        [userId],
+      );
+    }
+  });
+
+  it("M7: approval-time override beats the saved default; fallback is findParent", async () => {
+    const notion = new FakeNotion();
+    await db.query(
+      `UPDATE integration_connections
+       SET meta = jsonb_set(meta, '{default_destination}', $2::jsonb)
+       WHERE user_id = $1 AND provider = 'notion'`,
+      [userId, JSON.stringify({ id: "dest-default", type: "page_id", title: "My Notes" })],
+    );
+    try {
+      const withOverride = await makeAction("queued", userId, null, {
+        destination: { id: "dest-override", type: "database_id", title: "Chosen DB" },
+      });
+      await executeAction(db, deps(notion), { actionId: withOverride, userId });
+      expect(notion.lastParent?.id).toBe("dest-override");
+      expect(notion.lastParent?.type).toBe("database_id");
+    } finally {
+      await db.query(
+        `UPDATE integration_connections SET meta = meta - 'default_destination' WHERE user_id = $1`,
+        [userId],
+      );
+    }
+    // Neither override nor default → most recently edited shared page.
+    const plain = await makeAction();
+    const notion2 = new FakeNotion();
+    await executeAction(db, deps(notion2), { actionId: plain, userId });
+    expect(notion2.findCalls).toBe(1);
+    expect(notion2.lastParent?.id).toBe("parent-1");
+  });
+
+  it("M7: page content carries provenance + privacy note and never any image data", async () => {
+    // Give the moment a (masked) screenshot: the page must still not carry pixels.
+    await db.query(
+      `UPDATE context_moments
+       SET payload = jsonb_set(payload, '{screenshot_data_url}', to_jsonb('data:image/png;base64,AAAA'::text)),
+           image_redaction = '{"state":"applied","masked":2,"tally":{"email":2}}'::jsonb
+       WHERE id = $1`,
+      [momentId],
+    );
+    const notion = new FakeNotion();
+    const actionId = await makeAction();
+    await executeAction(db, deps(notion), { actionId, userId });
+    const serialized = JSON.stringify(notion.lastContent);
+    expect(serialized).toContain("Privacy");
+    expect(serialized).toContain("Image redaction: applied (2 region(s) masked)");
+    expect(serialized).toContain("Screenshots are not uploaded to Notion");
+    expect(serialized).toContain(actionId); // audit reference
+    expect(serialized).toContain(momentId); // moment reference
+    expect(serialized).toContain("Source");
+    expect(serialized).not.toContain("data:image");
   });
 
   it("skips actions that are not queued/executing (rejected stays rejected)", async () => {
