@@ -72,11 +72,28 @@ export const createContextMomentRequestSchema = z
     extracted_text: z.string().max(200_000).nullable().optional(),
     intent_text: z.string().max(10_000).nullable().optional(),
     project_id: z.string().uuid().nullable().optional(),
+    // M7: user preference — if image redaction fails, drop the image rather
+    // than store it unredacted. Enforced server-side.
+    strict_image_redaction: z.boolean().default(false),
   })
   .strict();
-export type CreateContextMomentRequest = z.infer<
+// Input type (defaults still optional) — clients build this shape.
+export type CreateContextMomentRequest = z.input<
   typeof createContextMomentRequestSchema
 >;
+
+/** M7 visual-redaction report stored with each moment. States:
+ * 'applied' (masked), 'none' (no image), 'skipped' (redaction off),
+ * 'failed' (OCR failed, image kept per non-strict setting),
+ * 'blocked_strict' (OCR failed, image dropped), 'storage_disabled'
+ * (server-side screenshot kill switch stripped the image). Tally counts
+ * by type only — never values. */
+export const imageRedactionReportSchema = z.object({
+  state: z.enum(["applied", "none", "skipped", "failed", "blocked_strict", "storage_disabled"]),
+  masked: z.number().int().min(0).default(0),
+  tally: z.record(z.number().int()).default({}),
+});
+export type ImageRedactionReport = z.infer<typeof imageRedactionReportSchema>;
 
 export const contextMomentSchema = z.object({
   id: z.string().uuid(),
@@ -95,6 +112,8 @@ export const contextMomentSchema = z.object({
   // M2: async enrichment lifecycle + result.
   enrichment_status: enrichmentStatusSchema.optional(),
   enrichment: enrichmentResultSchema.nullable().optional(),
+  // M7: visual-redaction report (empty object for pre-M7 rows).
+  image_redaction: imageRedactionReportSchema.partial().optional(),
 });
 export type ContextMoment = z.infer<typeof contextMomentSchema>;
 
@@ -121,6 +140,8 @@ export const createContextMomentResponseSchema = contextMomentSchema
     task: z
       .object({ id: z.string().uuid(), title: z.string() })
       .nullable(),
+    // M7: what visual redaction did to this capture (counts only).
+    image_redaction: imageRedactionReportSchema,
   });
 export type CreateContextMomentResponse = z.infer<
   typeof createContextMomentResponseSchema

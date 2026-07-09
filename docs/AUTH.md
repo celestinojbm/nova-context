@@ -130,6 +130,11 @@ run `pnpm --filter @nova/api db:seed-dev` (sets a password for
 | `NOVA_ENCRYPTION_KEY` | api, worker | unset | 32-byte key (hex/base64) for integration tokens at rest; required for Notion; fail-closed |
 | `NOTION_CLIENT_ID` / `NOTION_CLIENT_SECRET` / `NOTION_REDIRECT_URI` | api | unset | Notion OAuth app; redirect URI = web app `/integrations/notion/callback` |
 | `NOVA_ACTION_QUEUE` | api, worker | `action-execution` | Queue carrying approved external actions |
+| `NOVA_IMAGE_REDACTION` | api | `on` | M7 OCR-box masking of screenshots/frames before storage/live/export |
+| `NOVA_SCREENSHOT_STORAGE` | api | `on` | M7 kill switch — `off` strips all image payloads server-side |
+| `NOVA_OCR_LANG_PATH` / `NOVA_OCR_TIMEOUT_MS` | api | CDN / 10000 | Tesseract language data location; per-image OCR budget |
+| `NOVA_RATE_LIMIT_MAX` / `NOVA_RATE_LIMIT_PREFIX` | api | 30 / `nova:ratelimit` | Credential-surface rate limit (Redis-shared when REDIS_URL set) |
+| `NOVA_RESET_EMAIL` / `NOVA_RESET_PASSWORD` | api (script) | — | Operator password reset (`auth:reset-password`) |
 | ~~`NOVA_API_TOKEN`~~ | — | **removed** | The M0 shared token is gone from API, web, and extension |
 
 Development vs production, concretely: dev = open signup, non-Secure
@@ -143,6 +148,62 @@ seed migration, the seed script, and tests).
 New payload-free audit events: `auth.signup`, `auth.login`, `auth.logout`,
 `auth.session.revoke`, `auth.extension.paired`. Tokens, codes, and password
 material never appear in the audit log (asserted in the auth suite).
+
+## Visual Redaction v1 (M7 — implemented)
+
+Screenshots and live-session frames are **OCR-box masked before storage** —
+and therefore before enrichment, search, export, live Q&A, and any external
+adapter, all of which read only stored (already-masked) payloads.
+
+**How.** An on-process Tesseract engine (`tesseract.js`, no cloud call —
+pixels never leave the API) produces word bounding boxes; the SAME detectors
+that redact captured text (emails, phones, Luhn-valid cards, API keys/JWTs,
+SSNs, IBANs) classify the OCR'd lines, plus two image-specific conservative
+heuristics: labeled one-time codes ("code/OTP/PIN … 123456") and street
+addresses (number + capitalized name + street suffix). Matched words are
+painted over with opaque black rectangles (jimp, pure JS) and the image is
+re-encoded. The moment stores a values-free report
+(`context_moments.image_redaction`: state + counts by type), which also
+lands in the capture audit event.
+
+**Fail-safes.**
+- Capture, strict mode (per-user extension setting, enforced server-side):
+  OCR failure/timeout ⇒ the image is DROPPED (`blocked_strict`).
+- Capture, non-strict: image kept, state honestly `failed`.
+- `NOVA_SCREENSHOT_STORAGE=off` (server kill switch): every image stripped
+  before storage (`storage_disabled`).
+- Live Q&A: a frame that cannot be masked is DROPPED — unredacted pixels
+  never reach the model, no setting can weaken that.
+- `NOVA_IMAGE_REDACTION=off`: state `skipped` (documented, visible in audit).
+
+**Client-side settings** (M4, unchanged): text-only mode (no screenshot
+leaves the device), blur-before-store, plus M7's strict toggle.
+
+**Limitations (honest).** OCR-box masking only masks text Tesseract can
+read: stylized fonts, tiny text, rotated content, or non-text sensitive
+pixels (faces, QR codes) are not detected. Blur/text-only modes remain the
+belt-and-braces for high-risk screens. The real-OCR path is proven by a
+gated e2e test (`NOVA_OCR_E2E=1`) that renders sensitive text, masks it,
+and re-OCRs to confirm removal; CI uses deterministic fake engines.
+
+## Auth hardening (M7)
+
+- `POST /v1/auth/password` (web sessions only, rate-limited): verifies the
+  current password, swaps the scrypt hash, and **revokes every other
+  session** — web and extension. Old credentials and stolen sessions die
+  together.
+- `POST /v1/auth/sessions/revoke-all`: signs out everything except the
+  current session (panic button in Settings).
+- Operator reset: `NOVA_RESET_EMAIL=... NOVA_RESET_PASSWORD=... pnpm
+  --filter @nova/api auth:reset-password` — sets the hash and revokes ALL
+  sessions; the documented recovery path (no self-service reset in alpha).
+- Rate limiting is **Redis-backed** when `REDIS_URL` is set (fixed window
+  shared across instances, `NOVA_RATE_LIMIT_MAX` per 15 min per IP); the M5
+  in-memory limiter remains the single-instance fallback. Redis errors fail
+  open (availability over lockout — documented trade-off).
+- Production checks at boot: Notion redirect URI must be `https://`;
+  `NOTION_CLIENT_ID` without `NOVA_ENCRYPTION_KEY` refuses to start; a
+  one-line `[security]` posture summary is logged.
 
 ## Notion integration (M6 — implemented)
 
@@ -192,10 +253,29 @@ this, and the user must explicitly approve. Captured content remains data:
 page content is quoted, never interpreted, and screenshots are never
 uploaded.
 
-**Known limitations (documented, not hidden).** The page lands under the
-most recently edited page the user shared with the integration (no
-destination picker yet). If the worker crashes in the window between the
-Notion create call and the DB write, a retry could produce a duplicate
-page (Notion has no idempotency keys); the window is one statement wide.
-Notion tokens don't expire but can be revoked workspace-side — that
-surfaces as a terminal 4xx failure on the next execution.
+**Destination selector (M7).** `GET /v1/integrations/notion/destinations`
+lists the pages/databases the user shared with the integration (Notion has
+no "list all" API — `/v1/search` over shared objects IS the safe selector:
+the user controls the candidate set inside Notion). The user saves a
+per-user default (`PUT /v1/integrations/notion/destination`, stored in
+their own `integration_connections.meta`); the approval card shows it, and
+the approve endpoint accepts a validated per-action override. Execution
+resolves: approval override → saved default → most recently edited shared
+page.
+
+**Content (M7 hardening).** Pages carry summary, the user's instruction,
+source metadata (title — URL — captured-at), a captured-text excerpt, tags,
+a Privacy section (text + image redaction states, masked-region count, and
+the explicit no-screenshot policy), and a footer referencing the Nova
+moment id and action id (audit cross-reference). **Screenshots are never
+uploaded to Notion**: embeds require a publicly hosted URL and Nova does
+not host captured pixels — hosting them would trade a privacy guarantee
+for a convenience. Documented limitation rather than a hidden toggle.
+
+**Known limitations (documented, not hidden).** If the worker crashes in
+the window between the Notion create call and the DB write, a retry could
+produce a duplicate page (Notion has no idempotency keys); the window is
+one statement wide. Notion tokens don't expire but can be revoked
+workspace-side — that surfaces as a terminal 4xx failure on the next
+execution. A saved destination the user later un-shares fails the action
+with a clear provider error.

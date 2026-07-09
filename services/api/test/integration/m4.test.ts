@@ -23,7 +23,8 @@ describe.skipIf(!databaseUrl)("M4: audit, analytics, export filters, project del
 
   beforeAll(async () => {
     await migrate(databaseUrl!);
-    app = await buildApp({ env: loadEnv({ DATABASE_URL: databaseUrl }), liveQa: null });
+    app = await buildApp({
+      ocr: null, env: loadEnv({ DATABASE_URL: databaseUrl }), liveQa: null });
     await app.ready();
     const dev = await loginAsDevUser(app, databaseUrl!);
     inject = dev.inject;
@@ -153,6 +154,7 @@ describe.skipIf(!databaseUrl)("M4: audit, analytics, export filters, project del
 
     it("NOVA_ANALYTICS=off stores nothing", async () => {
       const offApp = await buildApp({
+      ocr: null,
         env: loadEnv({ DATABASE_URL: databaseUrl, NOVA_ANALYTICS: "off" }),
         liveQa: null,
       });

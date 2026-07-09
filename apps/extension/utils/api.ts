@@ -24,6 +24,9 @@ export interface ExtensionSettings {
   accountEmail: string;
   // M4 visual-redaction safeguard: 'full' | 'blurred' | 'text_only'.
   captureMode: CaptureMode;
+  /** M7: if server-side image redaction fails, drop the screenshot rather
+   * than store it unredacted. */
+  strictRedaction: boolean;
 }
 
 const DEFAULTS: ExtensionSettings = {
@@ -31,6 +34,7 @@ const DEFAULTS: ExtensionSettings = {
   deviceToken: "",
   accountEmail: "",
   captureMode: "full",
+  strictRedaction: false,
 };
 
 export class SessionExpiredError extends Error {
@@ -118,7 +122,7 @@ export async function postMoment(
   const res = await authFetch(settings, "/v1/context/moments", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ...body, strict_image_redaction: settings.strictRedaction }),
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");

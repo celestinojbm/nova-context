@@ -85,8 +85,11 @@ export default async function ApprovalsPage() {
                   Will create a page in{" "}
                   {preview.connection.workspace
                     ? `Notion workspace “${preview.connection.workspace}”`
-                    : "your Notion workspace"}{" "}
-                  (under the first page you shared with Nova).
+                    : "your Notion workspace"}
+                  {preview.connection.destination
+                    ? ` under “${preview.connection.destination.title}”`
+                    : " under the most recently edited page you shared with Nova"}
+                  . Change the default in Settings.
                 </div>
                 {preview.source_host && (
                   <div className="task-meta">Source: {preview.source_host}</div>

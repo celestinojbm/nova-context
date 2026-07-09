@@ -38,6 +38,7 @@ describe.skipIf(!databaseUrl)("security: captured content as data", () => {
   beforeAll(async () => {
     await migrate(databaseUrl!);
     app = await buildApp({
+      ocr: null,
       env: loadEnv({ DATABASE_URL: databaseUrl }),
       liveQa: null,
     });
@@ -174,6 +175,7 @@ describe.skipIf(!databaseUrl)("security: captured content as data", () => {
       },
     };
     const app2 = await buildApp({
+      ocr: null,
       env: loadEnv({ DATABASE_URL: databaseUrl }),
       liveQa: fake,
     });

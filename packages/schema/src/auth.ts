@@ -24,6 +24,14 @@ export const loginRequestSchema = z
   .strict();
 export type LoginRequest = z.infer<typeof loginRequestSchema>;
 
+export const changePasswordRequestSchema = z
+  .object({
+    current_password: z.string().min(1).max(200),
+    new_password: z.string().min(10).max(200),
+  })
+  .strict();
+export type ChangePasswordRequest = z.infer<typeof changePasswordRequestSchema>;
+
 export const pairingClaimRequestSchema = z
   .object({
     code: z.string().trim().regex(/^\d{8}$/, "pairing codes are 8 digits"),

@@ -1,4 +1,5 @@
 import {
+  approveActionRequestSchema,
   memorySearchRequestSchema,
   type ContextMoment,
   type ListActionsResponse,
@@ -246,6 +247,12 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
     const adapterForType = registry.get(existing.rows[0].action_type);
 
     if (adapterForType?.external) {
+      // M7: optional approval-time destination override (validated shape,
+      // stored on the action so preview == execution destination).
+      const approveBody = approveActionRequestSchema.safeParse(req.body ?? {});
+      if (!approveBody.success) {
+        return reply.code(400).send({ error: "invalid_request" });
+      }
       // Fail BEFORE any state change: no connection or no queue means the
       // action stays 'proposed' and the UI can explain what's missing.
       if (adapterForType.provider) {
@@ -270,10 +277,16 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
 
       const claim = await db.query(
         `UPDATE actions
-         SET status = 'queued', approved_by = $1, approved_at = now(), updated_at = now()
+         SET status = 'queued', approved_by = $1, approved_at = now(), updated_at = now(),
+             payload = CASE WHEN $3::jsonb IS NULL THEN payload
+                            ELSE jsonb_set(payload, '{destination}', $3::jsonb) END
          WHERE id = $2 AND user_id = $1 AND status = 'proposed'
          RETURNING id, action_type`,
-        [userId, params.data.id],
+        [
+          userId,
+          params.data.id,
+          approveBody.data.destination ? JSON.stringify(approveBody.data.destination) : null,
+        ],
       );
       const queuedAction = claim.rows[0];
       if (!queuedAction) {
@@ -291,7 +304,14 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
         `INSERT INTO audit_log (user_id, event_type, subject_kind, subject_id, detail)
          VALUES ($1, 'action.approve', 'action', $2, $3),
                 ($1, 'action.queued', 'action', $2, $3)`,
-        [userId, queuedAction.id, JSON.stringify({ action_type: queuedAction.action_type })],
+        [
+          userId,
+          queuedAction.id,
+          JSON.stringify({
+            action_type: queuedAction.action_type,
+            destination_override: approveBody.data.destination?.title ?? null,
+          }),
+        ],
       );
       try {
         await actionQueue.add(

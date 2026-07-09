@@ -81,7 +81,7 @@ export async function executeAction(
   const { rows } = await db.query(
     `SELECT a.id, a.action_type, a.status, a.payload, a.result, a.moment_id,
             m.source_meta, m.summary, m.extracted_text, m.intent_text,
-            m.captured_at, m.enrichment
+            m.captured_at, m.enrichment, m.redaction_state, m.image_redaction
      FROM actions a
      LEFT JOIN context_moments m ON m.id = a.moment_id
      WHERE a.id = $1 AND a.user_id = $2`,
@@ -135,8 +135,9 @@ export async function executeAction(
   const conn = await db.query<{
     token_ciphertext: Buffer;
     external_account: string | null;
+    meta: Record<string, unknown>;
   }>(
-    `SELECT token_ciphertext, external_account FROM integration_connections
+    `SELECT token_ciphertext, external_account, meta FROM integration_connections
      WHERE user_id = $1 AND provider = 'notion' AND status = 'active'`,
     [data.userId],
   );
@@ -150,7 +151,11 @@ export async function executeAction(
     return terminal("token_decrypt_failed");
   }
 
-  const payload = action.payload as { title?: string; detail?: string | null };
+  const payload = action.payload as {
+    title?: string;
+    detail?: string | null;
+    destination?: { id: string; type: "page_id" | "database_id"; title: string } | null;
+  };
   const content = buildNotionPageContent(
     { title: payload.title ?? "Nova Context page", detail: payload.detail ?? null },
     {
@@ -164,11 +169,24 @@ export async function executeAction(
       extractedText: action.extracted_text,
       instruction: action.intent_text,
       tags: Array.isArray(action.enrichment?.tags) ? action.enrichment.tags : [],
+      actionId: action.id,
+      textRedaction: action.redaction_state ?? null,
+      imageRedaction: (action.image_redaction?.state as string | undefined) ?? "none",
+      imageMaskedRegions: Number(action.image_redaction?.masked ?? 0),
     },
   );
 
   try {
-    const parent = await deps.notion.findParent(token);
+    // M7 destination resolution: approval-time override > user default >
+    // most-recently-edited shared page. All three live inside the OWNER's
+    // own workspace/token — never another user's.
+    const savedDefault = conn.rows[0]!.meta?.default_destination as
+      | { id: string; type: "page_id" | "database_id"; title: string }
+      | undefined;
+    const chosen = payload.destination ?? savedDefault ?? null;
+    const parent = chosen
+      ? { type: chosen.type, id: chosen.id, title: chosen.title }
+      : await deps.notion.findParent(token);
     if (!parent) return terminal("no_accessible_notion_page");
     const page = await deps.notion.createPage(token, parent, content);
     // External id lands in the SAME statement that completes the action, so
@@ -192,6 +210,7 @@ export async function executeAction(
       provider: "notion",
       external_id: page.id,
       workspace: conn.rows[0]!.external_account,
+      destination_title: parent.title,
     });
     return "done";
   } catch (err) {

@@ -33,7 +33,8 @@ describe.skipIf(!databaseUrl)("M5: per-user isolation", () => {
 
   beforeAll(async () => {
     await migrate(databaseUrl!);
-    app = await buildApp({ env: loadEnv({ DATABASE_URL: databaseUrl }) });
+    app = await buildApp({
+      ocr: null, env: loadEnv({ DATABASE_URL: databaseUrl }) });
     await app.ready();
     db = new pg.Client({ connectionString: databaseUrl });
     await db.connect();

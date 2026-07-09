@@ -1,4 +1,5 @@
 import {
+  changePasswordRequestSchema,
   loginRequestSchema,
   pairingClaimRequestSchema,
   signupRequestSchema,
@@ -12,6 +13,7 @@ import type pg from "pg";
 import { z } from "zod";
 import type { Env } from "./env.js";
 import { hashPassword, verifyPassword } from "./auth/passwords.js";
+import type { RateLimiter } from "./auth/rate-limit.js";
 import { requireAuth } from "./auth/plugin.js";
 import {
   claimPairingCode,
@@ -23,33 +25,13 @@ import {
 export interface AuthRouteDeps {
   db: pg.Pool;
   env: Env;
-}
-
-/**
- * Fixed-window in-memory limiter for the credential-guessing surfaces
- * (login, signup, pairing claim). Per-process only — good enough for a
- * single-instance private alpha; move to Redis if the API scales out.
- */
-const WINDOW_MS = 15 * 60 * 1000;
-const MAX_ATTEMPTS = 30;
-
-function makeRateLimiter() {
-  const hits = new Map<string, { count: number; resetAt: number }>();
-  return (key: string): boolean => {
-    const now = Date.now();
-    const entry = hits.get(key);
-    if (!entry || entry.resetAt <= now) {
-      hits.set(key, { count: 1, resetAt: now + WINDOW_MS });
-      return true;
-    }
-    entry.count += 1;
-    return entry.count <= MAX_ATTEMPTS;
-  };
+  /** M7: Redis-backed when REDIS_URL is set; in-memory fallback otherwise. */
+  rateLimiter: RateLimiter;
 }
 
 export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): void {
-  const { db, env } = deps;
-  const allowAttempt = makeRateLimiter();
+  const { db, env, rateLimiter } = deps;
+  const allowAttempt = (key: string) => rateLimiter.allow(key);
 
   function sessionLabel(req: FastifyRequest): string | null {
     const ua = req.headers["user-agent"];
@@ -77,7 +59,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
         })),
       });
     }
-    if (!allowAttempt(`signup:${req.ip}`)) {
+    if (!(await allowAttempt(`signup:${req.ip}`))) {
       return reply.code(429).send({ error: "rate_limited" });
     }
     if (env.signupMode === "invite") {
@@ -132,7 +114,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     if (!parsed.success) {
       return reply.code(400).send({ error: "invalid_request" });
     }
-    if (!allowAttempt(`login:${req.ip}`)) {
+    if (!(await allowAttempt(`login:${req.ip}`))) {
       return reply.code(429).send({ error: "rate_limited" });
     }
     const { rows } = await db.query<{
@@ -220,7 +202,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     if (!parsed.success) {
       return reply.code(400).send({ error: "invalid_request" });
     }
-    if (!allowAttempt(`pair:${req.ip}`)) {
+    if (!(await allowAttempt(`pair:${req.ip}`))) {
       return reply.code(429).send({ error: "rate_limited" });
     }
     const claimed = await claimPairingCode(db, parsed.data.code);
@@ -246,6 +228,67 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       user: { id: claimed.userId, email: user.email, display_name: user.display_name },
     };
     return reply.code(201).send(response);
+  });
+
+  /** M7: password change. Verifies the current password, swaps the hash,
+   * and revokes every OTHER session — a stolen session cannot survive a
+   * password rotation. Web sessions only. */
+  app.post("/v1/auth/password", async (req, reply) => {
+    const auth = requireAuth(req);
+    if (auth.kind !== "web") {
+      return reply.code(403).send({ error: "web_session_required" });
+    }
+    const parsed = changePasswordRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: "invalid_request",
+        issues: parsed.error.issues.map((i) => ({
+          path: i.path.join("."),
+          message: i.message,
+        })),
+      });
+    }
+    if (!(await allowAttempt(`password:${req.ip}`))) {
+      return reply.code(429).send({ error: "rate_limited" });
+    }
+    const { rows } = await db.query<{ password_hash: string | null }>(
+      `SELECT password_hash FROM users WHERE id = $1 AND deleted_at IS NULL`,
+      [auth.userId],
+    );
+    const ok =
+      rows.length > 0 &&
+      (await verifyPassword(parsed.data.current_password, rows[0]!.password_hash));
+    if (!ok) {
+      return reply.code(401).send({ error: "invalid_credentials" });
+    }
+    const newHash = await hashPassword(parsed.data.new_password);
+    await db.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [
+      newHash,
+      auth.userId,
+    ]);
+    const revoked = await db.query(
+      `UPDATE sessions SET revoked_at = now()
+       WHERE user_id = $1 AND id != $2 AND revoked_at IS NULL`,
+      [auth.userId, auth.sessionId],
+    );
+    await audit(auth.userId, "auth.password.change", {
+      revoked_sessions: revoked.rowCount ?? 0,
+    });
+    return { changed: true, revoked_sessions: revoked.rowCount ?? 0 };
+  });
+
+  /** M7: panic button — sign out every other device/session at once. */
+  app.post("/v1/auth/sessions/revoke-all", async (req) => {
+    const auth = requireAuth(req);
+    const revoked = await db.query(
+      `UPDATE sessions SET revoked_at = now()
+       WHERE user_id = $1 AND id != $2 AND revoked_at IS NULL`,
+      [auth.userId, auth.sessionId],
+    );
+    await audit(auth.userId, "auth.sessions.revoke_all", {
+      revoked_sessions: revoked.rowCount ?? 0,
+    });
+    return { revoked: revoked.rowCount ?? 0 };
   });
 
   app.get("/v1/auth/sessions", async (req) => {

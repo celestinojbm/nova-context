@@ -24,6 +24,10 @@ import type { Env } from "./env.js";
 import { Analytics } from "./analytics.js";
 import { createActionQueue, createEnrichmentQueue, type EnrichmentJob } from "./queue.js";
 import { registerAuth, requireAuth } from "./auth/plugin.js";
+import { createRateLimiter } from "./auth/rate-limit.js";
+import { redactPayloadImages } from "./image-redaction.js";
+import { TesseractOcrEngine } from "./ocr.js";
+import { HttpNotionApiClient, type NotionApiClient } from "./integrations/notion-api.js";
 import { HttpNotionOAuthClient, type NotionOAuthClient } from "./integrations/notion-oauth.js";
 import { registerAuthRoutes } from "./routes-auth.js";
 import { registerIntegrationRoutes } from "./routes-integrations.js";
@@ -32,6 +36,7 @@ import { registerM2Routes } from "./routes-m2.js";
 import { registerM3Routes } from "./routes-m3.js";
 import { registerM4Routes } from "./routes-m4.js";
 import { redactDeep, suggestProjects, type RedactionType } from "@nova/context-engine";
+import type { OcrEngine } from "@nova/context-engine/visual-redaction";
 
 interface MomentRow {
   id: string;
@@ -47,6 +52,7 @@ interface MomentRow {
   intent_parsed: ParsedIntent | null;
   enrichment_status: "pending" | "processing" | "completed" | "failed" | "skipped";
   enrichment: EnrichmentResult | null;
+  image_redaction: Record<string, unknown>;
 }
 
 function rowToMoment(row: MomentRow): ContextMoment {
@@ -64,6 +70,7 @@ function rowToMoment(row: MomentRow): ContextMoment {
     intent_parsed: row.intent_parsed,
     enrichment_status: row.enrichment_status,
     enrichment: row.enrichment,
+    image_redaction: row.image_redaction as ContextMoment["image_redaction"],
   };
 }
 
@@ -81,6 +88,7 @@ const MOMENT_COLUMN_NAMES = [
   "intent_parsed",
   "enrichment_status",
   "enrichment",
+  "image_redaction",
 ];
 const MOMENT_COLUMNS = MOMENT_COLUMN_NAMES.join(", ");
 const MOMENT_COLUMNS_PREFIXED = MOMENT_COLUMN_NAMES.map((c) => `m.${c}`).join(", ");
@@ -97,6 +105,10 @@ export interface BuildAppOptions {
   liveQa?: LiveQaProvider | null;
   /** Test override for the Notion OAuth client (bypasses env wiring). */
   notionOauth?: NotionOAuthClient | null;
+  /** Test override for the OCR engine (bypasses env wiring). */
+  ocr?: OcrEngine | null;
+  /** Test override for the read-only Notion API client (M7 destinations). */
+  notionApi?: NotionApiClient | null;
 }
 
 export async function buildApp({
@@ -104,6 +116,8 @@ export async function buildApp({
   pool,
   liveQa,
   notionOauth,
+  ocr,
+  notionApi,
 }: BuildAppOptions): Promise<FastifyInstance> {
   const db = pool ?? new pg.Pool({ connectionString: env.DATABASE_URL, max: 10 });
   const app = Fastify({
@@ -142,6 +156,23 @@ export async function buildApp({
         ? new AnthropicLiveQa({ apiKey: env.ANTHROPIC_API_KEY, model: env.NOVA_LIVE_MODEL })
         : null;
   const redactionOn = env.NOVA_REDACTION === "on";
+  // M7: on-process OCR for visual redaction (never a cloud call). null =
+  // image redaction off; captures then store with state 'skipped'.
+  const ocrEngine: OcrEngine | null =
+    ocr !== undefined
+      ? ocr
+      : env.NOVA_IMAGE_REDACTION === "on"
+        ? new TesseractOcrEngine({
+            langPath: env.NOVA_OCR_LANG_PATH,
+            timeoutMs: env.NOVA_OCR_TIMEOUT_MS,
+          })
+        : null;
+  if (ocrEngine instanceof TesseractOcrEngine) {
+    app.addHook("onClose", async () => {
+      await ocrEngine.close();
+    });
+  }
+  const screenshotStorageOn = env.NOVA_SCREENSHOT_STORAGE === "on";
   // M4: privacy-preserving funnel analytics (allowlisted events, no content).
   const analytics = new Analytics(db, env.NOVA_ANALYTICS === "local");
 
@@ -187,8 +218,25 @@ export async function buildApp({
   // M5: every /v1 route runs behind the session middleware (fail closed);
   // the auth routes themselves carry the small public allowlist.
   registerAuth(app, db);
-  registerAuthRoutes(app, { db, env });
-  registerIntegrationRoutes(app, { db, env, notionOauth: notionOauthClient });
+  // M7: credential-surface rate limiting — Redis-shared across instances
+  // when REDIS_URL is set, in-memory otherwise.
+  const rateLimiter = createRateLimiter(env.REDIS_URL, {
+    windowMs: 15 * 60 * 1000,
+    max: env.NOVA_RATE_LIMIT_MAX,
+    prefix: env.NOVA_RATE_LIMIT_PREFIX,
+  });
+  app.addHook("onClose", async () => {
+    await rateLimiter.close();
+  });
+  registerAuthRoutes(app, { db, env, rateLimiter });
+  const notionApiClient: NotionApiClient | null =
+    notionApi !== undefined ? notionApi : notionOauthClient ? new HttpNotionApiClient() : null;
+  registerIntegrationRoutes(app, {
+    db,
+    env,
+    notionOauth: notionOauthClient,
+    notionApi: notionApiClient,
+  });
 
   app.get("/healthz", async () => {
     await db.query("SELECT 1");
@@ -241,6 +289,16 @@ export async function buildApp({
       }
     }
 
+    // M7: visual redaction BEFORE storage — screenshots are OCR-box masked
+    // (or stripped, per settings) so unredacted pixels never persist.
+    const imageOutcome = await redactPayloadImages(body.payload, {
+      ocr: ocrEngine,
+      strict: body.strict_image_redaction,
+      storageEnabled: screenshotStorageOn,
+    });
+    body.payload = imageOutcome.payload;
+    const imageReport = imageOutcome.report;
+
     // Synchronous parse is heuristic-only (local, sub-millisecond); the
     // worker refines it with an LLM asynchronously when configured.
     let intent: ParsedIntent | null = null;
@@ -270,8 +328,8 @@ export async function buildApp({
 
     const { rows } = await db.query<MomentRow>(
       `INSERT INTO context_moments
-         (user_id, project_id, source_mode, source_meta, payload, extracted_text, intent_text, intent_parsed, enrichment_status, redaction_state)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         (user_id, project_id, source_mode, source_meta, payload, extracted_text, intent_text, intent_parsed, enrichment_status, redaction_state, image_redaction)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING ${MOMENT_COLUMNS}`,
       [
         userId,
@@ -284,6 +342,7 @@ export async function buildApp({
         intent ? JSON.stringify(intent) : null,
         enrichmentQueue ? "pending" : "skipped",
         redactionOn ? "applied" : "skipped",
+        JSON.stringify(imageReport),
       ],
     );
     const moment = rowToMoment(rows[0]!);
@@ -392,9 +451,15 @@ export async function buildApp({
           url_host: safeHost(moment.source_meta),
           intent_action: intent?.action_type ?? null,
           intent_parser: intent?.parser ?? null,
+          text_redaction: redactionOn ? "applied" : "skipped",
           redactions: redactionTally
             ? Object.fromEntries(redactionTally)
             : null,
+          image_redaction: imageReport.state,
+          image_redactions: imageReport.tally,
+          images_masked: imageReport.masked,
+          image_storage_disabled: !screenshotStorageOn,
+          strict_blocked: imageReport.state === "blocked_strict",
         }),
       ],
     );
@@ -404,6 +469,7 @@ export async function buildApp({
       moment.source_mode === "live_context" ? "live_moment_saved" : "instant_capture_saved",
       {
         has_screenshot: typeof body.payload["screenshot_data_url"] === "string",
+        image_redaction: imageReport.state,
         has_intent: Boolean(body.intent_text),
         linked: Boolean(moment.project_id),
         enrichment: enrichmentJobId ? "queued" : "skipped",
@@ -423,6 +489,7 @@ export async function buildApp({
         ? { status: "queued", job_id: enrichmentJobId }
         : { status: "skipped", job_id: null },
       suggested_projects: moment.project_id ? [] : suggestions,
+      image_redaction: imageReport,
       links: { self: `/v1/context/moments/${moment.id}` },
       intent,
       task,
@@ -522,6 +589,7 @@ export async function buildApp({
     db,
     liveQa: liveQaProvider,
     redactionOn,
+    ocr: ocrEngine,
     momentColumns: MOMENT_COLUMNS,
     rowToMoment: rowToMoment as (row: never) => ContextMoment,
     analytics,

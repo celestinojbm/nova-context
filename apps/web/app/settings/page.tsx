@@ -1,9 +1,11 @@
 import type {
+  ListDestinationsResponse,
   ListIntegrationsResponse,
   ListSessionsResponse,
   MeResponse,
 } from "@nova/schema";
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { ConfirmSubmit } from "../components/ConfirmSubmit";
 import { API_URL, apiGet, authHeaders } from "../lib/api";
 import { PairExtension } from "./PairExtension";
@@ -21,6 +23,46 @@ async function revokeSession(formData: FormData) {
   revalidatePath("/settings");
 }
 
+async function changePassword(formData: FormData) {
+  "use server";
+  const current = formData.get("current_password");
+  const next = formData.get("new_password");
+  if (typeof current !== "string" || typeof next !== "string") return;
+  const res = await fetch(`${API_URL}/v1/auth/password`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ current_password: current, new_password: next }),
+    cache: "no-store",
+  });
+  if (res.status === 401) redirect("/settings?pw=wrong");
+  if (res.status === 429) redirect("/settings?pw=rate");
+  if (!res.ok) redirect("/settings?pw=invalid");
+  redirect("/settings?pw=changed");
+}
+
+async function revokeAllSessions() {
+  "use server";
+  await fetch(`${API_URL}/v1/auth/sessions/revoke-all`, {
+    method: "POST",
+    headers: await authHeaders(),
+  });
+  revalidatePath("/settings");
+}
+
+async function setNotionDestination(formData: FormData) {
+  "use server";
+  const value = formData.get("destination");
+  if (typeof value !== "string") return;
+  const destination = value === "" ? null : JSON.parse(value);
+  await fetch(`${API_URL}/v1/integrations/notion/destination`, {
+    method: "PUT",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ destination }),
+    cache: "no-store",
+  });
+  revalidatePath("/settings");
+}
+
 async function disconnectNotion() {
   "use server";
   await fetch(`${API_URL}/v1/integrations/notion`, {
@@ -29,6 +71,13 @@ async function disconnectNotion() {
   });
   revalidatePath("/settings");
 }
+
+const PASSWORD_MESSAGES: Record<string, { kind: "ok" | "error"; text: string }> = {
+  changed: { kind: "ok", text: "Password changed. Every other session was signed out." },
+  wrong: { kind: "error", text: "Current password is wrong." },
+  rate: { kind: "error", text: "Too many attempts — wait a few minutes." },
+  invalid: { kind: "error", text: "New password must be at least 10 characters." },
+};
 
 const NOTION_MESSAGES: Record<string, { kind: "ok" | "error"; text: string }> = {
   connected: { kind: "ok", text: "Notion connected. Approved Notion actions can now execute." },
@@ -50,10 +99,11 @@ const NOTION_MESSAGES: Record<string, { kind: "ok" | "error"; text: string }> = 
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ notion?: string }>;
+  searchParams: Promise<{ notion?: string; pw?: string }>;
 }) {
-  const { notion: notionParam } = await searchParams;
+  const { notion: notionParam, pw: pwParam } = await searchParams;
   const notionMessage = notionParam ? (NOTION_MESSAGES[notionParam] ?? null) : null;
+  const passwordMessage = pwParam ? (PASSWORD_MESSAGES[pwParam] ?? null) : null;
   const [me, sessions, integrations] = await Promise.all([
     apiGet<MeResponse>("/v1/auth/me"),
     apiGet<ListSessionsResponse>("/v1/auth/sessions"),
@@ -62,6 +112,9 @@ export default async function SettingsPage({
   const notionConnection = integrations.ok
     ? integrations.data.items.find((i) => i.provider === "notion" && i.status === "active")
     : undefined;
+  const destinations = notionConnection
+    ? await apiGet<ListDestinationsResponse>("/v1/integrations/notion/destinations")
+    : null;
 
   return (
     <>
@@ -78,6 +131,29 @@ export default async function SettingsPage({
       ) : (
         <p className="muted">{me.message}</p>
       )}
+      {passwordMessage && (
+        <div className={passwordMessage.kind === "ok" ? "success" : "error-banner"}>
+          {passwordMessage.text}
+        </div>
+      )}
+      <details className="account-tools">
+        <summary>Change password</summary>
+        <form action={changePassword} className="auth-form">
+          <label>
+            Current password
+            <input type="password" name="current_password" autoComplete="current-password" required />
+          </label>
+          <label>
+            New password (10+ characters)
+            <input type="password" name="new_password" autoComplete="new-password" minLength={10} required />
+          </label>
+          <button type="submit">Change password</button>
+          <p className="muted">Changing your password signs out every other session and device.</p>
+        </form>
+      </details>
+      <form action={revokeAllSessions}>
+        <button type="submit">Sign out everywhere else</button>
+      </form>
 
       <h3>Integrations</h3>
       {notionMessage && (
@@ -103,6 +179,34 @@ export default async function SettingsPage({
               (since {new Date(notionConnection.connected_at).toLocaleDateString()})
             </span>
           </p>
+          <div>
+            <strong>Default destination</strong>
+            <p className="muted">
+              Where approved Notion pages are created. Only pages and
+              databases you shared with the Nova integration appear here;
+              without a choice, the most recently edited shared page is used.
+            </p>
+            {destinations?.ok ? (
+              <form action={setNotionDestination} className="export-form">
+                <select name="destination" defaultValue={JSON.stringify(destinations.data.default ?? "") === '""' ? "" : JSON.stringify(destinations.data.default)}>
+                  <option value="">Most recently edited shared page (default)</option>
+                  {destinations.data.items.map((d) => (
+                    <option key={d.id} value={JSON.stringify(d)}>
+                      {d.title} ({d.type === "database_id" ? "database" : "page"})
+                    </option>
+                  ))}
+                </select>
+                <button type="submit">Save destination</button>
+              </form>
+            ) : (
+              <p className="muted">Could not load destinations from Notion right now.</p>
+            )}
+            {destinations?.ok && destinations.data.default && (
+              <p className="muted">
+                Current: “{destinations.data.default.title}”
+              </p>
+            )}
+          </div>
           <form action={disconnectNotion}>
             <ConfirmSubmit message="Disconnect Notion? Pending approved Notion actions will fail until you reconnect.">
               Disconnect Notion

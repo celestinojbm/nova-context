@@ -23,6 +23,7 @@ describe.skipIf(!databaseUrl)("M1: intent, tasks, suggestions (integration)", ()
   beforeAll(async () => {
     await migrate(databaseUrl!);
     app = await buildApp({
+      ocr: null,
       env: loadEnv({ DATABASE_URL: databaseUrl }),
     });
     await app.ready();

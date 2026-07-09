@@ -39,6 +39,10 @@ export const AUDIT_EVENT_LABELS: Record<string, string> = {
   "notion.connect.completed": "Notion connected",
   "notion.connect.failed": "Notion connection failed",
   "notion.disconnect": "Notion disconnected",
+  "notion.destination.set": "Notion destination changed",
+  "auth.password.change": "Password changed (other sessions signed out)",
+  "auth.password.reset": "Password reset by operator (all sessions signed out)",
+  "auth.sessions.revoke_all": "All other sessions signed out",
 };
 
 export function registerM4Routes(app: FastifyInstance, deps: M4RouteDeps): void {

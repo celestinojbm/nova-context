@@ -22,6 +22,33 @@ export interface OAuthStartResponse {
   authorize_url: string;
 }
 
+/** M7: a Notion page or database the user shared with the integration. */
+export const notionDestinationSchema = z
+  .object({
+    id: z.string().min(8).max(64),
+    type: z.enum(["page_id", "database_id"]),
+    title: z.string().min(1).max(300),
+  })
+  .strict();
+export type NotionDestination = z.infer<typeof notionDestinationSchema>;
+
+export interface ListDestinationsResponse {
+  items: NotionDestination[];
+  /** The user's saved default, if any. */
+  default: NotionDestination | null;
+}
+
+export const setDestinationRequestSchema = z
+  .object({ destination: notionDestinationSchema.nullable() })
+  .strict();
+export type SetDestinationRequest = z.infer<typeof setDestinationRequestSchema>;
+
+/** M7: optional approval-time destination override for external actions. */
+export const approveActionRequestSchema = z
+  .object({ destination: notionDestinationSchema.optional() })
+  .strict();
+export type ApproveActionRequest = z.infer<typeof approveActionRequestSchema>;
+
 export const oauthCallbackRequestSchema = z
   .object({
     code: z.string().min(1).max(2048),
@@ -41,6 +68,8 @@ export interface ActionPreviewResponse {
     connected: boolean;
     provider: string;
     workspace: string | null;
+    /** M7: where the page will land (user default or first shared page). */
+    destination: NotionDestination | null;
   };
   title: string;
   summary: string | null;
