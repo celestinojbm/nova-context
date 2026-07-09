@@ -3,6 +3,9 @@ import type { LiveAnswerRequest } from "@nova/schema";
 import type { LiveQaProvider } from "@nova/model-router";
 import type { FastifyInstance } from "fastify";
 import { Jimp, JimpMime } from "jimp";
+import { randomBytes } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../../src/app.js";
@@ -15,8 +18,17 @@ import { createUser, type TestUser } from "./helpers.js";
  * storage (pixel-verified), before live Q&A (provider sees only masked
  * frames), and therefore before export; strict mode and the storage kill
  * switch fail safe; audit carries counts, never values.
+ * Since M8 the storage destination is the media pipeline (moment_media +
+ * encrypted blobs), so "stored image" assertions read through /v1/media.
  */
 const databaseUrl = process.env.DATABASE_URL;
+
+const KEY_HEX = randomBytes(32).toString("hex");
+const mediaEnv = () => ({
+  DATABASE_URL: databaseUrl,
+  NOVA_ENCRYPTION_KEY: KEY_HEX,
+  NOVA_MEDIA_FS_ROOT: join(tmpdir(), `nova-visual-test-${Date.now()}`),
+});
 
 const EMAIL_BOX = { x0: 110, y0: 40, x1: 210, y1: 60 };
 
@@ -83,7 +95,7 @@ describe.skipIf(!databaseUrl)("M7: visual redaction", () => {
   beforeAll(async () => {
     await migrate(databaseUrl!);
     app = await buildApp({
-      env: loadEnv({ DATABASE_URL: databaseUrl }),
+      env: loadEnv(mediaEnv()),
       ocr,
       liveQa: fakeQa,
     });
@@ -114,11 +126,16 @@ describe.skipIf(!databaseUrl)("M7: visual redaction", () => {
       "SELECT payload, image_redaction FROM context_moments WHERE id = $1",
       [body.id],
     );
-    const stored = rows[0].payload.screenshot_data_url as string;
+    // M8: pixels never land in the payload — they live in moment_media.
+    expect(JSON.stringify(rows[0].payload)).not.toContain("data:image");
+    expect(body.media).toHaveLength(1);
+    const served = await user.inject({ method: "GET", url: body.media[0].url });
+    expect(served.statusCode).toBe(200);
+    const img = await Jimp.fromBuffer(served.rawPayload);
     // Inside the email box → black; outside → white. The unredacted pixels
-    // never reached the database.
-    expect(await pixelAt(stored, 160, 50)).toBe(0x000000ff);
-    expect(await pixelAt(stored, 300, 100)).toBe(0xffffffff);
+    // never reached storage.
+    expect(img.getPixelColor(160, 50)).toBe(0x000000ff);
+    expect(img.getPixelColor(300, 100)).toBe(0xffffffff);
     expect(rows[0].image_redaction.state).toBe("applied");
     expect(rows[0].image_redaction.tally.email).toBe(1);
 
@@ -170,11 +187,17 @@ describe.skipIf(!databaseUrl)("M7: visual redaction", () => {
     });
     const body = res.json();
     expect(body.image_redaction.state).toBe("failed");
+    // M8: the (unmasked, non-strict) image is still kept — encrypted in the
+    // media pipeline with its honest redaction state, never in the payload.
+    expect(body.media).toHaveLength(1);
+    expect(body.media[0].redaction_state).toBe("failed");
     const { rows } = await db.query(
       "SELECT payload FROM context_moments WHERE id = $1",
       [body.id],
     );
-    expect(rows[0].payload.screenshot_data_url).toBeTruthy();
+    expect(JSON.stringify(rows[0].payload)).not.toContain("data:image");
+    const served = await user.inject({ method: "GET", url: body.media[0].url });
+    expect(served.statusCode).toBe(200);
   });
 
   it("captures without an image report state 'none' (text-only mode stores no image)", async () => {
@@ -195,7 +218,7 @@ describe.skipIf(!databaseUrl)("M7: visual redaction", () => {
 
   it("image redaction off (ocr null) stores with state 'skipped'", async () => {
     const offApp = await buildApp({
-      env: loadEnv({ DATABASE_URL: databaseUrl }),
+      env: loadEnv(mediaEnv()),
       ocr: null,
     });
     await offApp.ready();
@@ -295,7 +318,10 @@ describe.skipIf(!databaseUrl)("M7: visual redaction", () => {
     const exported = res.json();
     const moment = exported.moments.find((m: { id: string }) => m.id === created.id);
     expect(moment).toBeTruthy();
-    expect(await pixelAt(moment.payload.screenshot_data_url, 160, 50)).toBe(0x000000ff);
+    // M8: exports carry media as decrypted data URLs alongside the moment.
+    expect(JSON.stringify(moment.payload)).not.toContain("data:image");
+    expect(moment.media).toHaveLength(1);
+    expect(await pixelAt(moment.media[0].data_url, 160, 50)).toBe(0x000000ff);
     expect(moment.image_redaction.state).toBe("applied");
   });
 });

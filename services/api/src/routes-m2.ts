@@ -17,6 +17,7 @@ import { NovaTaskAdapter } from "./adapters/nova-task.js";
 import { NotionAdapter } from "./adapters/notion.js";
 import type { Analytics } from "./analytics.js";
 import type { Queue } from "bullmq";
+import type { MomentMediaRef } from "@nova/schema";
 import type { ActionJob } from "./queue.js";
 
 export interface M2RouteDeps {
@@ -28,6 +29,8 @@ export interface M2RouteDeps {
   analytics: Analytics;
   /** M6: external actions enqueue here on approval; null = no Redis. */
   actionQueue: Queue<ActionJob> | null;
+  /** M8: attach media refs to API-shaped moments. */
+  attachMedia: <T extends { id: string }>(items: T[]) => Promise<Array<T & { media: MomentMediaRef[] }>>;
 }
 
 export function buildAdapterRegistry(): AdapterRegistry {
@@ -38,7 +41,7 @@ export function buildAdapterRegistry(): AdapterRegistry {
 }
 
 export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void {
-  const { db, embedder, momentColumns, momentColumnsPrefixed, analytics, actionQueue } = deps;
+  const { db, embedder, momentColumns, momentColumnsPrefixed, analytics, actionQueue, attachMedia } = deps;
   const rowToMoment = deps.rowToMoment as (row: unknown) => ContextMoment;
   const registry = buildAdapterRegistry();
 
@@ -80,6 +83,15 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
     }
     if (input.enrichment_status) {
       conditions.push(`m.enrichment_status = $${addParam(input.enrichment_status)}`);
+    }
+    // M8: media filters.
+    if (input.has_media === true) {
+      conditions.push(`EXISTS (SELECT 1 FROM moment_media mm WHERE mm.moment_id = m.id)`);
+    } else if (input.has_media === false) {
+      conditions.push(`NOT EXISTS (SELECT 1 FROM moment_media mm WHERE mm.moment_id = m.id)`);
+    }
+    if (input.image_redaction_state) {
+      conditions.push(`m.image_redaction->>'state' = $${addParam(input.image_redaction_state)}`);
     }
     const where = conditions.join(" AND ");
     const query = input.query?.trim() || null;
@@ -138,7 +150,7 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
       }
     }
 
-    let items: MemorySearchResult[];
+    let items: Array<MemorySearchResult & { media?: MomentMediaRef[] }>;
     if (query) {
       const scored = [...byId.values()];
       const maxFts = Math.max(...scored.map((s) => s.fts ?? 0), 1e-9);
@@ -175,6 +187,7 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
       }));
     }
 
+    items = await attachMedia(items);
     analytics.track(userId, "search_performed", {
       has_query: Boolean(query),
       results: items.length,
@@ -489,7 +502,7 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
         description: project.description,
         created_at: project.created_at.toISOString(),
       },
-      moments: moments.rows.map((row) => rowToMoment(row)),
+      moments: await attachMedia(moments.rows.map((row) => rowToMoment(row))),
       tasks: tasks.rows.map((t) => ({
         ...t,
         created_at: t.created_at.toISOString(),

@@ -279,3 +279,85 @@ one statement wide. Notion tokens don't expire but can be revoked
 workspace-side — that surfaces as a terminal 4xx failure on the next
 execution. A saved destination the user later un-shares fails the action
 with a clear provider error.
+
+## Media pipeline (M8 — implemented)
+
+Screenshots and live frames no longer live inside `context_moments.payload`
+JSONB. `moment_media` is the source of truth for captured pixels; blobs are
+encrypted and written to object storage; the payload keeps everything else.
+
+**Pipeline order (unchanged, enforced in code).** capture → text redaction
+→ visual redaction (M7 OCR-box masking) → media encryption + object
+storage → DB reference (`moment_media` row) → enrichment / search / export
+/ adapters. Redaction always happens BEFORE bytes touch storage; nothing
+downstream ever sees unmasked pixels. M7's fail-safes carry over intact:
+strict-mode redaction failure blocks the image (`blocked_strict`),
+`NOVA_SCREENSHOT_STORAGE=off` strips it (`storage_disabled`), and live
+frames that fail redaction are dropped, all before the storage step.
+
+**Object storage abstraction.** A three-method `ObjectStore` interface
+(`put`/`get`/`delete`) with two implementations: `FsObjectStore` (default,
+`NOVA_MEDIA_FS_ROOT`, local-first — no external service needed) and
+`S3ObjectStore` (any S3-compatible endpoint: AWS S3, MinIO, Cloudflare R2;
+`forcePathStyle` for MinIO). No provider-specific behavior leaks past the
+interface, so swapping backends is an env change. `infra/docker-compose.dev.yml`
+ships an optional MinIO under the `media-s3` profile.
+
+**Encryption at rest.** Every blob (full image and thumbnail) is sealed
+with AES-256-GCM (`@nova/context-engine/secret-box` byte API, same
+`NOVA_ENCRYPTION_KEY` and `[ver][iv][tag][ct]` layout as integration
+tokens, random nonce per blob). The object store NEVER sees plaintext —
+encryption happens in the API process, so a compromised bucket or disk
+yields ciphertext only. Fail-closed: without the key the media pipeline is
+unavailable — capture still succeeds but images are DROPPED (state
+`media_unavailable`), never stored unencrypted; `/v1/media/*` answers 503;
+production refuses to boot without the key at all.
+*Key rotation strategy:* the leading version byte is the rotation hook.
+Rotation = introduce key v2, decrypt-with-v1/re-encrypt-with-v2 over
+`moment_media.storage_key` rows (an offline sweep like the backfill
+command), bump the version byte per blob as it is rewritten, drop v1 when
+no rows remain. Documented here as the strategy; the sweep tool ships when
+a second key exists.
+
+**Media access.** `GET /v1/media/:id?variant=full|thumb` is the ONLY read
+path: authenticated, strictly user-scoped (someone else's id and an
+unknown id are the same 404), and PROXIED — the API decrypts per request
+and streams the bytes with `cache-control: private`. No public objects, no
+signed URLs: nothing can outlive a session, be forwarded, or bypass a
+future revocation. Thumbnails (≤320px, generated at capture, encrypted the
+same way) keep the timeline light. Deleting a moment (or a project with
+its moments) deletes the blobs from object storage in the same operation
+and audits the object count; export (`format_version` 2) inlines decrypted
+media as data URLs so the user's export remains complete and portable.
+
+**Search over media (M8 quality pass).** Visual redaction already OCRs
+every image, so the NON-masked words (sensitive boxes excluded) are kept
+as `context_moments.ocr_text` and indexed into the existing tsvector at
+weight C. Screenshots become findable by their visible safe text without
+any new privacy surface — masked content never reaches the index. Search
+gains two filters: `has_media` and `image_redaction_state`. A golden
+fixture suite pins expected top hits, media-derived retrieval, and filter
+behavior.
+
+**Legacy backfill (manual, safe).** Pre-M8 rows with inline
+`data:image/*` payloads are migrated by the operator command
+`pnpm --filter @nova/api media:backfill` (idempotent, audited as
+`media.backfill`). Policy: rows whose `image_redaction.state` is
+`applied` were provably masked at capture and move as-is; anything else is
+re-redacted NOW and only the masked output is stored — if OCR is off or
+fails, the row is SKIPPED and left exactly as it was. Unredacted legacy
+pixels can never reach object storage; re-run after fixing OCR to pick up
+strays.
+
+**Notion media (deferred to M9 — interface ready).** The media pipeline
+now exposes everything a future Notion upload needs (per-media redaction
+state, decrypted export access, stable ids); actually uploading
+screenshots to Notion remains OUT — M7's no-screenshot policy stands until
+M9 designs explicit per-action consent for it.
+
+**Known limitations.** Blob writes are not transactional with the DB row —
+a crash mid-store can orphan a blob (never the reverse: the row is written
+after the bytes land), and orphans are invisible ciphertext pending a
+cleanup sweep. Media failures at capture never fail the capture itself
+(the moment is stored without media). The fs backend has no built-in
+replication — production should prefer the s3 backend.

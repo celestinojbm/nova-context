@@ -89,11 +89,36 @@ export type CreateContextMomentRequest = z.input<
  * (server-side screenshot kill switch stripped the image). Tally counts
  * by type only — never values. */
 export const imageRedactionReportSchema = z.object({
-  state: z.enum(["applied", "none", "skipped", "failed", "blocked_strict", "storage_disabled"]),
+  state: z.enum([
+    "applied",
+    "none",
+    "skipped",
+    "failed",
+    "blocked_strict",
+    "storage_disabled",
+    // M8: the media pipeline is unavailable (no encryption key/store) —
+    // images are stripped rather than stored outside the pipeline.
+    "media_unavailable",
+  ]),
   masked: z.number().int().min(0).default(0),
   tally: z.record(z.number().int()).default({}),
 });
 export type ImageRedactionReport = z.infer<typeof imageRedactionReportSchema>;
+
+/** M8: reference to media stored in the pipeline (moment_media + encrypted
+ * object storage). URLs are authenticated API routes, never public. */
+export interface MomentMediaRef {
+  id: string;
+  kind: string; // 'screenshot' | 'frame' | ...
+  content_type: string;
+  bytes: number | null;
+  width: number | null;
+  height: number | null;
+  /** Visual-redaction outcome this media was stored under. */
+  redaction_state: string;
+  url: string;
+  thumbnail_url: string | null;
+}
 
 export const contextMomentSchema = z.object({
   id: z.string().uuid(),
@@ -115,6 +140,11 @@ export const contextMomentSchema = z.object({
   // M7: visual-redaction report (empty object for pre-M7 rows).
   image_redaction: imageRedactionReportSchema.partial().optional(),
 });
+// Note: API responses attach `media: MomentMediaRef[]` alongside the row
+// columns; declared separately to keep the DB row schema exact.
+export type ContextMomentWithMedia = z.infer<typeof contextMomentSchema> & {
+  media?: MomentMediaRef[];
+};
 export type ContextMoment = z.infer<typeof contextMomentSchema>;
 
 export const createContextMomentResponseSchema = contextMomentSchema
@@ -142,6 +172,8 @@ export const createContextMomentResponseSchema = contextMomentSchema
       .nullable(),
     // M7: what visual redaction did to this capture (counts only).
     image_redaction: imageRedactionReportSchema,
+    // M8: media stored through the pipeline for this capture.
+    media: z.array(z.custom<MomentMediaRef>()).default([]),
   });
 export type CreateContextMomentResponse = z.infer<
   typeof createContextMomentResponseSchema

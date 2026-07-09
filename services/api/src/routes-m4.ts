@@ -3,10 +3,13 @@ import { requireAuth } from "./auth/plugin.js";
 import type pg from "pg";
 import { z } from "zod";
 import { Analytics, productEventRequestSchema } from "./analytics.js";
+import type { MediaService } from "./media/media-service.js";
 
 export interface M4RouteDeps {
   db: pg.Pool;
   analytics: Analytics;
+  /** M8: media pipeline (null = unavailable). */
+  media: MediaService | null;
 }
 
 /** Friendly explanations for the audit page. Anything not listed renders
@@ -43,10 +46,11 @@ export const AUDIT_EVENT_LABELS: Record<string, string> = {
   "auth.password.change": "Password changed (other sessions signed out)",
   "auth.password.reset": "Password reset by operator (all sessions signed out)",
   "auth.sessions.revoke_all": "All other sessions signed out",
+  "media.backfill": "Legacy screenshot moved into encrypted media storage",
 };
 
 export function registerM4Routes(app: FastifyInstance, deps: M4RouteDeps): void {
-  const { db, analytics } = deps;
+  const { db, analytics, media } = deps;
 
   /**
    * User-visible audit log (M4). detail is payload-free by contract
@@ -160,6 +164,10 @@ export function registerM4Routes(app: FastifyInstance, deps: M4RouteDeps): void 
           )
         ).rows.map((r) => r.id);
         momentCount = momentIds.length;
+        if (momentIds.length && media) {
+          // M8: object cleanup before the rows cascade away.
+          await media.deleteForMoments(userId, momentIds);
+        }
         if (momentIds.length) {
           await client.query(
             `DELETE FROM embeddings WHERE owner_kind = 'moment' AND owner_id = ANY($1::uuid[])`,

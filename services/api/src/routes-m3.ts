@@ -10,6 +10,7 @@ import { requireAuth } from "./auth/plugin.js";
 import { redactFrames } from "./image-redaction.js";
 import type { Analytics } from "./analytics.js";
 import type { OcrEngine } from "@nova/context-engine/visual-redaction";
+import type { MediaService } from "./media/media-service.js";
 import type pg from "pg";
 import { z } from "zod";
 
@@ -19,13 +20,15 @@ export interface M3RouteDeps {
   redactionOn: boolean;
   /** M7: OCR engine for frame masking; null = image redaction off. */
   ocr: OcrEngine | null;
+  /** M8: media pipeline (null = unavailable). */
+  media: MediaService | null;
   momentColumns: string;
   rowToMoment: (row: never) => ContextMoment;
   analytics: Analytics;
 }
 
 export function registerM3Routes(app: FastifyInstance, deps: M3RouteDeps): void {
-  const { db, liveQa, redactionOn, ocr, momentColumns, analytics } = deps;
+  const { db, liveQa, redactionOn, ocr, media, momentColumns, analytics } = deps;
   const rowToMoment = deps.rowToMoment as (row: unknown) => ContextMoment;
 
   /**
@@ -176,16 +179,25 @@ export function registerM3Routes(app: FastifyInstance, deps: M3RouteDeps): void 
       "content-disposition",
       `attachment; filename="nova-context-export-${new Date().toISOString().slice(0, 10)}.json"`,
     );
+    // M8: media rides along as redacted data URLs + metadata — the user's
+    // data leaves whole, and ONLY the redacted form exists to export.
+    const momentIds = moments.rows.map((r: { id: string }) => r.id);
+    const mediaMap = media
+      ? await media.exportForMoments(userId, momentIds)
+      : new Map<string, never[]>();
     return {
       exported_at: new Date().toISOString(),
-      format_version: 1,
+      format_version: 2,
       filters: {
         project_id: query.data.project_id ?? null,
         from: query.data.from?.toISOString() ?? null,
         to: query.data.to?.toISOString() ?? null,
       },
       projects: projects.rows,
-      moments: moments.rows.map((row) => rowToMoment(row)),
+      moments: moments.rows.map((row) => ({
+        ...rowToMoment(row),
+        media: mediaMap.get((row as { id: string }).id) ?? [],
+      })),
       tasks: tasks.rows,
       actions: actions.rows,
     };
@@ -208,6 +220,9 @@ export function registerM3Routes(app: FastifyInstance, deps: M3RouteDeps): void 
     );
     const moment = existing.rows[0];
     if (!moment) return reply.code(404).send({ error: "not_found" });
+
+    // M8: blobs first (rows cascade with the moment; objects don't).
+    const mediaObjects = media ? await media.deleteForMoments(userId, [moment.id]) : 0;
 
     const client = await db.connect();
     let deletedTasks = 0;
@@ -240,6 +255,7 @@ export function registerM3Routes(app: FastifyInstance, deps: M3RouteDeps): void 
             url_host: safeHost(moment.source_meta),
             deleted_tasks: deletedTasks,
             deleted_actions: deletedActions,
+            deleted_media_objects: mediaObjects,
           }),
         ],
       );
@@ -251,7 +267,7 @@ export function registerM3Routes(app: FastifyInstance, deps: M3RouteDeps): void 
       client.release();
     }
     analytics.track(userId, "delete_requested", { kind: "moment" });
-    return { deleted: true, tasks: deletedTasks, actions: deletedActions };
+    return { deleted: true, tasks: deletedTasks, actions: deletedActions, media: mediaObjects };
   });
 }
 

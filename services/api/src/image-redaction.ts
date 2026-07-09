@@ -29,6 +29,8 @@ export interface PayloadImageOptions {
 export interface PayloadImageOutcome<T> {
   payload: T;
   report: Required<ImageRedactionReport>;
+  /** M8: non-sensitive OCR text from the images, for search indexing. */
+  ocrText: string | null;
 }
 
 function isImageDataUrl(value: unknown): value is string {
@@ -61,11 +63,12 @@ export async function redactPayloadImages<T>(
   opts: PayloadImageOptions,
 ): Promise<PayloadImageOutcome<T>> {
   const report: Required<ImageRedactionReport> = { state: "none", masked: 0, tally: {} };
+  const ocrChunks: string[] = [];
 
   if (!opts.storageEnabled) {
     const { value, stripped } = stripImages(payload);
     report.state = stripped > 0 ? "storage_disabled" : "none";
-    return { payload: value, report };
+    return { payload: value, report, ocrText: null };
   }
 
   // Collect image locations first so failures can strip them all at once.
@@ -85,6 +88,7 @@ export async function redactPayloadImages<T>(
         for (const [type, n] of Object.entries(result.tally)) {
           report.tally[type] = (report.tally[type] ?? 0) + n;
         }
+        if (result.safeText) ocrChunks.push(result.safeText);
         return result.dataUrl;
       } catch (err) {
         if (!(err instanceof ImageRedactionError)) throw err;
@@ -104,13 +108,14 @@ export async function redactPayloadImages<T>(
   };
 
   let next = (await walk(payload)) as T;
+  const ocrText = ocrChunks.length ? ocrChunks.join("\n").slice(0, 50_000) : null;
   if (seen === 0) {
     report.state = "none";
-    return { payload: next, report };
+    return { payload: next, report, ocrText };
   }
   if (!opts.ocr) {
     report.state = "skipped";
-    return { payload: next, report };
+    return { payload: next, report, ocrText };
   }
   if (failed) {
     if (opts.strict) {
@@ -119,10 +124,39 @@ export async function redactPayloadImages<T>(
     } else {
       report.state = "failed";
     }
-    return { payload: next, report };
+    return { payload: next, report, ocrText };
   }
   report.state = "applied";
-  return { payload: next, report };
+  return { payload: next, report, ocrText };
+}
+
+/** M8: pull every image data URL out of a payload for the media pipeline;
+ * the returned payload carries NO inline images. */
+export function extractPayloadImages<T>(payload: T): {
+  payload: T;
+  images: Array<{ dataUrl: string; kind: "screenshot" | "frame" }>;
+} {
+  const images: Array<{ dataUrl: string; kind: "screenshot" | "frame" }> = [];
+  const walk = (v: unknown, keyHint?: string): unknown => {
+    if (isImageDataUrl(v)) {
+      images.push({
+        dataUrl: v,
+        kind: keyHint === "screenshot_data_url" ? "screenshot" : "frame",
+      });
+      return undefined;
+    }
+    if (Array.isArray(v)) return v.map((x) => walk(x)).filter((x) => x !== undefined);
+    if (v && typeof v === "object") {
+      const out: Record<string, unknown> = {};
+      for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+        const nextVal = walk(val, k);
+        if (nextVal !== undefined) out[k] = nextVal;
+      }
+      return out;
+    }
+    return v;
+  };
+  return { payload: walk(payload) as T, images };
 }
 
 /** Live Q&A frames: mask each; a frame that cannot be redacted is dropped —

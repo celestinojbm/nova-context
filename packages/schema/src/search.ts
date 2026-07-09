@@ -17,6 +17,12 @@ export const memorySearchRequestSchema = z
     action_type: intentActionTypeSchema.optional(),
     priority: intentPrioritySchema.optional(),
     enrichment_status: enrichmentStatusSchema.optional(),
+    // M8: filter by media presence and/or the visual-redaction outcome the
+    // media was stored under.
+    has_media: z.boolean().optional(),
+    image_redaction_state: z
+      .enum(["applied", "failed", "skipped", "blocked_strict", "storage_disabled", "media_unavailable", "none"])
+      .optional(),
     limit: z.number().int().min(1).max(50).default(20),
   })
   .strict();
