@@ -119,17 +119,30 @@ Full detail in [System Architecture](docs/SYSTEM_ARCHITECTURE.md).
 
 ## Project status
 
-**Foundation / documentation phase. Pre-code.**
+**M0 — walking skeleton.** The first full thread works end to end:
 
-This repository currently contains the complete design foundation for Nova Context: the reasoning, the architecture, the platform constraints, the MVP scope, and the build plan. No production code has been written yet — deliberately. The problems Nova takes on (platform capture constraints, privacy architecture, risk-tiered actions, a developer platform) punish improvisation; the documents below are where the expensive mistakes are supposed to happen.
+> Browser extension captures the visible tab → user types an instruction → `POST /v1/context/moments` → Postgres stores the Context Moment → the web timeline displays it.
 
 What exists today:
 
 - 19 foundation documents (indexed below), internally consistent on vocabulary, architecture, and scope.
 - A locked MVP definition ([MVP Scope](docs/MVP_SCOPE.md)) and a sequenced build plan ([Build Plan](docs/BUILD_PLAN.md)).
-- A repository structure specification ([Repo Structure](docs/REPO_STRUCTURE.md)) that code will be scaffolded into next.
+- The M0 monorepo per [Repo Structure](docs/REPO_STRUCTURE.md): `packages/schema` (Zod contracts), `services/api` (Fastify + Postgres/pgvector), `apps/extension` (WXT MV3 side panel), `apps/web` (Next.js timeline), `infra/` (dev compose stack), plus unit and integration tests for the ingestion path.
 
-What does not exist yet: any of the code. If you are reading this looking for something to run, come back after the 30-day prototype milestone in the [Roadmap](docs/ROADMAP.md).
+Deliberately not built yet (per [Build Plan §14](docs/BUILD_PLAN.md)): voice input, AI enrichment, project auto-suggest, Notion, live mode, auth beyond a shared dev token. Those are M1–M3.
+
+### Getting started (M0)
+
+```bash
+pnpm install
+pnpm db:up            # Postgres 16 + pgvector, Redis (Docker)
+pnpm db:migrate       # applies schema + seeds the single dev user
+pnpm --filter @nova/api dev     # API on :3001
+pnpm --filter @nova/web dev     # timeline on :3000
+pnpm --filter @nova/extension build   # then load apps/extension/.output/chrome-mv3 via chrome://extensions → Load unpacked
+```
+
+Tests: `pnpm test` (unit) and `DATABASE_URL=postgres://nova:nova@localhost:5432/nova pnpm test:integration`. Configuration is documented in each workspace's `.env.example`.
 
 Where the MVP starts, in one paragraph: a **Chromium browser extension + local companion service + minimal cloud backend**, single user, English-first. Instant Capture in the browser (visible tab + DOM extract + push-to-talk instruction → Context Moment → project link → action, with Notion as the first integration), bounded Live Context on a tab (rolling 60s buffer, questions answered against it, "save this" promotion), and a Next.js web app for the memory timeline and action review. Everything else — mobile, wake word, marketplace, multi-model consensus, enterprise — is explicitly out until the core loop proves itself. Details and the full not-in-MVP list: [MVP Scope](docs/MVP_SCOPE.md).
 
@@ -202,4 +215,4 @@ Terms used consistently across every document:
 
 ## Contributing and contact
 
-The project is pre-code and the documents are the current work product. Substantive critique of the architecture, the platform-constraint analysis, or the risk register is the most valuable contribution right now — open an issue against the specific document and section. Vocabulary and scope changes must stay consistent across all documents; piecemeal edits that break cross-document consistency will be asked to widen their diff.
+The code is at the M0 walking-skeleton stage and the documents remain the design source of truth. Substantive critique of the architecture, the platform-constraint analysis, or the risk register is as valuable as code right now — open an issue against the specific document and section. Vocabulary and scope changes must stay consistent across all documents; piecemeal edits that break cross-document consistency will be asked to widen their diff.
