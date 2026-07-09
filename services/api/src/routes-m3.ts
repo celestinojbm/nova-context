@@ -6,13 +6,13 @@ import {
   type LiveAnswerResponse,
 } from "@nova/schema";
 import type { FastifyInstance } from "fastify";
+import { requireAuth } from "./auth/plugin.js";
 import type { Analytics } from "./analytics.js";
 import type pg from "pg";
 import { z } from "zod";
 
 export interface M3RouteDeps {
   db: pg.Pool;
-  devUserId: () => Promise<string>;
   liveQa: LiveQaProvider | null;
   redactionOn: boolean;
   momentColumns: string;
@@ -21,7 +21,7 @@ export interface M3RouteDeps {
 }
 
 export function registerM3Routes(app: FastifyInstance, deps: M3RouteDeps): void {
-  const { db, devUserId, liveQa, redactionOn, momentColumns, analytics } = deps;
+  const { db, liveQa, redactionOn, momentColumns, analytics } = deps;
   const rowToMoment = deps.rowToMoment as (row: unknown) => ContextMoment;
 
   /**
@@ -48,7 +48,7 @@ export function registerM3Routes(app: FastifyInstance, deps: M3RouteDeps): void 
         })),
       });
     }
-    const userId = await devUserId();
+    const userId = requireAuth(req).userId;
     // Redact all text legs of the context (frames are visual — see docs:
     // image redaction is a known v0 gap, disclosed in the extension UI).
     const request = redactionOn
@@ -104,7 +104,7 @@ export function registerM3Routes(app: FastifyInstance, deps: M3RouteDeps): void 
       })
       .safeParse(req.query);
     if (!query.success) return reply.code(400).send({ error: "invalid_request" });
-    const userId = await devUserId();
+    const userId = requireAuth(req).userId;
 
     const momentConditions = ["user_id = $1"];
     const momentParams: unknown[] = [userId];
@@ -187,7 +187,7 @@ export function registerM3Routes(app: FastifyInstance, deps: M3RouteDeps): void 
   app.delete("/v1/context/moments/:id", async (req, reply) => {
     const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
     if (!params.success) return reply.code(404).send({ error: "not_found" });
-    const userId = await devUserId();
+    const userId = requireAuth(req).userId;
 
     const existing = await db.query<{ id: string; source_meta: Record<string, unknown> }>(
       `SELECT id, source_meta FROM context_moments WHERE id = $1 AND user_id = $2`,

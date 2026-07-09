@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../../src/app.js";
 import { migrate } from "../../src/db/migrate.js";
 import { loadEnv } from "../../src/env.js";
+import { loginAsDevUser, type AuthedInject } from "./helpers.js";
 
 /**
  * Integration tests for the ingestion path: POST a Context Moment against a
@@ -14,11 +15,14 @@ const databaseUrl = process.env.DATABASE_URL;
 
 describe.skipIf(!databaseUrl)("ingestion path (integration)", () => {
   let app: FastifyInstance;
+  let inject: AuthedInject;
 
   beforeAll(async () => {
     await migrate(databaseUrl!);
     app = await buildApp({ env: loadEnv({ DATABASE_URL: databaseUrl }) });
     await app.ready();
+    const dev = await loginAsDevUser(app, databaseUrl!);
+    inject = dev.inject;
   });
 
   afterAll(async () => {
@@ -44,7 +48,7 @@ describe.skipIf(!databaseUrl)("ingestion path (integration)", () => {
   };
 
   it("stores a capture and returns 201 with the contract shape", async () => {
-    const res = await app.inject({
+    const res = await inject({
       method: "POST",
       url: "/v1/context/moments",
       payload: captureBody,
@@ -60,14 +64,14 @@ describe.skipIf(!databaseUrl)("ingestion path (integration)", () => {
 
   it("round-trips: stored moment is retrievable by id with full payload", async () => {
     const created = (
-      await app.inject({
+      await inject({
         method: "POST",
         url: "/v1/context/moments",
         payload: captureBody,
       })
     ).json();
 
-    const res = await app.inject({
+    const res = await inject({
       method: "GET",
       url: `/v1/context/moments/${created.id}`,
     });
@@ -80,14 +84,14 @@ describe.skipIf(!databaseUrl)("ingestion path (integration)", () => {
 
   it("lists moments newest-first and includes the new capture", async () => {
     const created = (
-      await app.inject({
+      await inject({
         method: "POST",
         url: "/v1/context/moments",
         payload: captureBody,
       })
     ).json();
 
-    const res = await app.inject({ method: "GET", url: "/v1/context/moments" });
+    const res = await inject({ method: "GET", url: "/v1/context/moments" });
     expect(res.statusCode).toBe(200);
     const { items } = res.json();
     expect(items.length).toBeGreaterThan(0);
@@ -100,14 +104,14 @@ describe.skipIf(!databaseUrl)("ingestion path (integration)", () => {
 
   it("links a capture to a project when project_id is valid", async () => {
     const projects = (
-      await app.inject({ method: "GET", url: "/v1/projects" })
+      await inject({ method: "GET", url: "/v1/projects" })
     ).json();
     const inbox = projects.items.find(
       (p: { name: string }) => p.name === "Inbox",
     );
     expect(inbox).toBeDefined();
 
-    const res = await app.inject({
+    const res = await inject({
       method: "POST",
       url: "/v1/context/moments",
       payload: { ...captureBody, project_id: inbox.id },
@@ -117,7 +121,7 @@ describe.skipIf(!databaseUrl)("ingestion path (integration)", () => {
   });
 
   it("rejects an unknown project_id", async () => {
-    const res = await app.inject({
+    const res = await inject({
       method: "POST",
       url: "/v1/context/moments",
       payload: {
@@ -130,7 +134,7 @@ describe.skipIf(!databaseUrl)("ingestion path (integration)", () => {
   });
 
   it("rejects an invalid body with field-level issues", async () => {
-    const res = await app.inject({
+    const res = await inject({
       method: "POST",
       url: "/v1/context/moments",
       payload: { source_mode: "ambient_surveillance" },
@@ -140,7 +144,7 @@ describe.skipIf(!databaseUrl)("ingestion path (integration)", () => {
   });
 
   it("404s on a foreign/unknown moment id", async () => {
-    const res = await app.inject({
+    const res = await inject({
       method: "GET",
       url: "/v1/context/moments/00000000-0000-4000-8000-000000000000",
     });
@@ -153,7 +157,7 @@ describe.skipIf(!databaseUrl)("ingestion path (integration)", () => {
     await client.connect();
     try {
       const created = (
-        await app.inject({
+        await inject({
           method: "POST",
           url: "/v1/context/moments",
           payload: captureBody,

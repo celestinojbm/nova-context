@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../../src/app.js";
 import { migrate } from "../../src/db/migrate.js";
 import { loadEnv } from "../../src/env.js";
+import { loginAsDevUser, type AuthedInject } from "./helpers.js";
 
 /**
  * M2 integration tests: fast capture + queue handoff, hybrid search
@@ -19,6 +20,7 @@ const QUEUE = "test-api-enrich";
 
 describe.skipIf(!databaseUrl)("M2: capture queue, search, actions, projects", () => {
   let app: FastifyInstance;
+  let inject: AuthedInject;
   let db: pg.Client;
   let userId: string;
   let inboxId: string;
@@ -32,12 +34,14 @@ describe.skipIf(!databaseUrl)("M2: capture queue, search, actions, projects", ()
       }),
     });
     await app.ready();
+    const dev = await loginAsDevUser(app, databaseUrl!);
+    inject = dev.inject;
     db = new pg.Client({ connectionString: databaseUrl });
     await db.connect();
     userId = (await db.query("SELECT id FROM users WHERE email = 'dev@nova.local'"))
       .rows[0].id;
     const projects = (
-      await app.inject({ method: "GET", url: "/v1/projects" })
+      await inject({ method: "GET", url: "/v1/projects" })
     ).json();
     inboxId = projects.items.find((p: { name: string }) => p.name === "Inbox").id;
   });
@@ -68,7 +72,7 @@ describe.skipIf(!databaseUrl)("M2: capture queue, search, actions, projects", ()
       await queue.obliterate({ force: true });
 
       const started = Date.now();
-      const res = await app.inject({
+      const res = await inject({
         method: "POST",
         url: "/v1/context/moments",
         payload: captureBody(),
@@ -99,17 +103,23 @@ describe.skipIf(!databaseUrl)("M2: capture queue, search, actions, projects", ()
 
   describe("hybrid memory search", () => {
     let quantumId: string;
+    // Unique per run: identical fixtures accumulate across local runs and
+    // FTS ties can push older duplicates past the result cap.
+    const quantumNonce = `flux${Date.now()}`;
 
     beforeAll(async () => {
       quantumId = (
-        await app.inject({
+        await inject({
           method: "POST",
           url: "/v1/context/moments",
-          payload: captureBody({ project_id: inboxId }),
+          payload: captureBody({
+            project_id: inboxId,
+            extracted_text: `Quantum widgets use entangled ${quantumNonce} flux capacitors to reduce latency.`,
+          }),
         })
       ).json().id;
       // A decoy on a different domain / action type / priority.
-      await app.inject({
+      await inject({
         method: "POST",
         url: "/v1/context/moments",
         payload: captureBody({
@@ -124,10 +134,10 @@ describe.skipIf(!databaseUrl)("M2: capture queue, search, actions, projects", ()
     });
 
     it("finds moments by keyword with fts ranking", async () => {
-      const res = await app.inject({
+      const res = await inject({
         method: "POST",
         url: "/v1/memory/search",
-        payload: { query: "quantum flux capacitors" },
+        payload: { query: `quantum ${quantumNonce} capacitors` },
       });
       expect(res.statusCode).toBe(200);
       const body = res.json();
@@ -147,14 +157,14 @@ describe.skipIf(!databaseUrl)("M2: capture queue, search, actions, projects", ()
     });
 
     it("filters by project", async () => {
-      const res = await app.inject({
+      const res = await inject({
         method: "POST",
         url: "/v1/memory/search",
-        payload: { query: "quantum", project_id: inboxId },
+        payload: { query: `quantum ${quantumNonce}`, project_id: inboxId },
       });
       expect(res.json().items.map((m: { id: string }) => m.id)).toContain(quantumId);
 
-      const none = await app.inject({
+      const none = await inject({
         method: "POST",
         url: "/v1/memory/search",
         payload: { query: "pasta carbonara", project_id: inboxId },
@@ -164,7 +174,7 @@ describe.skipIf(!databaseUrl)("M2: capture queue, search, actions, projects", ()
 
     it("filters by domain, action type, and priority without a query", async () => {
       const byDomain = (
-        await app.inject({
+        await inject({
           method: "POST",
           url: "/v1/memory/search",
           payload: { domain: "recipes.example.net" },
@@ -179,7 +189,7 @@ describe.skipIf(!databaseUrl)("M2: capture queue, search, actions, projects", ()
       ).toBe(true);
 
       const byAction = (
-        await app.inject({
+        await inject({
           method: "POST",
           url: "/v1/memory/search",
           payload: { action_type: "create_task", domain: "recipes.example.net" },
@@ -188,7 +198,7 @@ describe.skipIf(!databaseUrl)("M2: capture queue, search, actions, projects", ()
       expect(byAction.items.length).toBeGreaterThan(0);
 
       const byPriority = (
-        await app.inject({
+        await inject({
           method: "POST",
           url: "/v1/memory/search",
           payload: { priority: "high", domain: "recipes.example.net" },
@@ -197,7 +207,7 @@ describe.skipIf(!databaseUrl)("M2: capture queue, search, actions, projects", ()
       expect(byPriority.items.length).toBeGreaterThan(0);
 
       const noHighQuantum = (
-        await app.inject({
+        await inject({
           method: "POST",
           url: "/v1/memory/search",
           payload: { priority: "high", domain: "quantum-widgets.example.org" },
@@ -207,7 +217,7 @@ describe.skipIf(!databaseUrl)("M2: capture queue, search, actions, projects", ()
     });
 
     it("filters by enrichment status", async () => {
-      const res = await app.inject({
+      const res = await inject({
         method: "POST",
         url: "/v1/memory/search",
         payload: {
@@ -219,7 +229,7 @@ describe.skipIf(!databaseUrl)("M2: capture queue, search, actions, projects", ()
     });
 
     it("rejects invalid filters", async () => {
-      const res = await app.inject({
+      const res = await inject({
         method: "POST",
         url: "/v1/memory/search",
         payload: { action_type: "hack_the_planet" },
@@ -243,13 +253,13 @@ describe.skipIf(!databaseUrl)("M2: capture queue, search, actions, projects", ()
 
     it("lists proposed actions", async () => {
       const id = await proposeAction();
-      const res = await app.inject({ method: "GET", url: "/v1/actions?status=proposed" });
+      const res = await inject({ method: "GET", url: "/v1/actions?status=proposed" });
       expect(res.json().items.map((a: { id: string }) => a.id)).toContain(id);
     });
 
     it("approve executes a nova_task: proposed → done, task created, audited", async () => {
       const id = await proposeAction();
-      const res = await app.inject({ method: "POST", url: `/v1/actions/${id}/approve` });
+      const res = await inject({ method: "POST", url: `/v1/actions/${id}/approve` });
       expect(res.statusCode).toBe(200);
       expect(res.json().status).toBe("done");
       expect(res.json().result.task_id).toBeTruthy();
@@ -277,35 +287,32 @@ describe.skipIf(!databaseUrl)("M2: capture queue, search, actions, projects", ()
 
     it("approving twice returns 409 (only proposed can be approved)", async () => {
       const id = await proposeAction();
-      await app.inject({ method: "POST", url: `/v1/actions/${id}/approve` });
-      const second = await app.inject({ method: "POST", url: `/v1/actions/${id}/approve` });
+      await inject({ method: "POST", url: `/v1/actions/${id}/approve` });
+      const second = await inject({ method: "POST", url: `/v1/actions/${id}/approve` });
       expect(second.statusCode).toBe(409);
       expect(second.json().error).toBe("invalid_state");
     });
 
     it("reject transitions proposed → rejected and blocks re-approval", async () => {
       const id = await proposeAction();
-      const res = await app.inject({ method: "POST", url: `/v1/actions/${id}/reject` });
+      const res = await inject({ method: "POST", url: `/v1/actions/${id}/reject` });
       expect(res.json().status).toBe("rejected");
-      const approve = await app.inject({ method: "POST", url: `/v1/actions/${id}/approve` });
+      const approve = await inject({ method: "POST", url: `/v1/actions/${id}/approve` });
       expect(approve.statusCode).toBe(409);
     });
 
-    it("notion_page approval fails cleanly while Notion is not connected", async () => {
+    it("notion_page approval fails cleanly while Notion is not connected (M6: 409, stays proposed)", async () => {
       const id = await proposeAction("notion_page", { title: "Whitepaper notes" });
-      const res = await app.inject({ method: "POST", url: `/v1/actions/${id}/approve` });
-      expect(res.statusCode).toBe(200);
-      expect(res.json().status).toBe("failed");
-      expect(res.json().result.error).toBe("notion_not_connected");
-      const audit = await db.query(
-        `SELECT 1 FROM audit_log WHERE subject_id = $1 AND event_type = 'action.execute.failed'`,
-        [id],
-      );
-      expect(audit.rows).toHaveLength(1);
+      const res = await inject({ method: "POST", url: `/v1/actions/${id}/approve` });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe("notion_not_connected");
+      // Nothing changed: the user can connect Notion and approve later.
+      const status = await db.query("SELECT status FROM actions WHERE id = $1", [id]);
+      expect(status.rows[0].status).toBe("proposed");
     });
 
     it("404s on foreign/unknown action ids", async () => {
-      const res = await app.inject({
+      const res = await inject({
         method: "POST",
         url: "/v1/actions/00000000-0000-4000-8000-000000000000/approve",
       });
@@ -316,7 +323,7 @@ describe.skipIf(!databaseUrl)("M2: capture queue, search, actions, projects", ()
   describe("project detail", () => {
     it("returns moments, tasks, actions, domains, and activity", async () => {
       // Linked capture that also auto-creates a task.
-      await app.inject({
+      await inject({
         method: "POST",
         url: "/v1/context/moments",
         payload: captureBody({
@@ -325,7 +332,7 @@ describe.skipIf(!databaseUrl)("M2: capture queue, search, actions, projects", ()
         }),
       });
 
-      const res = await app.inject({ method: "GET", url: `/v1/projects/${inboxId}` });
+      const res = await inject({ method: "GET", url: `/v1/projects/${inboxId}` });
       expect(res.statusCode).toBe(200);
       const body = res.json();
       expect(body.project.id).toBe(inboxId);
@@ -346,7 +353,7 @@ describe.skipIf(!databaseUrl)("M2: capture queue, search, actions, projects", ()
     });
 
     it("404s on an unknown project", async () => {
-      const res = await app.inject({
+      const res = await inject({
         method: "GET",
         url: "/v1/projects/00000000-0000-4000-8000-000000000000",
       });

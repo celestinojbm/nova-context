@@ -14,7 +14,7 @@ async function deleteMoment(formData: FormData) {
   if (typeof id !== "string") return;
   await fetch(`${API_URL}/v1/context/moments/${id}`, {
     method: "DELETE",
-    headers: authHeaders(),
+    headers: await authHeaders(),
   });
   revalidatePath("/");
 }

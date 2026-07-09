@@ -11,7 +11,7 @@ async function deleteProject(formData: FormData) {
   if (typeof id !== "string") return;
   await fetch(`${API_URL}/v1/projects/${id}?delete_moments=true`, {
     method: "DELETE",
-    headers: authHeaders(),
+    headers: await authHeaders(),
   });
   revalidatePath("/projects");
 }

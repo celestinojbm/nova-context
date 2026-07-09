@@ -11,6 +11,7 @@ import {
   type TranscriptionRouter,
 } from "@nova/model-router";
 import type { FastifyInstance } from "fastify";
+import { requireAuth } from "./auth/plugin.js";
 import type { Analytics } from "./analytics.js";
 import type pg from "pg";
 import { z } from "zod";
@@ -18,14 +19,13 @@ import { suggestProjects } from "@nova/context-engine";
 
 export interface M1RouteDeps {
   db: pg.Pool;
-  devUserId: () => Promise<string>;
   intentRouter: IntentRouter;
   transcriptionRouter: TranscriptionRouter;
   analytics: Analytics;
 }
 
 export function registerM1Routes(app: FastifyInstance, deps: M1RouteDeps): void {
-  const { db, devUserId, intentRouter, transcriptionRouter, analytics } = deps;
+  const { db, intentRouter, transcriptionRouter, analytics } = deps;
 
   /**
    * Voice transcription. Privacy contract: the uploaded audio is held in
@@ -52,7 +52,7 @@ export function registerM1Routes(app: FastifyInstance, deps: M1RouteDeps): void 
     if (!data.length) {
       return reply.code(400).send({ error: "invalid_request", message: "empty audio" });
     }
-    const userId = await devUserId();
+    const userId = requireAuth(req).userId;
     try {
       const result = await transcriptionRouter.transcribe({
         data,
@@ -99,7 +99,7 @@ export function registerM1Routes(app: FastifyInstance, deps: M1RouteDeps): void 
     if (!parsed.success) {
       return reply.code(400).send({ error: "invalid_request" });
     }
-    const userId = await devUserId();
+    const userId = requireAuth(req).userId;
     let projectHint: string | null = null;
     if (parsed.data.intent_text) {
       const { intent } = await intentRouter.parse({ text: parsed.data.intent_text });
@@ -123,7 +123,7 @@ export function registerM1Routes(app: FastifyInstance, deps: M1RouteDeps): void 
     if (!query.success) {
       return reply.code(400).send({ error: "invalid_request" });
     }
-    const userId = await devUserId();
+    const userId = requireAuth(req).userId;
     const conditions = ["t.user_id = $1"];
     const params: unknown[] = [userId];
     if (query.data.status) {
@@ -163,7 +163,7 @@ export function registerM1Routes(app: FastifyInstance, deps: M1RouteDeps): void 
     if (!params.success || !body.success) {
       return reply.code(400).send({ error: "invalid_request" });
     }
-    const userId = await devUserId();
+    const userId = requireAuth(req).userId;
     const { rows } = await db.query(
       `UPDATE tasks
        SET status = $1,

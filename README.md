@@ -119,6 +119,10 @@ Full detail in [System Architecture](docs/SYSTEM_ARCHITECTURE.md).
 
 ## Project status
 
+**M6 — Notion, the first external integration.** Per-user Notion OAuth from web Settings (single-use user-bound state, token stored AES-256-GCM-encrypted, disconnect wipes the ciphertext), and job-based external action execution: approving a `notion_page` action enqueues it (`proposed → queued → executing → done|failed`) for the worker, which creates the page with the owner's decrypted token — idempotent on retry/redelivery (no duplicate pages), fully audited from connect to `external_id`, and the approval card shows the exact content that will be written before you approve. No connection → a clear "connect Notion first" state. `nova_task` stays inline. Details: [docs/AUTH.md](docs/AUTH.md) §Notion.
+
+**M5 — real authentication & per-user isolation.** The hardcoded dev user and the M0 shared token are gone from runtime. Accounts are email + password (scrypt); sessions are opaque, revocable server-side tokens (hash-stored, fixed expiry). The web app keeps the token in an HttpOnly SameSite cookie and forwards it server-side; the extension pairs with a one-time 8-digit code and holds only its own revocable device token, re-prompting on expiry. A centralized fail-closed middleware protects every /v1 route (401 unauthenticated; cross-user access reads as 404), production signups are invite-only by default, and an isolation suite proves User A's moments, search, tasks, actions, audit, exports, and deletes are unreachable from User B. Details: [docs/AUTH.md](docs/AUTH.md).
+
 **M4 — private-alpha hardening.** Not new features — trust. Onboarding + consent gate the extension (capture and live mode blocked until the user reads the disclosures and accepts; reviewable/resettable in Settings). A user-visible **audit log** in the web app shows every capture, live session, cloud call, action decision, deletion, and export — content-free by contract. A **security suite** proves captured page/live content is data, never instructions: it can't execute actions, self-approve, disable redaction, reassign projects, bypass cloud-call gates, tamper with audit, or exfiltrate stored memory. **Visual-redaction safeguards**: a standing warning that text redaction doesn't cover pixels, plus per-capture modes (full / blur / text-only). **Export/delete hardening**: export by project and date range, project deletion, confirmation on destructive deletes. **Privacy-preserving funnel analytics** (allowlisted event names, numeric/short props only, NOVA_ANALYTICS=off switch). And **deploy configs** for a boring three-app Fly.io private alpha (infra/DEPLOY.md).
 
 Every cloud call is opt-in and config-gated: NOVA_LIVE_QA, NOVA_CLOUD_ENRICHMENT, NOVA_REDACTION, NOVA_ANALYTICS, provider keys — documented in each service's .env.example. Notion OAuth remains deferred (adapter prepared and gated).
@@ -128,11 +132,13 @@ Every cloud call is opt-in and config-gated: NOVA_LIVE_QA, NOVA_CLOUD_ENRICHMENT
 ```bash
 pnpm install
 pnpm db:up            # Postgres 16 + pgvector, Redis (Docker)
-pnpm db:migrate       # applies schema + seeds the single dev user
+pnpm db:migrate       # applies schema (+ seed data on first run)
+pnpm --filter @nova/api db:seed-dev   # give dev@nova.local a password (local only; see docs/AUTH.md)
 pnpm --filter @nova/api dev      # API on :3001 (set REDIS_URL to enable enrichment)
 pnpm --filter @nova/worker dev   # enrichment worker (reads services/worker/.env)
-pnpm --filter @nova/web dev      # web app on :3000
+pnpm --filter @nova/web dev      # web app on :3000 — sign in (dev@nova.local / nova-dev-password) or sign up
 pnpm --filter @nova/extension build   # then load apps/extension/.output/chrome-mv3 via chrome://extensions → Load unpacked
+# Connect the extension: web app → Settings → Browser extension → Generate pairing code
 ```
 
 Tests: `pnpm test` (unit) and `DATABASE_URL=postgres://nova:nova@localhost:5432/nova pnpm test:integration`. Configuration is documented in each workspace's `.env.example`.

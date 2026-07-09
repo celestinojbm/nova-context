@@ -2,7 +2,7 @@ import { framesAllowed, LiveBuffer, type CaptureMode } from "@nova/context-engin
 import { LIVE_LIMITS, type LiveAnswerResponse, type LiveQaExchange } from "@nova/schema";
 import type { CreateContextMomentRequest } from "@nova/schema";
 import { extractPageContext, downscaleDataUrl, type PageContext } from "./capture.js";
-import type { ExtensionSettings } from "./api.js";
+import { authFetch, type ExtensionSettings } from "./api.js";
 
 /**
  * Live Context Session controller (M3). Explicit lifecycle: the user starts
@@ -138,12 +138,9 @@ export class LiveSession {
     if (!this.buffer) throw new Error("No active live session.");
     // Fresh frame at question time so the answer sees "now".
     await this.sampleFrame();
-    const res = await fetch(`${settings.apiUrl}/v1/live/answers`, {
+    const res = await authFetch(settings, "/v1/live/answers", {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(settings.apiToken ? { authorization: `Bearer ${settings.apiToken}` } : {}),
-      },
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({
         question,
         context: {

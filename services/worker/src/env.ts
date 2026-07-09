@@ -15,6 +15,11 @@ const envSchema = z.object({
   NOVA_ENRICHMENT_QUEUE: z.string().default("moment-enrichment"),
   // M4: same semantics as the API — 'local' stores product events, 'off' drops.
   NOVA_ANALYTICS: z.enum(["local", "off"]).default("local"),
+  // M6: action-execution queue (approved external actions from the API).
+  NOVA_ACTION_QUEUE: z.string().default("action-execution"),
+  // M6: key for decrypting integration tokens (same value as the API's).
+  // Without it, external actions fail closed with 'encryption_key_missing'.
+  NOVA_ENCRYPTION_KEY: z.string().min(32).optional().or(z.literal("").transform(() => undefined)),
 });
 
 export type WorkerEnv = z.infer<typeof envSchema>;

@@ -28,3 +28,33 @@ export function createEnrichmentQueue(
     },
   });
 }
+
+/**
+ * Action-execution queue (M6). Approved EXTERNAL actions are enqueued here
+ * instead of executing inline in the HTTP request; services/worker consumes
+ * them. jobId = action id, so a duplicate enqueue (double approval race,
+ * client retry) collapses into one job — first line of idempotency.
+ */
+export const ACTION_QUEUE = "action-execution";
+
+export interface ActionJob {
+  actionId: string;
+  userId: string;
+}
+
+export function createActionQueue(
+  redisUrl: string,
+  name: string = ACTION_QUEUE,
+): Queue<ActionJob> {
+  return new Queue<ActionJob>(name, {
+    connection: { url: redisUrl },
+    defaultJobOptions: {
+      // Transient provider failures retry; terminal ones (no connection,
+      // bad payload) throw UnrecoverableError in the worker and stop early.
+      attempts: 3,
+      backoff: { type: "exponential", delay: 3000 },
+      removeOnComplete: { count: 1000 },
+      removeOnFail: { count: 5000 },
+    },
+  });
+}

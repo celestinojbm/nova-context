@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../../src/app.js";
 import { migrate } from "../../src/db/migrate.js";
 import { loadEnv } from "../../src/env.js";
+import { authedInject, loginAsDevUser, type AuthedInject } from "./helpers.js";
 
 /**
  * M4 integration tests: user-visible audit log, analytics allowlist +
@@ -15,6 +16,8 @@ const SECRET_TEXT = "the xylophone launch plan is confidential";
 
 describe.skipIf(!databaseUrl)("M4: audit, analytics, export filters, project delete", () => {
   let app: FastifyInstance;
+  let inject: AuthedInject;
+  let devToken: string;
   let db: pg.Client;
   let userId: string;
 
@@ -22,6 +25,9 @@ describe.skipIf(!databaseUrl)("M4: audit, analytics, export filters, project del
     await migrate(databaseUrl!);
     app = await buildApp({ env: loadEnv({ DATABASE_URL: databaseUrl }), liveQa: null });
     await app.ready();
+    const dev = await loginAsDevUser(app, databaseUrl!);
+    inject = dev.inject;
+    devToken = dev.token;
     db = new pg.Client({ connectionString: databaseUrl });
     await db.connect();
     userId = (await db.query("SELECT id FROM users WHERE email = 'dev@nova.local'"))
@@ -36,7 +42,7 @@ describe.skipIf(!databaseUrl)("M4: audit, analytics, export filters, project del
   describe("audit log endpoint", () => {
     it("lists events with friendly labels and no captured content", async () => {
       const created = (
-        await app.inject({
+        await inject({
           method: "POST",
           url: "/v1/context/moments",
           payload: {
@@ -50,7 +56,7 @@ describe.skipIf(!databaseUrl)("M4: audit, analytics, export filters, project del
       ).json();
       expect(created.id).toBeTruthy();
 
-      const res = await app.inject({ method: "GET", url: "/v1/audit?limit=100" });
+      const res = await inject({ method: "GET", url: "/v1/audit?limit=100" });
       expect(res.statusCode).toBe(200);
       const { items } = res.json();
       expect(items.length).toBeGreaterThan(0);
@@ -63,7 +69,7 @@ describe.skipIf(!databaseUrl)("M4: audit, analytics, export filters, project del
     });
 
     it("filters by event type", async () => {
-      const res = await app.inject({
+      const res = await inject({
         method: "GET",
         url: "/v1/audit?event_type=capture&limit=50",
       });
@@ -77,7 +83,7 @@ describe.skipIf(!databaseUrl)("M4: audit, analytics, export filters, project del
 
   describe("analytics events", () => {
     it("accepts allowlisted client events and audits live-session lifecycle", async () => {
-      const res = await app.inject({
+      const res = await inject({
         method: "POST",
         url: "/v1/events",
         payload: { event: "live_session_started", props: { mode: "text_only" } },
@@ -100,14 +106,14 @@ describe.skipIf(!databaseUrl)("M4: audit, analytics, export filters, project del
     });
 
     it("rejects unknown events and content-sized props", async () => {
-      const unknown = await app.inject({
+      const unknown = await inject({
         method: "POST",
         url: "/v1/events",
         payload: { event: "totally_made_up" },
       });
       expect(unknown.statusCode).toBe(400);
 
-      const oversized = await app.inject({
+      const oversized = await inject({
         method: "POST",
         url: "/v1/events",
         payload: {
@@ -119,7 +125,7 @@ describe.skipIf(!databaseUrl)("M4: audit, analytics, export filters, project del
     });
 
     it("server-side funnel events fire without captured content", async () => {
-      await app.inject({
+      await inject({
         method: "POST",
         url: "/v1/memory/search",
         payload: { query: "xylophone confidential launch" },
@@ -155,7 +161,7 @@ describe.skipIf(!databaseUrl)("M4: audit, analytics, export filters, project del
         const before = (
           await db.query(`SELECT count(*)::int AS n FROM product_events WHERE user_id = $1`, [userId])
         ).rows[0].n;
-        const res = await offApp.inject({
+        const res = await authedInject(offApp, devToken)({
           method: "POST",
           url: "/v1/events",
           payload: { event: "extension_opened" },
@@ -182,7 +188,7 @@ describe.skipIf(!databaseUrl)("M4: audit, analytics, export filters, project del
         [userId],
       );
       projectId = rows[0].id;
-      await app.inject({
+      await inject({
         method: "POST",
         url: "/v1/context/moments",
         payload: {
@@ -196,7 +202,7 @@ describe.skipIf(!databaseUrl)("M4: audit, analytics, export filters, project del
     });
 
     it("exports by project", async () => {
-      const res = await app.inject({
+      const res = await inject({
         method: "GET",
         url: `/v1/export?project_id=${projectId}`,
       });
@@ -208,7 +214,7 @@ describe.skipIf(!databaseUrl)("M4: audit, analytics, export filters, project del
     });
 
     it("exports by date range and audits the export", async () => {
-      const res = await app.inject({
+      const res = await inject({
         method: "GET",
         url: `/v1/export?from=2000-01-01&to=2001-01-01`,
       });
@@ -232,7 +238,7 @@ describe.skipIf(!databaseUrl)("M4: audit, analytics, export filters, project del
       );
       const projectId = rows[0].id;
       const moment = (
-        await app.inject({
+        await inject({
           method: "POST",
           url: "/v1/context/moments",
           payload: {
@@ -247,7 +253,7 @@ describe.skipIf(!databaseUrl)("M4: audit, analytics, export filters, project del
       ).json();
       expect(moment.task).not.toBeNull();
 
-      const res = await app.inject({
+      const res = await inject({
         method: "DELETE",
         url: `/v1/projects/${projectId}?delete_moments=true`,
       });
@@ -255,7 +261,7 @@ describe.skipIf(!databaseUrl)("M4: audit, analytics, export filters, project del
       expect(res.json()).toMatchObject({ deleted: true, moments: 1 });
       expect(res.json().tasks).toBeGreaterThanOrEqual(1);
 
-      const gone = await app.inject({
+      const gone = await inject({
         method: "GET",
         url: `/v1/context/moments/${moment.id}`,
       });
@@ -277,7 +283,7 @@ describe.skipIf(!databaseUrl)("M4: audit, analytics, export filters, project del
       );
       const projectId = rows[0].id;
       const moment = (
-        await app.inject({
+        await inject({
           method: "POST",
           url: "/v1/context/moments",
           payload: {
@@ -290,9 +296,9 @@ describe.skipIf(!databaseUrl)("M4: audit, analytics, export filters, project del
         })
       ).json();
 
-      const res = await app.inject({ method: "DELETE", url: `/v1/projects/${projectId}` });
+      const res = await inject({ method: "DELETE", url: `/v1/projects/${projectId}` });
       expect(res.json().moments).toBe(0);
-      const kept = await app.inject({
+      const kept = await inject({
         method: "GET",
         url: `/v1/context/moments/${moment.id}`,
       });

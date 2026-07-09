@@ -1,11 +1,173 @@
-import { API_URL } from "../lib/api";
+import type {
+  ListIntegrationsResponse,
+  ListSessionsResponse,
+  MeResponse,
+} from "@nova/schema";
+import { revalidatePath } from "next/cache";
+import { ConfirmSubmit } from "../components/ConfirmSubmit";
+import { API_URL, apiGet, authHeaders } from "../lib/api";
+import { PairExtension } from "./PairExtension";
 
 export const dynamic = "force-dynamic";
 
-export default function SettingsPage() {
+async function revokeSession(formData: FormData) {
+  "use server";
+  const id = formData.get("id");
+  if (typeof id !== "string") return;
+  await fetch(`${API_URL}/v1/auth/sessions/${id}`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  revalidatePath("/settings");
+}
+
+async function disconnectNotion() {
+  "use server";
+  await fetch(`${API_URL}/v1/integrations/notion`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  revalidatePath("/settings");
+}
+
+const NOTION_MESSAGES: Record<string, { kind: "ok" | "error"; text: string }> = {
+  connected: { kind: "ok", text: "Notion connected. Approved Notion actions can now execute." },
+  denied: { kind: "error", text: "Notion connection cancelled — no access was granted." },
+  state_invalid: {
+    kind: "error",
+    text: "The connection attempt expired or was invalid. Start again from this page.",
+  },
+  exchange_failed: { kind: "error", text: "Notion rejected the connection. Try again." },
+  not_configured: {
+    kind: "error",
+    text: "Notion is not configured on the API (NOTION_CLIENT_ID / NOTION_CLIENT_SECRET / NOTION_REDIRECT_URI / NOVA_ENCRYPTION_KEY).",
+  },
+  callback_invalid: { kind: "error", text: "Notion returned an incomplete callback. Try again." },
+  api_unreachable: { kind: "error", text: "Could not reach the Nova API." },
+  start_failed: { kind: "error", text: "Could not start the Notion connection. Try again." },
+};
+
+export default async function SettingsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ notion?: string }>;
+}) {
+  const { notion: notionParam } = await searchParams;
+  const notionMessage = notionParam ? (NOTION_MESSAGES[notionParam] ?? null) : null;
+  const [me, sessions, integrations] = await Promise.all([
+    apiGet<MeResponse>("/v1/auth/me"),
+    apiGet<ListSessionsResponse>("/v1/auth/sessions"),
+    apiGet<ListIntegrationsResponse>("/v1/integrations"),
+  ]);
+  const notionConnection = integrations.ok
+    ? integrations.data.items.find((i) => i.provider === "notion" && i.status === "active")
+    : undefined;
+
   return (
     <>
       <h2>Settings & data controls</h2>
+
+      <h3>Account</h3>
+      {me.ok ? (
+        <p className="muted">
+          Signed in as <strong>{me.data.user.email}</strong>
+          {me.data.user.display_name ? ` (${me.data.user.display_name})` : ""}.
+          This session expires{" "}
+          {new Date(me.data.session.expires_at).toLocaleString()}.
+        </p>
+      ) : (
+        <p className="muted">{me.message}</p>
+      )}
+
+      <h3>Integrations</h3>
+      {notionMessage && (
+        <div className={notionMessage.kind === "ok" ? "success" : "error-banner"}>
+          {notionMessage.text}
+        </div>
+      )}
+      <p className="muted">
+        Notion is Nova&apos;s first external integration. Connecting lets{" "}
+        <em>approved</em> Notion actions create pages in your workspace —
+        nothing writes to Notion without your explicit approval, and every
+        step lands in the <a href="/audit">audit log</a>. Your Notion token is
+        stored encrypted and is never shown to the extension or the browser.
+      </p>
+      {notionConnection ? (
+        <div>
+          <p>
+            Notion: <strong>connected</strong>
+            {notionConnection.external_account
+              ? ` to “${notionConnection.external_account}”`
+              : ""}{" "}
+            <span className="muted">
+              (since {new Date(notionConnection.connected_at).toLocaleDateString()})
+            </span>
+          </p>
+          <form action={disconnectNotion}>
+            <ConfirmSubmit message="Disconnect Notion? Pending approved Notion actions will fail until you reconnect.">
+              Disconnect Notion
+            </ConfirmSubmit>
+          </form>
+        </div>
+      ) : (
+        <p>
+          <a className="button-link" href="/integrations/notion/start">
+            Connect Notion
+          </a>
+        </p>
+      )}
+
+      <h3>Browser extension</h3>
+      <p className="muted">
+        Connect the Nova extension to your account with a one-time pairing
+        code. The extension stores only its own revocable session token —
+        never your password.
+      </p>
+      <PairExtension />
+
+      <h3>Sessions & devices</h3>
+      <p className="muted">
+        Every signed-in browser and paired extension. Revoke anything you
+        don&apos;t recognize; revoked sessions stop working immediately.
+      </p>
+      {sessions.ok && sessions.data.items.length > 0 ? (
+        <table className="sessions-table">
+          <thead>
+            <tr>
+              <th>Kind</th>
+              <th>Device</th>
+              <th>Last used</th>
+              <th>Expires</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {sessions.data.items.map((s) => (
+              <tr key={s.id}>
+                <td>
+                  {s.kind === "extension" ? "Extension" : "Web"}
+                  {s.current ? " (this session)" : ""}
+                </td>
+                <td className="muted">{s.label ?? "—"}</td>
+                <td>{new Date(s.last_used_at).toLocaleString()}</td>
+                <td>{new Date(s.expires_at).toLocaleDateString()}</td>
+                <td>
+                  {!s.current && (
+                    <form action={revokeSession}>
+                      <input type="hidden" name="id" value={s.id} />
+                      <button type="submit">Revoke</button>
+                    </form>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="muted">
+          {sessions.ok ? "No active sessions." : sessions.message}
+        </p>
+      )}
 
       <h3>Export</h3>
       <p className="muted">
@@ -14,11 +176,11 @@ export default function SettingsPage() {
         context is yours (docs/FIRST_PRINCIPLES.md: export everything).
       </p>
       <p>
-        <a className="button-link" href={`${API_URL}/v1/export`} download>
+        <a className="button-link" href="/export" download>
           Export all data as JSON
         </a>
       </p>
-      <form className="export-form" action={`${API_URL}/v1/export`} method="get">
+      <form className="export-form" action="/export" method="get">
         <label>
           From <input type="date" name="from" />
         </label>
@@ -35,7 +197,7 @@ export default function SettingsPage() {
       <h3>Audit</h3>
       <p className="muted">
         The <a href="/audit">audit log</a> shows every capture, live session,
-        cloud call, action decision, deletion, and export.
+        cloud call, action decision, sign-in, deletion, and export.
       </p>
 
       <h3>Deletion</h3>

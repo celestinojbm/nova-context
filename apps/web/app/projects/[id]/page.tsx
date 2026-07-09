@@ -1,5 +1,5 @@
 import type { ProjectDetailResponse } from "@nova/schema";
-import { API_URL, apiGet } from "../../lib/api";
+import { apiGet } from "../../lib/api";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +20,7 @@ export default async function ProjectDetailPage({
       <p>
         <a
           className="button-link"
-          href={`${API_URL}/v1/export?project_id=${project.id}`}
+          href={`/export?project_id=${project.id}`}
           download
         >
           Export this project as JSON

@@ -1,11 +1,11 @@
 import type { FastifyInstance } from "fastify";
+import { requireAuth } from "./auth/plugin.js";
 import type pg from "pg";
 import { z } from "zod";
 import { Analytics, productEventRequestSchema } from "./analytics.js";
 
 export interface M4RouteDeps {
   db: pg.Pool;
-  devUserId: () => Promise<string>;
   analytics: Analytics;
 }
 
@@ -28,10 +28,21 @@ export const AUDIT_EVENT_LABELS: Record<string, string> = {
   "moment.delete": "Context Moment deleted (content removed)",
   "project.delete": "Project deleted",
   export: "Data export downloaded",
+  "auth.signup": "Account created",
+  "auth.login": "Signed in",
+  "auth.logout": "Signed out",
+  "auth.session.revoke": "Session revoked by you",
+  "auth.extension.paired": "Browser extension connected",
+  "action.queued": "Action queued for execution",
+  "action.executing": "Action execution started",
+  "notion.connect.start": "Notion connection started",
+  "notion.connect.completed": "Notion connected",
+  "notion.connect.failed": "Notion connection failed",
+  "notion.disconnect": "Notion disconnected",
 };
 
 export function registerM4Routes(app: FastifyInstance, deps: M4RouteDeps): void {
-  const { db, devUserId, analytics } = deps;
+  const { db, analytics } = deps;
 
   /**
    * User-visible audit log (M4). detail is payload-free by contract
@@ -47,7 +58,7 @@ export function registerM4Routes(app: FastifyInstance, deps: M4RouteDeps): void 
       })
       .safeParse(req.query);
     if (!query.success) return reply.code(400).send({ error: "invalid_request" });
-    const userId = await devUserId();
+    const userId = requireAuth(req).userId;
 
     const conditions = ["user_id = $1"];
     const params: unknown[] = [userId];
@@ -87,7 +98,7 @@ export function registerM4Routes(app: FastifyInstance, deps: M4RouteDeps): void 
     if (!parsed.success) {
       return reply.code(400).send({ error: "invalid_event" });
     }
-    const userId = await devUserId();
+    const userId = requireAuth(req).userId;
     analytics.track(userId, parsed.data.event, parsed.data.props);
 
     if (
@@ -121,7 +132,7 @@ export function registerM4Routes(app: FastifyInstance, deps: M4RouteDeps): void 
     if (!params.success || !query.success) {
       return reply.code(404).send({ error: "not_found" });
     }
-    const userId = await devUserId();
+    const userId = requireAuth(req).userId;
     const project = (
       await db.query(
         `SELECT id, name FROM projects WHERE id = $1 AND user_id = $2 AND archived = false`,

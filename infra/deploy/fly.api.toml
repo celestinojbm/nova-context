@@ -12,10 +12,12 @@ app = "nova-context-api" # change to your app name
 
 [env]
   PORT = "3001"
+  NODE_ENV = "production"
   NOVA_REDACTION = "on"
   NOVA_ANALYTICS = "local"
 # Secrets (set via `fly secrets set KEY=...`): DATABASE_URL, REDIS_URL,
-# NOVA_API_TOKEN (recommended in alpha!), OPENAI_API_KEY, ANTHROPIC_API_KEY.
+# NOVA_ALPHA_INVITE_CODE (signup is invite-only in production by default;
+# without a code, signup fails closed), OPENAI_API_KEY, ANTHROPIC_API_KEY.
 
 [http_service]
   internal_port = 3001

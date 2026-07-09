@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../../src/app.js";
 import { migrate } from "../../src/db/migrate.js";
 import { loadEnv } from "../../src/env.js";
+import { loginAsDevUser, type AuthedInject } from "./helpers.js";
 
 /**
  * M3 integration tests: capture-time redaction (storage, audit, enrichment
@@ -24,6 +25,7 @@ const SECRETS = {
 describe.skipIf(!databaseUrl)("M3: redaction, live Q&A, save-from-live, export/delete", () => {
   let db: pg.Client;
   let userId: string;
+  let inject: AuthedInject;
 
   beforeAll(async () => {
     await migrate(databaseUrl!);
@@ -49,6 +51,8 @@ describe.skipIf(!databaseUrl)("M3: redaction, live Q&A, save-from-live, export/d
       liveQa: opts.liveQa ?? null,
     });
     await app.ready();
+    const dev = await loginAsDevUser(app, databaseUrl!);
+    inject = dev.inject;
     return app;
   }
 
@@ -74,7 +78,7 @@ describe.skipIf(!databaseUrl)("M3: redaction, live Q&A, save-from-live, export/d
     it("keeps secrets out of stored payloads, extracted text, and intent", async () => {
       const app = await makeApp({ redaction: "on" });
       try {
-        const res = await app.inject({
+        const res = await inject({
           method: "POST",
           url: "/v1/context/moments",
           payload: secretCapture(),
@@ -107,7 +111,7 @@ describe.skipIf(!databaseUrl)("M3: redaction, live Q&A, save-from-live, export/d
       const app = await makeApp({ redaction: "on" });
       try {
         const created = (
-          await app.inject({
+          await inject({
             method: "POST",
             url: "/v1/context/moments",
             payload: secretCapture(),
@@ -131,7 +135,7 @@ describe.skipIf(!databaseUrl)("M3: redaction, live Q&A, save-from-live, export/d
       const app = await makeApp({ redaction: "off" });
       try {
         const created = (
-          await app.inject({
+          await inject({
             method: "POST",
             url: "/v1/context/moments",
             payload: secretCapture(),
@@ -153,7 +157,7 @@ describe.skipIf(!databaseUrl)("M3: redaction, live Q&A, save-from-live, export/d
     it("returns 503 when no provider is configured", async () => {
       const app = await makeApp({ liveQa: null });
       try {
-        const res = await app.inject({
+        const res = await inject({
           method: "POST",
           url: "/v1/live/answers",
           payload: { question: "what is this?", context: {} },
@@ -181,7 +185,7 @@ describe.skipIf(!databaseUrl)("M3: redaction, live Q&A, save-from-live, export/d
       };
       const app = await makeApp({ liveQa: fake });
       try {
-        const res = await app.inject({
+        const res = await inject({
           method: "POST",
           url: "/v1/live/answers",
           payload: {
@@ -229,7 +233,7 @@ describe.skipIf(!databaseUrl)("M3: redaction, live Q&A, save-from-live, export/d
       };
       const app = await makeApp({ liveQa: fake });
       try {
-        const res = await app.inject({
+        const res = await inject({
           method: "POST",
           url: "/v1/live/answers",
           payload: { question: "what's the price of the enterprise tier?", context: {} },
@@ -247,7 +251,7 @@ describe.skipIf(!databaseUrl)("M3: redaction, live Q&A, save-from-live, export/d
       try {
         const startedAt = new Date(Date.now() - 90_000).toISOString();
         const savedAt = new Date().toISOString();
-        const res = await app.inject({
+        const res = await inject({
           method: "POST",
           url: "/v1/context/moments",
           payload: {
@@ -283,7 +287,7 @@ describe.skipIf(!databaseUrl)("M3: redaction, live Q&A, save-from-live, export/d
         expect(body.intent.action_type).toBe("save_reference");
 
         const moment = (
-          await app.inject({ method: "GET", url: `/v1/context/moments/${body.id}` })
+          await inject({ method: "GET", url: `/v1/context/moments/${body.id}` })
         ).json();
         expect(moment.source_mode).toBe("live_context");
         expect(moment.payload.live_session.frame_count).toBe(7);
@@ -301,7 +305,7 @@ describe.skipIf(!databaseUrl)("M3: redaction, live Q&A, save-from-live, export/d
       const app = await makeApp({});
       try {
         const created = (
-          await app.inject({
+          await inject({
             method: "POST",
             url: "/v1/context/moments",
             payload: {
@@ -314,7 +318,7 @@ describe.skipIf(!databaseUrl)("M3: redaction, live Q&A, save-from-live, export/d
           })
         ).json();
 
-        const res = await app.inject({ method: "GET", url: "/v1/export" });
+        const res = await inject({ method: "GET", url: "/v1/export" });
         expect(res.statusCode).toBe(200);
         expect(res.headers["content-disposition"]).toContain("attachment");
         const body = res.json();
@@ -331,7 +335,7 @@ describe.skipIf(!databaseUrl)("M3: redaction, live Q&A, save-from-live, export/d
       const app = await makeApp({});
       try {
         const created = (
-          await app.inject({
+          await inject({
             method: "POST",
             url: "/v1/context/moments",
             payload: {
@@ -356,7 +360,7 @@ describe.skipIf(!databaseUrl)("M3: redaction, live Q&A, save-from-live, export/d
           [userId, created.id],
         );
 
-        const del = await app.inject({
+        const del = await inject({
           method: "DELETE",
           url: `/v1/context/moments/${created.id}`,
         });
@@ -365,7 +369,7 @@ describe.skipIf(!databaseUrl)("M3: redaction, live Q&A, save-from-live, export/d
         expect(del.json().tasks).toBeGreaterThanOrEqual(1);
         expect(del.json().actions).toBeGreaterThanOrEqual(1);
 
-        const gone = await app.inject({
+        const gone = await inject({
           method: "GET",
           url: `/v1/context/moments/${created.id}`,
         });
@@ -396,7 +400,7 @@ describe.skipIf(!databaseUrl)("M3: redaction, live Q&A, save-from-live, export/d
     it("delete 404s for unknown moments", async () => {
       const app = await makeApp({});
       try {
-        const res = await app.inject({
+        const res = await inject({
           method: "DELETE",
           url: "/v1/context/moments/00000000-0000-4000-8000-000000000000",
         });

@@ -1,14 +1,8 @@
 import type { ListTasksResponse } from "@nova/schema";
 import { revalidatePath } from "next/cache";
+import { API_URL, apiGet, authHeaders } from "../lib/api";
 
 export const dynamic = "force-dynamic";
-
-const API_URL = process.env.NOVA_API_URL ?? "http://localhost:3001";
-const API_TOKEN = process.env.NOVA_API_TOKEN;
-
-function authHeaders(): Record<string, string> {
-  return API_TOKEN ? { authorization: `Bearer ${API_TOKEN}` } : {};
-}
 
 async function toggleTask(formData: FormData) {
   "use server";
@@ -17,32 +11,14 @@ async function toggleTask(formData: FormData) {
   if (typeof id !== "string" || (next !== "open" && next !== "done")) return;
   await fetch(`${API_URL}/v1/tasks/${id}`, {
     method: "PATCH",
-    headers: { "content-type": "application/json", ...authHeaders() },
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
     body: JSON.stringify({ status: next }),
   });
   revalidatePath("/tasks");
 }
 
-async function fetchTasks(): Promise<
-  { ok: true; data: ListTasksResponse } | { ok: false; message: string }
-> {
-  try {
-    const res = await fetch(`${API_URL}/v1/tasks`, {
-      cache: "no-store",
-      headers: authHeaders(),
-    });
-    if (!res.ok) return { ok: false, message: `API responded ${res.status}` };
-    return { ok: true, data: (await res.json()) as ListTasksResponse };
-  } catch {
-    return {
-      ok: false,
-      message: `Could not reach the Nova API at ${API_URL}. Is services/api running?`,
-    };
-  }
-}
-
 export default async function TasksPage() {
-  const result = await fetchTasks();
+  const result = await apiGet<ListTasksResponse>("/v1/tasks");
   if (!result.ok) {
     return <div className="error-banner">{result.message}</div>;
   }

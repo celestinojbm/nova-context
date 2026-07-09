@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../../src/app.js";
 import { migrate } from "../../src/db/migrate.js";
 import { loadEnv } from "../../src/env.js";
+import { loginAsDevUser, type AuthedInject } from "./helpers.js";
 
 /**
  * M1 integration tests: intent parsing on capture, Tier-0 task creation,
@@ -15,6 +16,7 @@ const databaseUrl = process.env.DATABASE_URL;
 
 describe.skipIf(!databaseUrl)("M1: intent, tasks, suggestions (integration)", () => {
   let app: FastifyInstance;
+  let inject: AuthedInject;
   let db: pg.Client;
   let inboxId: string;
 
@@ -24,10 +26,12 @@ describe.skipIf(!databaseUrl)("M1: intent, tasks, suggestions (integration)", ()
       env: loadEnv({ DATABASE_URL: databaseUrl }),
     });
     await app.ready();
+    const dev = await loginAsDevUser(app, databaseUrl!);
+    inject = dev.inject;
     db = new pg.Client({ connectionString: databaseUrl });
     await db.connect();
     const projects = (
-      await app.inject({ method: "GET", url: "/v1/projects" })
+      await inject({ method: "GET", url: "/v1/projects" })
     ).json();
     inboxId = projects.items.find((p: { name: string }) => p.name === "Inbox").id;
   });
@@ -52,7 +56,7 @@ describe.skipIf(!databaseUrl)("M1: intent, tasks, suggestions (integration)", ()
   }
 
   it("parses intent at capture and stores it with the moment", async () => {
-    const res = await app.inject({
+    const res = await inject({
       method: "POST",
       url: "/v1/context/moments",
       payload: captureBody(
@@ -69,14 +73,14 @@ describe.skipIf(!databaseUrl)("M1: intent, tasks, suggestions (integration)", ()
 
     // Round-trip: intent_parsed persisted on the moment.
     const moment = (
-      await app.inject({ method: "GET", url: `/v1/context/moments/${body.id}` })
+      await inject({ method: "GET", url: `/v1/context/moments/${body.id}` })
     ).json();
     expect(moment.intent_parsed.action_type).toBe("create_task");
   });
 
   it("auto-executes a Tier-0 Nova task linked to the moment", async () => {
     const created = (
-      await app.inject({
+      await inject({
         method: "POST",
         url: "/v1/context/moments",
         payload: captureBody("add a task to review this ASAP, it's urgent"),
@@ -84,7 +88,7 @@ describe.skipIf(!databaseUrl)("M1: intent, tasks, suggestions (integration)", ()
     ).json();
     expect(created.task).not.toBeNull();
 
-    const tasks = (await app.inject({ method: "GET", url: "/v1/tasks" })).json();
+    const tasks = (await inject({ method: "GET", url: "/v1/tasks" })).json();
     const task = tasks.items.find((t: { id: string }) => t.id === created.task.id);
     expect(task).toBeDefined();
     expect(task.moment_id).toBe(created.id);
@@ -109,7 +113,7 @@ describe.skipIf(!databaseUrl)("M1: intent, tasks, suggestions (integration)", ()
 
   it("does not create a task for a save-only instruction (M0 path intact)", async () => {
     const created = (
-      await app.inject({
+      await inject({
         method: "POST",
         url: "/v1/context/moments",
         payload: captureBody("remember this for later"),
@@ -121,7 +125,7 @@ describe.skipIf(!databaseUrl)("M1: intent, tasks, suggestions (integration)", ()
 
   it("keeps the M0 contract for captures without any instruction", async () => {
     const created = (
-      await app.inject({
+      await inject({
         method: "POST",
         url: "/v1/context/moments",
         payload: captureBody(null),
@@ -133,7 +137,7 @@ describe.skipIf(!databaseUrl)("M1: intent, tasks, suggestions (integration)", ()
   });
 
   it("suggests a project from the intent's project hint", async () => {
-    const res = await app.inject({
+    const res = await inject({
       method: "POST",
       url: "/v1/projects/suggest",
       payload: { intent_text: "save this for the Inbox project" },
@@ -146,7 +150,7 @@ describe.skipIf(!databaseUrl)("M1: intent, tasks, suggestions (integration)", ()
 
   it("suggests unlinked captures' projects in the create response", async () => {
     const created = (
-      await app.inject({
+      await inject({
         method: "POST",
         url: "/v1/context/moments",
         payload: captureBody("save this for the Inbox project"),
@@ -174,7 +178,7 @@ describe.skipIf(!databaseUrl)("M1: intent, tasks, suggestions (integration)", ()
       ).rows[0].id;
 
     const created = (
-      await app.inject({
+      await inject({
         method: "POST",
         url: "/v1/context/moments",
         // Hint says Inbox; the user links Skunkworks → override.
@@ -197,13 +201,13 @@ describe.skipIf(!databaseUrl)("M1: intent, tasks, suggestions (integration)", ()
 
   it("toggles a task done and back via PATCH", async () => {
     const created = (
-      await app.inject({
+      await inject({
         method: "POST",
         url: "/v1/context/moments",
         payload: captureBody("create a task to file this"),
       })
     ).json();
-    const done = await app.inject({
+    const done = await inject({
       method: "PATCH",
       url: `/v1/tasks/${created.task.id}`,
       payload: { status: "done" },
@@ -211,7 +215,7 @@ describe.skipIf(!databaseUrl)("M1: intent, tasks, suggestions (integration)", ()
     expect(done.statusCode).toBe(200);
     expect(done.json().completed_at).not.toBeNull();
 
-    const reopened = await app.inject({
+    const reopened = await inject({
       method: "PATCH",
       url: `/v1/tasks/${created.task.id}`,
       payload: { status: "open" },
@@ -222,7 +226,7 @@ describe.skipIf(!databaseUrl)("M1: intent, tasks, suggestions (integration)", ()
   it("returns 503 for transcription when no provider is configured", async () => {
     const form = new FormData();
     form.append("audio", new Blob([new Uint8Array(2048)], { type: "audio/webm" }), "voice.webm");
-    const res = await app.inject({
+    const res = await inject({
       method: "POST",
       url: "/v1/transcriptions",
       // @ts-expect-error fastify inject accepts FormData bodies at runtime
