@@ -5,6 +5,7 @@ import type { ContextMoment } from "@nova/schema";
 import type { Analytics } from "./analytics.js";
 import { requireAuth } from "./auth/plugin.js";
 import { verifyPassword } from "./auth/passwords.js";
+import type { RateLimiter } from "./auth/rate-limit.js";
 import { sha256Hex } from "./auth/sessions.js";
 import type { MediaService } from "./media/media-service.js";
 
@@ -14,6 +15,9 @@ export interface AccountRouteDeps {
   analytics: Analytics;
   momentColumns: string;
   rowToMoment: (row: never) => ContextMoment;
+  /** Deletion verifies the password — it is a credential surface and gets
+   * the same limiter as login/password-change. */
+  rateLimiter: RateLimiter;
 }
 
 /**
@@ -33,7 +37,7 @@ export interface AccountRouteDeps {
  * can still remove the (encrypted, unreadable) objects; (3) nothing else.
  */
 export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDeps): void {
-  const { db, media, analytics, momentColumns } = deps;
+  const { db, media, analytics, momentColumns, rateLimiter } = deps;
   const rowToMoment = deps.rowToMoment as (row: unknown) => ContextMoment;
 
   /** Full account export. Everything the account owns, one document;
@@ -105,10 +109,29 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDe
     const momentIds = moments.rows.map((r: { id: string }) => r.id);
     let mediaByMoment: Map<string, unknown[]> = new Map();
     if (media && momentIds.length) {
-      mediaByMoment =
-        query.data.media === "full"
-          ? ((await media.exportForMoments(userId, momentIds)) as unknown as Map<string, unknown[]>)
-          : ((await media.listForMoments(momentIds)) as unknown as Map<string, unknown[]>);
+      if (query.data.media === "full") {
+        // Payload bytes leave ONLY for media whose visual redaction is
+        // provably safe ('applied', or 'none' — image never carried
+        // maskable text). Anything else exports as metadata with an
+        // explicit exclusion reason: unredacted pixels never leave.
+        const SAFE_REDACTION = new Set(["applied", "none"]);
+        const full = await media.exportForMoments(userId, momentIds);
+        mediaByMoment = new Map(
+          [...full.entries()].map(([momentId, items]) => [
+            momentId,
+            items.map((item) =>
+              SAFE_REDACTION.has(item.redaction_state)
+                ? item
+                : { ...item, data_url: null, excluded_reason: "redaction_not_applied" },
+            ),
+          ]),
+        );
+      } else {
+        mediaByMoment = (await media.listForMoments(momentIds)) as unknown as Map<
+          string,
+          unknown[]
+        >;
+      }
     }
 
     await db.query(
@@ -230,6 +253,12 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDe
         message: 'Send your password and confirm: "DELETE".',
       });
     }
+    // Password verification below makes this a credential surface —
+    // rate-limited like login, so deletion cannot double as a brute-force
+    // oracle for the account password.
+    if (!(await rateLimiter.allow(`account-delete:${req.ip}`))) {
+      return reply.code(429).send({ error: "rate_limited" });
+    }
     const { rows } = await db.query<{ email: string; password_hash: string | null }>(
       `SELECT email, password_hash FROM users WHERE id = $1`,
       [auth.userId],
@@ -256,6 +285,17 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDe
       ),
     };
 
+    // 0. Lock the account BEFORE anything destructive: with deleted_at set,
+    //    resolveSession refuses every session from now on (this in-flight
+    //    request already resolved), and the explicit revocation kills the
+    //    tokens even if a crash below leaves rows behind — a partial
+    //    failure leaves an unusable account, never a half-deleted usable one.
+    await db.query(`UPDATE users SET deleted_at = now() WHERE id = $1`, [auth.userId]);
+    await db.query(
+      `UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`,
+      [auth.userId],
+    );
+
     // 1. Media blobs out of object storage. A store failure NEVER blocks
     //    the deletion — the keys tombstone into media_delete_queue (no FK,
     //    survives the account) for `media:cleanup` to finish the job.
@@ -268,6 +308,21 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDe
         )
       ).rows.map((r) => r.moment_id);
       mediaResult = await media.deleteForMoments(auth.userId, momentIds);
+    } else if (!media && counts.media_objects > 0) {
+      // Media pipeline unavailable (no encryption key): blob deletion needs
+      // no key, but the SERVICE is how we reach the store — so tombstone
+      // every key instead of silently leaking the (encrypted) objects.
+      // `media:cleanup` removes them once the pipeline is back.
+      const queued = await db.query(
+        `INSERT INTO media_delete_queue (user_id, storage_key, reason, last_error)
+         SELECT user_id, unnest(array_remove(ARRAY[storage_key, thumb_key], NULL)),
+                'account_delete_no_pipeline', 'media pipeline unavailable at account deletion'
+         FROM moment_media WHERE user_id = $1
+         ON CONFLICT (storage_key) DO UPDATE SET
+           attempts = media_delete_queue.attempts + 1, updated_at = now()`,
+        [auth.userId],
+      );
+      mediaResult = { deleted: 0, queued: queued.rowCount ?? 0 };
     }
 
     // 2. Belt and braces: overwrite token ciphertext before the rows go,

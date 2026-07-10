@@ -456,18 +456,27 @@ enrichment), tasks, actions (incl. external ids), integration connection
 METADATA (the `token_ciphertext` column is never even selected — tokens
 cannot appear in an export in any form), active session metadata, the full
 audit log, product events, and all enrichment versions. `media=refs`
-(default) links media by authenticated URL; `media=full` inlines the
-redacted blobs as data URLs. Only redacted media exists to export. The
-export itself is audited (`export`, scope `account`).
+(default) links media by authenticated URL; `media=full` inlines blobs as
+data URLs ONLY for media whose visual redaction provably ran
+(`redaction_state` 'applied', or 'none' — the image never carried maskable
+text); anything else exports as metadata with
+`excluded_reason: "redaction_not_applied"` — unredacted pixels never leave.
+The export itself is audited (`export`, scope `account`).
 
 **Full account deletion.** `POST /v1/auth/account/delete` requires three
 independent proofs of intent: a WEB session (extension tokens get 403),
 the account password, and the literal confirmation string `"DELETE"`. The
 web UI adds a fourth (native confirm dialog) and recommends exporting
-first. Flow: media blobs are deleted from object storage FIRST (failures
+first. Because it verifies the password, the endpoint is rate-limited like
+login — deletion cannot double as a brute-force oracle. Flow: the account
+is LOCKED first (`users.deleted_at` set + every session revoked, so a
+crash mid-deletion leaves an unusable account, never a half-deleted usable
+one); media blobs are then deleted from object storage (failures
 tombstone into `media_delete_queue`, which survives the account so
 `media:cleanup` can finish the job — the deletion itself never fails on a
-storage outage); integration token ciphertext is overwritten before the
+storage outage; if the media pipeline is down entirely, every key is
+queued instead of silently leaking objects); integration token ciphertext
+is overwritten before the
 rows go; then one transaction writes the tombstone and deletes the user
 row, cascading every table. The dead sessions make all future API use an
 ordinary 401.

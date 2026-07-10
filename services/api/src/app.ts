@@ -268,6 +268,7 @@ export async function buildApp({
     analytics,
     momentColumns: MOMENT_COLUMNS,
     rowToMoment: rowToMoment as (row: never) => ContextMoment,
+    rateLimiter,
   });
 
   app.get("/healthz", async () => {

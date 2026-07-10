@@ -1,4 +1,4 @@
-import { encryptSecret, parseEncryptionKey } from "@nova/context-engine/secret-box";
+import { encryptBytes, encryptSecret, parseEncryptionKey } from "@nova/context-engine/secret-box";
 import type { OcrEngine, OcrWord } from "@nova/context-engine/visual-redaction";
 import type { FastifyInstance } from "fastify";
 import { Jimp, JimpMime } from "jimp";
@@ -394,5 +394,73 @@ describe.skipIf(!databaseUrl)("M10: account data lifecycle", () => {
       payload: { version: 2 },
     });
     expect(foreignSelect.statusCode).toBe(404);
+  });
+
+  it("?media=full never exports unredacted pixels — excluded with a reason", async () => {
+    const user = await createUser(app, `unredacted-${Date.now()}@test.local`);
+    const { momentId } = await seedAccount(user);
+    // A media row whose visual redaction never ran, WITH a real blob — if
+    // the filter failed, the leak would be visible in the export body.
+    const rawPixels = Buffer.from("raw-unredacted-pixels-marker");
+    const badKey = `${user.userId}/${momentId}/unredacted-export-test`;
+    await store.put(badKey, encryptBytes(KEY, rawPixels));
+    await db.query(
+      `INSERT INTO moment_media (moment_id, user_id, kind, storage_key, content_type, redaction_state)
+       VALUES ($1, $2, 'screenshot', $3, 'image/png', 'skipped')`,
+      [momentId, user.userId, badKey],
+    );
+
+    const res = await user.inject({ method: "GET", url: "/v1/export/account?media=full" });
+    expect(res.statusCode).toBe(200);
+    const moment = res.json().moments.find((m: { id: string }) => m.id === momentId);
+    const bad = moment.media.find(
+      (m: { redaction_state: string }) => m.redaction_state === "skipped",
+    );
+    expect(bad.data_url).toBeNull();
+    expect(bad.excluded_reason).toBe("redaction_not_applied");
+    // The provably-redacted one still exports whole.
+    const good = moment.media.find(
+      (m: { redaction_state: string }) => m.redaction_state === "applied",
+    );
+    expect(good.data_url).toContain("data:image/png;base64,");
+    expect(res.body).not.toContain(rawPixels.toString("base64"));
+  });
+
+  it("deletion is rate limited like every other credential surface", async () => {
+    // Dedicated instance with a 1-attempt budget so the limit is observable
+    // without hammering the shared app.
+    const tightApp = await buildApp({
+      env: loadEnv({
+        DATABASE_URL: databaseUrl,
+        NOVA_ENCRYPTION_KEY: KEY_HEX,
+        NOVA_MEDIA_FS_ROOT: fsRoot,
+        NOVA_RATE_LIMIT_MAX: "1",
+      }),
+      ocr: new CleanOcr(),
+      objectStore: store,
+    });
+    await tightApp.ready();
+    try {
+      const user = await createUser(tightApp, `ratelimit-${Date.now()}@test.local`);
+      const first = await user.inject({
+        method: "POST",
+        url: "/v1/auth/account/delete",
+        payload: { password: "wrong-password-guess", confirm: "DELETE" },
+      });
+      expect(first.statusCode).toBe(401); // consumed the only attempt
+      const second = await user.inject({
+        method: "POST",
+        url: "/v1/auth/account/delete",
+        payload: { password: "wrong-password-guess", confirm: "DELETE" },
+      });
+      expect(second.statusCode).toBe(429);
+      // Nothing was deleted by the probing.
+      const { rows } = await db.query(`SELECT deleted_at FROM users WHERE id = $1`, [
+        user.userId,
+      ]);
+      expect(rows[0].deleted_at).toBeNull();
+    } finally {
+      await tightApp.close();
+    }
   });
 });
