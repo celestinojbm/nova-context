@@ -34,6 +34,7 @@ import { extractPayloadImages, redactPayloadImages } from "./image-redaction.js"
 import { MediaService } from "./media/media-service.js";
 import { storeFromEnv, type ObjectStore } from "./media/object-store.js";
 import { registerAccountRoutes } from "./routes-account.js";
+import { registerFeedbackRoutes } from "./routes-feedback.js";
 import { registerOpsRoutes } from "./routes-ops.js";
 import { registerMediaRoutes } from "./routes-media.js";
 import { TesseractOcrEngine } from "./ocr.js";
@@ -149,6 +150,9 @@ export async function buildApp({
     },
     // Screenshot data URLs ride in the JSON body; default 1MB is too small.
     bodyLimit: 4 * 1024 * 1024,
+    // M13 guardrail: no request may hang forever (OCR + live Q&A budgets
+    // fit comfortably; a wedged upstream fails loudly instead of piling up).
+    requestTimeout: env.NOVA_REQUEST_TIMEOUT_MS,
   });
   app.addHook("onSend", async (req, reply) => {
     reply.header("x-request-id", req.id);
@@ -345,6 +349,8 @@ export async function buildApp({
     rowToMoment: rowToMoment as (row: never) => ContextMoment,
     rateLimiter,
   });
+  // M13: private-alpha feedback intake.
+  registerFeedbackRoutes(app, { db, analytics, rateLimiter });
 
   app.get("/healthz", async () => {
     await db.query("SELECT 1");
@@ -553,6 +559,7 @@ export async function buildApp({
         ],
       );
       task = taskRow.rows[0]!;
+      analytics.track(userId, "task_created", { tier: 0, priority: intent.priority_guess });
       await db.query(
         `UPDATE actions SET result = $1, updated_at = now() WHERE id = $2`,
         [JSON.stringify({ task_id: task.id }), actionId],

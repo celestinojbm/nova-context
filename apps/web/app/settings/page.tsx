@@ -122,6 +122,24 @@ async function deleteAccount(formData: FormData) {
   redirect("/login?deleted=1");
 }
 
+async function submitFeedback(formData: FormData) {
+  "use server";
+  const category = formData.get("category");
+  const message = formData.get("message");
+  if (typeof category !== "string" || typeof message !== "string") {
+    redirect("/settings?feedback=invalid");
+  }
+  const res = await fetch(`${API_URL}/v1/feedback`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ category, message }),
+    cache: "no-store",
+  });
+  if (res.status === 400) redirect("/settings?feedback=invalid");
+  if (!res.ok) redirect("/settings?feedback=failed");
+  redirect("/settings?feedback=sent");
+}
+
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
@@ -181,15 +199,30 @@ const ACCOUNT_MESSAGES: Record<string, { kind: "ok" | "error"; text: string }> =
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ notion?: string; pw?: string; mapping?: string; account?: string }>;
+  searchParams: Promise<{
+    notion?: string;
+    pw?: string;
+    mapping?: string;
+    account?: string;
+    feedback?: string;
+  }>;
 }) {
   const {
     notion: notionParam,
     pw: pwParam,
     mapping: mappingParam,
     account: accountParam,
+    feedback: feedbackParam,
   } = await searchParams;
   const accountMessage = accountParam ? (ACCOUNT_MESSAGES[accountParam] ?? null) : null;
+  const feedbackMessage =
+    feedbackParam === "sent"
+      ? { ok: true, text: "Thanks — feedback recorded." }
+      : feedbackParam === "invalid"
+        ? { ok: false, text: "Feedback not sent — text only (no pasted screenshots), 3–4000 characters." }
+        : feedbackParam === "failed"
+          ? { ok: false, text: "Feedback could not be saved — try again." }
+          : null;
   const notionMessage = notionParam ? (NOTION_MESSAGES[notionParam] ?? null) : null;
   const passwordMessage = pwParam ? (PASSWORD_MESSAGES[pwParam] ?? null) : null;
   const mappingMessage = mappingParam ? (MAPPING_MESSAGES[mappingParam] ?? null) : null;
@@ -560,6 +593,46 @@ export default async function SettingsPage({
           </ConfirmSubmit>
         </form>
       </details>
+
+      <h3>Report a problem</h3>
+      <p className="muted">
+        Alpha feedback goes straight to the operator. Text only — please
+        don&apos;t paste screenshots or captured content; describe what
+        happened instead. See the{" "}
+        <a
+          href="https://github.com/celestinojbm/nova-context/blob/main/docs/ALPHA_GUIDE.md"
+          target="_blank"
+          rel="noreferrer"
+        >
+          alpha guide
+        </a>{" "}
+        for what Nova captures and how to export or delete your data.
+      </p>
+      {feedbackMessage && (
+        <div className={feedbackMessage.ok ? "success-banner" : "error-banner"}>
+          {feedbackMessage.text}
+        </div>
+      )}
+      <form action={submitFeedback} className="auth-form">
+        <label>
+          Category
+          <select name="category" defaultValue="bug">
+            <option value="bug">Bug</option>
+            <option value="privacy">Privacy concern</option>
+            <option value="capture_failure">Capture failed</option>
+            <option value="search_failure">Search didn&apos;t find it</option>
+            <option value="live_failure">Live context problem</option>
+            <option value="notion_failure">Notion problem</option>
+            <option value="ux">UX friction</option>
+            <option value="feature">Feature request</option>
+          </select>
+        </label>
+        <label>
+          What happened?
+          <textarea name="message" rows={4} maxLength={4000} required />
+        </label>
+        <button type="submit">Send feedback</button>
+      </form>
 
       <h3>Privacy status</h3>
       <ul className="muted">

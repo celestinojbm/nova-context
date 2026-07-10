@@ -95,4 +95,29 @@ describe("loadEnv", () => {
   it("coerces PORT from string", () => {
     expect(loadEnv({ PORT: "8080" }).PORT).toBe(8080);
   });
+
+  // M13: unsafe production settings fail closed unless acknowledged.
+  it("refuses redaction=off in production without explicit acknowledgement", () => {
+    const base = { NODE_ENV: "production", NOVA_ENCRYPTION_KEY: "a".repeat(64) };
+    expect(() => loadEnv({ ...base, NOVA_REDACTION: "off" })).toThrow(
+      /NOVA_ALLOW_UNSAFE_REDACTION/,
+    );
+    expect(() => loadEnv({ ...base, NOVA_IMAGE_REDACTION: "off" })).toThrow(
+      /NOVA_ALLOW_UNSAFE_REDACTION/,
+    );
+    // Explicit acknowledgement boots (the operator made a named decision).
+    expect(
+      loadEnv({ ...base, NOVA_REDACTION: "off", NOVA_ALLOW_UNSAFE_REDACTION: "yes" })
+        .NOVA_REDACTION,
+    ).toBe("off");
+    // Development stays permissive (tests and local experiments).
+    expect(loadEnv({ NOVA_REDACTION: "off" }).NOVA_REDACTION).toBe("off");
+  });
+
+  it("M13 guardrail defaults: request timeout and media warn threshold", () => {
+    const env = loadEnv({});
+    expect(env.NOVA_REQUEST_TIMEOUT_MS).toBe(60_000);
+    expect(env.NOVA_MEDIA_WARN_MB).toBe(1024);
+    expect(loadEnv({ NOVA_MEDIA_WARN_MB: "5" }).NOVA_MEDIA_WARN_MB).toBe(5);
+  });
 });

@@ -94,6 +94,13 @@ const envSchema = z.object({
   // M4: funnel analytics. 'local' stores allowlisted product events in
   // Postgres (never captured content); 'off' drops them.
   NOVA_ANALYTICS: z.enum(["local", "off"]).default("local"),
+  // M13: running production with redaction disabled stores captures
+  // verbatim — refuse to boot unless the operator explicitly acknowledges.
+  NOVA_ALLOW_UNSAFE_REDACTION: z.enum(["yes"]).optional(),
+  // M13 reliability guardrails: hard cap on request duration and a media
+  // storage total (MB) above which /status and ops:report raise a warning.
+  NOVA_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+  NOVA_MEDIA_WARN_MB: z.coerce.number().int().positive().default(1024),
 });
 
 export type Env = z.infer<typeof envSchema> & {
@@ -144,6 +151,17 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     // OAuth codes must never transit plaintext HTTP in production.
     throw new Error(
       "Invalid environment configuration: NOTION_REDIRECT_URI must be https:// in production",
+    );
+  }
+  if (
+    isProduction &&
+    (parsed.data.NOVA_REDACTION === "off" || parsed.data.NOVA_IMAGE_REDACTION === "off") &&
+    parsed.data.NOVA_ALLOW_UNSAFE_REDACTION !== "yes"
+  ) {
+    // M13: fail closed on unsafe production settings. Disabling redaction
+    // stores captures verbatim; that must be a deliberate, named decision.
+    throw new Error(
+      "Invalid environment configuration: NOVA_REDACTION/NOVA_IMAGE_REDACTION=off in production requires NOVA_ALLOW_UNSAFE_REDACTION=yes",
     );
   }
   if (signupMode === "invite" && !parsed.data.NOVA_ALPHA_INVITE_CODE && !isProduction) {

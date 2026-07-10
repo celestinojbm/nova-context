@@ -26,9 +26,11 @@ app = "nova-context-api" # change to your app name
   auto_start_machines = true
   min_machines_running = 0
 
+  # M13: gate on readiness (DB + migrations + Redis + media-store probe),
+  # not just liveness — a deploy takes traffic only when it can serve it.
   [[http_service.checks]]
     interval = "15s"
     timeout = "5s"
     grace_period = "10s"
     method = "GET"
-    path = "/healthz"
+    path = "/readyz"

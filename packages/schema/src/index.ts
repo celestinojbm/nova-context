@@ -8,3 +8,4 @@ export * from "./project.js";
 export * from "./live.js";
 export * from "./auth.js";
 export * from "./integration.js";
+export * from "./feedback.js";
