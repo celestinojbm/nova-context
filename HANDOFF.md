@@ -2,13 +2,13 @@
 
 > Working notes to resume without losing the thread. Not a design doc — the
 > real design lives in `docs/`. This file tracks *where we are* and *what's next*.
-> **Last updated: end of M11 (Private Alpha Operations + Reliability Hardening).**
+> **Last updated: end of M12 (Nova Browser Discovery + Spike).**
 
 ## Where we are
 
-**Milestones M0 → M11 are complete.** M0–M10 are MERGED to `main` (PR #1:
-docs+M0–M4; PR #2: M5+M6; PR #3: M7; PR #4: M8; PR #5: M9; PR #6: M10).
-**M11 lives on branch `claude/m11-nova-context`.**
+**Milestones M0 → M12 are complete.** M0–M11 are MERGED to `main` (PR #1:
+docs+M0–M4; PR #2: M5+M6; PR #3: M7; PR #4: M8; PR #5: M9; PR #6: M10;
+PR #7: M11). **M12 lives on branch `claude/m12-nova-context`.**
 
 | Milestone | What shipped | Commit |
 |---|---|---|
@@ -24,7 +24,8 @@ docs+M0–M4; PR #2: M5+M6; PR #3: M7; PR #4: M8; PR #5: M9; PR #6: M10).
 | M8 | Media Pipeline v1: moment_media as source of truth, AES-256-GCM-encrypted blobs in object storage (fs default / any S3-compatible via abstraction, MinIO in compose), proxied user-scoped `/v1/media/:id` + thumbnails, delete/export lifecycle, manual legacy backfill, search over safe OCR text + media filters + golden fixtures, prod fail-closed on missing key | `07e4e5c` |
 | M9 | Media Reliability + Storage Ops: orphan cleanup command (dry-run default, age guard, audited), tombstoned/retryable blob deletes (media_delete_queue), per-user storage accounting API + Settings UI, media audit policy (view audit opt-in), key rotation v0 command (media + tokens, resumable), Notion database property mapping (validated, previewed, re-validated at execution), adapter media-access guard, search prefix fallback + ranking diagnostics | `310f9a8` |
 | M10 | Account Data Lifecycle + Notion Media Consent: full account export (refs/full media, tokens structurally excluded), full account delete (web+password+typed DELETE; blobs first, failures tombstoned, counts-only account_tombstones survives), documented external-deletion semantics, Notion screenshot upload behind explicit per-image consent (preview eligibility, approve media_ids, worker re-verify + File Upload API, adapter access audited), enrichment versioning (immutable versions + select-current) | `65d270a` |
-| M11 | Private Alpha Ops: /readyz + worker heartbeat + authed /status page, ops:maintenance (dry-run default) + ops_maintenance_runs, backup.sh + media:verify, password reset (operator-delivered token, sessions revoked), multi-key read (NOVA_ENCRYPTION_KEYS_PREVIOUS → zero-downtime rotation), shared adapter media gate (@nova/context-engine/media-gate), Notion upload retry dedup + gated live smoke, request-id correlation + structured worker logs + log-hygiene test, enrichment provenance UI, search weight goldens | this branch |
+| M11 | Private Alpha Ops: /readyz + worker heartbeat + authed /status page, ops:maintenance (dry-run default) + ops_maintenance_runs, backup.sh + media:verify, password reset (operator-delivered token, sessions revoked), multi-key read (NOVA_ENCRYPTION_KEYS_PREVIOUS → zero-downtime rotation), shared adapter media gate (@nova/context-engine/media-gate), Notion upload retry dedup + gated live smoke, request-id correlation + structured worker logs + log-hygiene test, enrichment provenance UI, search weight goldens | `29f80ef` |
+| M12 | Nova Browser / Native Context Browser Discovery + Spike: `docs/NOVA_BROWSER.md` (strategy: one client of the platform, not a fork; feasibility matrix extension/Electron/CEF-Tauri/fork/partner; full architecture proposal; threat model; extension-vs-shell decision table; recommendation: continue at spike scale), minimal Electron shell `apps/browser-shell` (sandboxed page view + Nova side panel, pairing auth, explicit-click capture → existing moments API, strict redaction default ON, no local captured content), shell unit tests + API integration suite proving shell captures ride the existing redaction/media/isolation/log-hygiene rails | this branch |
 
 ## Repo shape (pnpm + Turborepo monorepo)
 
@@ -50,6 +51,8 @@ apps/
   extension/       WXT MV3 side panel — Connect (pairing) screen, capture, voice, live mode
   web/             Next.js — /login, middleware guard, cookie session, settings (pairing +
                    session revocation), /export proxy, timeline/tasks/projects/approvals/audit
+  browser-shell/   M12 SPIKE — minimal Electron shell (sandboxed page view + Nova panel,
+                   pairing auth, explicit capture → existing API); see docs/NOVA_BROWSER.md
 infra/
   docker-compose.dev.yml   Postgres16+pgvector, Redis, optional MinIO (profile media-s3)
   deploy/                  Dockerfiles + fly.{api,worker,web}.toml (NODE_ENV=production on API)
@@ -70,8 +73,9 @@ pnpm --filter @nova/extension build  # load .output/chrome-mv3; connect via Sett
 ```
 
 Tests:
-- `pnpm test` — unit (~120: schema, engines incl. visual redaction + notion mapping, env, auth helpers)
-- `DATABASE_URL=postgres://nova:nova@localhost:5432/nova REDIS_URL=redis://localhost:6379 pnpm test:integration` — 173 API (+1 gated) + 30 worker (+1 gated live Notion smoke) (M0–M11; ops, password-reset, multi-key, heartbeat suites are M11)
+- `pnpm test` — unit (~134: schema, engines incl. visual redaction + notion mapping, env, auth helpers, M12 browser-shell capture/auth)
+- `DATABASE_URL=postgres://nova:nova@localhost:5432/nova REDIS_URL=redis://localhost:6379 pnpm test:integration` — 178 API (+1 gated) + 30 worker (+1 gated live Notion smoke) (M0–M12; browser-shell suite is M12)
+- `pnpm --filter @nova/browser-shell test` — 14 shell units (payload shape vs shared schema, hostile-page sanitize, instruction-as-data, auth client); CI never downloads the Electron binary (`ELECTRON_SKIP_BINARY_DOWNLOAD=1`)
 - `NOVA_OCR_E2E=1 DATABASE_URL=... pnpm --filter @nova/api exec vitest run test/integration/ocr-e2e.test.ts` — real-Tesseract proof (downloads ~2MB language data once)
 - CI (`.github/workflows/ci.yml`) provisions Postgres+Redis and runs build → typecheck → unit → migrate → integration.
 
@@ -162,36 +166,38 @@ Note: the Docker daemon in this environment sometimes needs `sudo dockerd &` bef
 - **DB migrations are forward-only**; latest `0011_m11_alpha_ops.sql`.
 - **API integration tests run file-serial** (`services/api/vitest.config.ts`); regression suites log in as the dev user, auth/isolation suites create fresh accounts.
 
-## Recommended next work — M12+ (subject to the roadmap note below)
+## Recommended next work — M13+ (see docs/NOVA_BROWSER.md §7 for the browser track)
 
-1. **Run the private alpha** — deploy per the DEPLOY.md checklist, onboard
-   the one trusted user, watch /status and the audit log, run weekly
-   ops:maintenance. Real usage decides what M12 becomes.
-2. **Real Notion live smoke** — execute the DEPLOY.md checklist against a
-   real workspace once credentials exist (fake-provider path is CI-pinned).
-3. **Email delivery** — replaces the operator-delivered reset link and
-   unlocks notification surfaces; alpha explicitly does not need it.
-4. **Multi-part media uploads** — large screenshots against Notion's
-   single-part limits.
-5. **Scheduled maintenance** — cron the existing ops:maintenance --apply
-   once manual cadence feels proven.
+**M12 — Nova Browser / Native Context Browser Discovery + Spike** is DONE
+(this branch): the roadmap note below is resolved into `docs/NOVA_BROWSER.md`
+(strategy, feasibility, architecture, threat model, decision table,
+recommendation: **continue at spike scale** — do not package, fork, or
+market a browser yet) plus the minimal shell under `apps/browser-shell`.
 
-## Future roadmap note (do NOT build yet)
-
-**M12 — Nova Browser / Native Context Browser.**
-Definition: Explore a dedicated Chromium-based browser experience where
-Nova Context is integrated natively into browsing, context capture, live
-context, memory, redaction, search, approvals, and external actions.
-Constraints: Do not build it now. Do not design a browser from scratch.
-Treat it as a future experimental surface after extension, web, memory,
-actions, privacy, media pipeline, and private alpha usage are validated.
-This is only a roadmap note.
+1. **M13 — private alpha deploy polish or browser spike refinement.**
+   Default = alpha polish: deploy per DEPLOY.md, onboard the trusted user,
+   watch /status + audit, run weekly ops:maintenance, fix what reality
+   finds. Pick browser refinement instead only if the alpha is quiet
+   (panel project picker, keychain token storage, run the manual
+   extension-vs-shell comparison on a GUI machine and record results).
+2. **M14 — desktop packaging IF the spike proves value** — signed builds,
+   auto-update, first-run capture education; gated on comparison results
+   + a real user preferring the shell for a real task.
+3. **M15+ — browser-native Live Context improvements** — persistent live
+   sessions with visible indicator via the existing live endpoints; only
+   after M14's gate passes.
+4. **Still-standing ops items** — real Notion live smoke against a real
+   workspace; email delivery (replaces operator reset links); multi-part
+   Notion media uploads; cron ops:maintenance once cadence is proven.
 
 ## Known weaknesses carried forward
 
 - Duplicate-page window exists if the worker dies between the Notion create
   call and the one-statement DB completion (Notion has no idempotency keys).
-- No password reset flow (operator resets via `auth:reset-password` in alpha).
+- Browser shell is a SPIKE: single view, no tabs/packaging/auto-update,
+  device token in a 0600 file (keychain later), `blurred` mode and live
+  context not implemented, GUI comparison experiment not yet run
+  (protocol in docs/NOVA_BROWSER.md §4).
 - Search fusion weights (0.6 FTS / 0.4 vector) untuned; prefix fallback is
   not typo tolerance. Golden fixtures pin expected retrieval
   (`test/integration/search-golden.test.ts`).
@@ -207,8 +213,8 @@ This is only a roadmap note.
 
 ## Operational reminders for the next session
 
-- M11 branch: `claude/m11-nova-context` (based on merged main with M0–M10).
-- If the M11 PR gets **merged**, treat follow-up as fresh work: restart from
+- M12 branch: `claude/m12-nova-context` (based on merged main with M0–M11).
+- If the M12 PR gets **merged**, treat follow-up as fresh work: restart from
   the latest main and open a new PR.
 - Commit message trailers in use:
   `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>` and the `Claude-Session:` line.
