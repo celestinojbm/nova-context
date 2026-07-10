@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { buildNotionPageContent, validateNotionMapping } from "@nova/context-engine";
-import { decryptSecret, encryptSecret, parseEncryptionKey } from "@nova/context-engine/secret-box";
+import { decryptSecretWithAny, encryptSecret, parseEncryptionKey, parseKeyList } from "@nova/context-engine/secret-box";
 import {
   oauthCallbackRequestSchema,
   setDestinationRequestSchema,
@@ -45,6 +45,16 @@ export function registerIntegrationRoutes(
   const { db, env, notionOauth, notionApi } = deps;
   const encryptionKey = env.NOVA_ENCRYPTION_KEY
     ? parseEncryptionKey(env.NOVA_ENCRYPTION_KEY)
+    : null;
+  // M11 keyring: token READS accept previous keys during gradual rotation;
+  // writes (connect flow) always use the current key.
+  const readKeys = encryptionKey
+    ? [
+        encryptionKey,
+        ...(env.NOVA_ENCRYPTION_KEYS_PREVIOUS
+          ? parseKeyList(env.NOVA_ENCRYPTION_KEYS_PREVIOUS)
+          : []),
+      ]
     : null;
   const notionReady = Boolean(notionOauth && encryptionKey);
 
@@ -189,7 +199,7 @@ export function registerIntegrationRoutes(
     }
     let items: NotionDestination[];
     try {
-      const token = decryptSecret(encryptionKey, conn.rows[0]!.token_ciphertext);
+      const token = decryptSecretWithAny(readKeys!, conn.rows[0]!.token_ciphertext);
       items = await notionApi.listDestinations(token);
     } catch (err) {
       req.log.warn({ err }, "notion destination listing failed");
@@ -219,7 +229,7 @@ export function registerIntegrationRoutes(
     );
     if (!conn.rows.length) return reply.code(409).send({ error: "notion_not_connected" });
     try {
-      const token = decryptSecret(encryptionKey, conn.rows[0]!.token_ciphertext);
+      const token = decryptSecretWithAny(readKeys!, conn.rows[0]!.token_ciphertext);
       const properties = await notionApi.getDatabaseProperties(token, params.data.id);
       const response: ListDatabasePropertiesResponse = {
         destination_id: params.data.id,
@@ -264,7 +274,7 @@ export function registerIntegrationRoutes(
       // type-compatible property of the actual database.
       let issues;
       try {
-        const token = decryptSecret(encryptionKey, conn.rows[0]!.token_ciphertext);
+        const token = decryptSecretWithAny(readKeys!, conn.rows[0]!.token_ciphertext);
         const properties = await notionApi.getDatabaseProperties(token, destination.id);
         issues = validateNotionMapping(parsed.data.property_mapping, properties);
       } catch (err) {

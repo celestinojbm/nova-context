@@ -32,6 +32,21 @@ export const changePasswordRequestSchema = z
   .strict();
 export type ChangePasswordRequest = z.infer<typeof changePasswordRequestSchema>;
 
+/** M11 self-service password reset (token delivered by the operator in
+ * alpha — no email sender). */
+export const passwordResetRequestSchema = z
+  .object({ email: z.string().email().max(320) })
+  .strict();
+export type PasswordResetRequest = z.infer<typeof passwordResetRequestSchema>;
+
+export const passwordResetConfirmSchema = z
+  .object({
+    token: z.string().min(16).max(256),
+    new_password: z.string().min(10).max(200),
+  })
+  .strict();
+export type PasswordResetConfirm = z.infer<typeof passwordResetConfirmSchema>;
+
 export const pairingClaimRequestSchema = z
   .object({
     code: z.string().trim().regex(/^\d{8}$/, "pairing codes are 8 digits"),

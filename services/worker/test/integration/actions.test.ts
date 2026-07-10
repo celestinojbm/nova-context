@@ -131,7 +131,7 @@ describe.skipIf(!databaseUrl)("M6: action execution worker", () => {
     key: Buffer | null = KEY,
     mediaStore: ObjectStore | null = null,
   ): ActionDeps {
-    return { notion, encryptionKey: key, mediaStore };
+    return { notion, keys: key ? [key] : null, mediaStore };
   }
 
   beforeAll(async () => {
@@ -582,6 +582,43 @@ describe.skipIf(!databaseUrl)("M6: action execution worker", () => {
     ).rejects.toThrow(UnrecoverableError);
     const noStoreRow = await db.query(`SELECT result FROM actions WHERE id = $1`, [noStore]);
     expect(noStoreRow.rows[0].result.error).toContain("media_store_unavailable");
+  });
+
+  it("M11: media uploads are deduplicated across retries — no duplicate provider objects", async () => {
+    const store = new FsObjectStore(join(tmpdir(), `nova-worker-media-${Date.now()}-d`));
+    const mediaA = await seedMedia(store, "applied");
+    const mediaB = await seedMedia(store, "applied");
+    const actionId = await makeAction("queued", userId, null, { media_ids: [mediaA, mediaB] });
+
+    // Attempt 1: both uploads succeed, then the page create hits a 503.
+    const notion = new FakeNotion();
+    notion.failCreatesRemaining = 1;
+    await expect(
+      executeAction(db, deps(notion, KEY, store), { actionId, userId }),
+    ).rejects.toThrow(NotionTransientError);
+    expect(notion.uploads).toHaveLength(2);
+    // Progress persisted on the action row (upload ids, keyed by media id).
+    const mid = await db.query(`SELECT result FROM actions WHERE id = $1`, [actionId]);
+    expect(Object.keys(mid.rows[0].result.media_uploads).sort()).toEqual(
+      [mediaA, mediaB].sort(),
+    );
+
+    // Attempt 2 (queue retry): NO re-upload — the persisted ids are reused
+    // and the page is created once with both attached.
+    const outcome = await executeAction(db, deps(notion, KEY, store), { actionId, userId }, 2);
+    expect(outcome).toBe("done");
+    expect(notion.uploads).toHaveLength(2); // unchanged — dedup worked
+    expect(notion.createCalls).toBe(1);
+    expect(notion.lastMediaUploadIds).toHaveLength(2);
+
+    // Adapter access audited once per media (first attempt), not repeated.
+    const audits = await db.query(
+      `SELECT count(*) AS n FROM audit_log
+       WHERE user_id = $1 AND event_type = 'media.adapter_access'
+         AND subject_id = ANY($2::uuid[])`,
+      [userId, [mediaA, mediaB]],
+    );
+    expect(Number(audits.rows[0].n)).toBe(2);
   });
 
   it("M7: page content carries provenance + privacy note and never any image data", async () => {

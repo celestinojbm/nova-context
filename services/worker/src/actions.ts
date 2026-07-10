@@ -4,11 +4,12 @@ import {
   validateNotionMapping,
 } from "@nova/context-engine";
 import { storeFromEnv, type ObjectStore } from "@nova/context-engine/object-store";
-import { decryptSecret, parseEncryptionKey } from "@nova/context-engine/secret-box";
+import { decryptSecretWithAny, parseEncryptionKey, parseKeyList } from "@nova/context-engine/secret-box";
 import type { NotionPropertyMapping } from "@nova/schema";
 import { readApprovedMedia } from "./media-reader.js";
 import { UnrecoverableError, Worker, type Job } from "bullmq";
 import pg from "pg";
+import { log } from "./log.js";
 import type { WorkerEnv } from "./env.js";
 import {
   HttpNotionClient,
@@ -26,16 +27,24 @@ export interface ActionJobData {
 
 export interface ActionDeps {
   notion: NotionClient;
-  encryptionKey: Buffer | null;
+  /** M11 keyring: [0] = current key; the rest are previous keys still
+   * valid for READS (tokens + media) during a gradual rotation. */
+  keys: Buffer[] | null;
   /** M10: object storage for explicitly-approved media uploads. */
   mediaStore: ObjectStore | null;
 }
 
 export function buildActionDeps(env: WorkerEnv): ActionDeps {
+  const current = env.NOVA_ENCRYPTION_KEY ? parseEncryptionKey(env.NOVA_ENCRYPTION_KEY) : null;
   return {
     notion: new HttpNotionClient(),
-    encryptionKey: env.NOVA_ENCRYPTION_KEY
-      ? parseEncryptionKey(env.NOVA_ENCRYPTION_KEY)
+    keys: current
+      ? [
+          current,
+          ...(env.NOVA_ENCRYPTION_KEYS_PREVIOUS
+            ? parseKeyList(env.NOVA_ENCRYPTION_KEYS_PREVIOUS)
+            : []),
+        ]
       : null,
     mediaStore: storeFromEnv(env),
   };
@@ -152,11 +161,13 @@ export async function executeAction(
     [data.userId],
   );
   if (!conn.rows.length) return terminal("notion_not_connected");
-  if (!deps.encryptionKey) return terminal("encryption_key_missing");
+  if (!deps.keys?.length) return terminal("encryption_key_missing");
 
   let token: string;
   try {
-    token = decryptSecret(deps.encryptionKey, conn.rows[0]!.token_ciphertext);
+    // Keyring read: a token not yet re-encrypted to the new key still
+    // opens during a gradual rotation (M11).
+    token = decryptSecretWithAny(deps.keys, conn.rows[0]!.token_ciphertext);
   } catch {
     return terminal("token_decrypt_failed");
   }
@@ -256,16 +267,28 @@ export async function executeAction(
     // was validated at approval time; re-verify NOW so that media deleted,
     // re-captured, or no longer provably redacted since then fails the
     // action safely instead of publishing something the user didn't see.
+    //
+    // M11 retry/dedup: each successful upload id is persisted onto the
+    // action row BEFORE the next step, so a transient failure later in the
+    // run (another upload, the page create) retries WITHOUT re-uploading —
+    // no duplicate media objects land in the user's workspace. Deliberate
+    // ordering: uploads happen BEFORE page creation, so "upload failed
+    // after the page exists" cannot occur; the page is created once, last,
+    // with everything attached (and page_id short-circuits retries).
     const approvedMediaIds = Array.isArray(payload.media_ids) ? payload.media_ids : [];
     let mediaUploadIds: string[] | undefined;
     if (approvedMediaIds.length) {
       if (!deps.mediaStore) return terminal("media_store_unavailable");
-      const uploads: string[] = [];
+      const priorUploads =
+        ((action.result as { media_uploads?: Record<string, string> } | null)
+          ?.media_uploads as Record<string, string> | undefined) ?? {};
+      const uploadsById: Record<string, string> = { ...priorUploads };
       for (const mediaId of approvedMediaIds) {
+        if (uploadsById[mediaId]) continue; // already uploaded on a prior attempt
         const read = await readApprovedMedia(
           db,
           deps.mediaStore,
-          deps.encryptionKey!,
+          deps.keys,
           data.userId,
           mediaId,
         );
@@ -287,9 +310,20 @@ export async function executeAction(
           read.media.contentType,
           read.media.data,
         );
-        uploads.push(upload.id);
+        uploadsById[mediaId] = upload.id;
+        await db.query(
+          `UPDATE actions
+           SET result = jsonb_set(coalesce(result, '{}'::jsonb), '{media_uploads}', $1::jsonb),
+               updated_at = now()
+           WHERE id = $2`,
+          [JSON.stringify(uploadsById), action.id],
+        );
+        log.info(
+          { action_id: action.id, media_id: mediaId },
+          "approved media uploaded to provider",
+        );
       }
-      mediaUploadIds = uploads;
+      mediaUploadIds = approvedMediaIds.map((id) => uploadsById[id]!);
     }
 
     const page = await deps.notion.createPage(
@@ -362,19 +396,27 @@ export function startActionWorker({
   worker.on("failed", (job, err) => {
     const attempts = job?.opts.attempts ?? 1;
     const madeAll = (job?.attemptsMade ?? 0) >= attempts;
-    console.error(
-      `[worker] action ${job?.data.actionId} attempt ${job?.attemptsMade}/${attempts} failed: ${err.message}`,
+    log.error(
+      {
+        job_id: job?.id,
+        action_id: job?.data.actionId,
+        attempt: job?.attemptsMade,
+        attempts,
+        error_class: err.name,
+        terminal: err instanceof UnrecoverableError,
+      },
+      `action execution failed: ${err.message.slice(0, 200)}`,
     );
     // Transient failures retry; only the FINAL attempt marks 'failed'
     // (UnrecoverableError paths already did their own marking).
     if (job && madeAll && !(err instanceof UnrecoverableError)) {
       void markActionFailed(db, job.data, err.message.slice(0, 200)).catch((markErr) =>
-        console.error("[worker] markActionFailed errored:", markErr),
+        log.error({ job_id: job.id, action_id: job.data.actionId, err: markErr }, "markActionFailed errored"),
       );
     }
   });
   worker.on("completed", (job) => {
-    console.log(`[worker] action ${job.data.actionId} executed`);
+    log.info({ job_id: job.id, action_id: job.data.actionId }, "action executed");
   });
 
   if (!pool) {

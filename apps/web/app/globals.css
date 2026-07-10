@@ -380,3 +380,9 @@ h3 { margin: 26px 0 10px; }
   font-size: 0.9rem;
   margin: 0.25rem 0;
 }
+
+/* M11: enrichment provenance line on moment cards */
+.enrichment-meta {
+  font-size: 0.8rem;
+  margin-top: 0.25rem;
+}

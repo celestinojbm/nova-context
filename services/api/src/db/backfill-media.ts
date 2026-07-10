@@ -41,7 +41,7 @@ const ocr: OcrEngine | null =
     : null;
 
 const pool = new pg.Pool({ connectionString: env.DATABASE_URL, max: 3 });
-const media = new MediaService(pool, store, key);
+const media = new MediaService(pool, store, [key]);
 
 const { rows } = await pool.query<{
   id: string;

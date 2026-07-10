@@ -25,6 +25,9 @@ const PUBLIC_V1_ROUTES = new Set([
   "POST /v1/auth/signup",
   "POST /v1/auth/login",
   "POST /v1/auth/pairing/claim",
+  // M11 password reset: both legs are pre-auth by nature and rate-limited.
+  "POST /v1/auth/password-reset/request",
+  "POST /v1/auth/password-reset/confirm",
 ]);
 
 export function registerAuth(app: FastifyInstance, db: pg.Pool): void {

@@ -13,13 +13,16 @@ import {
   createContextMomentRequestSchema,
   type ContextMoment,
   type ContextMomentWithMedia,
+  type EnrichmentMeta,
   type MomentMediaRef,
   type CreateContextMomentResponse,
   type EnrichmentResult,
   type ListContextMomentsResponse,
   type ParsedIntent,
 } from "@nova/schema";
+import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance } from "fastify";
+import { Redis } from "ioredis";
 import pg from "pg";
 import { z } from "zod";
 import type { Env } from "./env.js";
@@ -31,6 +34,7 @@ import { extractPayloadImages, redactPayloadImages } from "./image-redaction.js"
 import { MediaService } from "./media/media-service.js";
 import { storeFromEnv, type ObjectStore } from "./media/object-store.js";
 import { registerAccountRoutes } from "./routes-account.js";
+import { registerOpsRoutes } from "./routes-ops.js";
 import { registerMediaRoutes } from "./routes-media.js";
 import { TesseractOcrEngine } from "./ocr.js";
 import { HttpNotionApiClient, type NotionApiClient } from "./integrations/notion-api.js";
@@ -42,7 +46,7 @@ import { registerM2Routes } from "./routes-m2.js";
 import { registerM3Routes } from "./routes-m3.js";
 import { registerM4Routes } from "./routes-m4.js";
 import { redactDeep, suggestProjects, type RedactionType } from "@nova/context-engine";
-import { parseEncryptionKey } from "@nova/context-engine/secret-box";
+import { parseEncryptionKey, parseKeyList } from "@nova/context-engine/secret-box";
 import type { OcrEngine } from "@nova/context-engine/visual-redaction";
 
 interface MomentRow {
@@ -118,6 +122,8 @@ export interface BuildAppOptions {
   notionApi?: NotionApiClient | null;
   /** Test override for the media object store (M8). */
   objectStore?: ObjectStore;
+  /** M11: test hook — pipe structured logs to a stream for hygiene checks. */
+  loggerStream?: { write: (msg: string) => void };
 }
 
 export async function buildApp({
@@ -128,12 +134,24 @@ export async function buildApp({
   ocr,
   notionApi,
   objectStore,
+  loggerStream,
 }: BuildAppOptions): Promise<FastifyInstance> {
   const db = pool ?? new pg.Pool({ connectionString: env.DATABASE_URL, max: 10 });
   const app = Fastify({
-    logger: true,
+    logger: loggerStream ? { stream: loggerStream } : true,
+    // M11 observability: honor an incoming x-request-id (proxy/web app
+    // correlation) or mint one; every response carries it back.
+    genReqId: (req) => {
+      const incoming = req.headers["x-request-id"];
+      return typeof incoming === "string" && /^[\w.-]{1,64}$/.test(incoming)
+        ? incoming
+        : randomUUID();
+    },
     // Screenshot data URLs ride in the JSON body; default 1MB is too small.
     bodyLimit: 4 * 1024 * 1024,
+  });
+  app.addHook("onSend", async (req, reply) => {
+    reply.header("x-request-id", req.id);
   });
 
   // The extension (chrome-extension:// origin) and the web app both call the
@@ -188,14 +206,55 @@ export async function buildApp({
   // and captures strip images (state 'media_unavailable') rather than
   // storing pixels outside it. Production refuses to boot without the key.
   const mediaKey = env.NOVA_ENCRYPTION_KEY ? parseEncryptionKey(env.NOVA_ENCRYPTION_KEY) : null;
+  // M11 multi-key read: current key first (all writes), then previous keys
+  // that may still open old blobs during a gradual rotation.
+  const mediaKeys = mediaKey
+    ? [mediaKey, ...(env.NOVA_ENCRYPTION_KEYS_PREVIOUS ? parseKeyList(env.NOVA_ENCRYPTION_KEYS_PREVIOUS) : [])]
+    : null;
   const mediaStore: ObjectStore = objectStore ?? storeFromEnv(env);
-  const media = mediaKey ? new MediaService(db, mediaStore, mediaKey) : null;
+  const media = mediaKeys ? new MediaService(db, mediaStore, mediaKeys) : null;
   /** Attach media refs to a batch of API-shaped moments (single query). */
   async function attachMedia<T extends { id: string }>(
     items: T[],
   ): Promise<Array<T & { media: MomentMediaRef[] }>> {
     const map = media ? await media.listForMoments(items.map((m) => m.id)) : new Map();
     return items.map((m) => ({ ...m, media: map.get(m.id) ?? [] }));
+  }
+
+  /** M11: enrichment version metadata for the timeline (single query) —
+   * latest provider/model/version + how many prior versions exist. */
+  async function attachEnrichmentMeta<T extends { id: string }>(
+    items: T[],
+  ): Promise<Array<T & { enrichment_meta: EnrichmentMeta | null }>> {
+    if (!items.length) return items.map((m) => ({ ...m, enrichment_meta: null }));
+    const { rows } = await db.query<{
+      moment_id: string;
+      version: number;
+      provider: string | null;
+      model: string | null;
+      created_at: Date;
+      total: string;
+    }>(
+      `SELECT DISTINCT ON (moment_id)
+              moment_id, version, provider, model, created_at,
+              count(*) OVER (PARTITION BY moment_id) AS total
+       FROM enrichment_versions WHERE moment_id = ANY($1::uuid[])
+       ORDER BY moment_id, version DESC`,
+      [items.map((m) => m.id)],
+    );
+    const map = new Map(
+      rows.map((r) => [
+        r.moment_id,
+        {
+          latest_version: r.version,
+          versions: Number(r.total),
+          provider: r.provider,
+          model: r.model,
+          created_at: r.created_at.toISOString(),
+        },
+      ]),
+    );
+    return items.map((m) => ({ ...m, enrichment_meta: map.get(m.id) ?? null }));
   }
   // M4: privacy-preserving funnel analytics (allowlisted events, no content).
   const analytics = new Analytics(db, env.NOVA_ANALYTICS === "local");
@@ -262,6 +321,22 @@ export async function buildApp({
     notionApi: notionApiClient,
   });
   registerMediaRoutes(app, { db, media, viewAudit: env.NOVA_MEDIA_VIEW_AUDIT === "on" });
+  // M11 ops surface: /readyz (public readiness) + /v1/ops/status (authed).
+  const opsRedis = env.REDIS_URL ? new Redis(env.REDIS_URL, { maxRetriesPerRequest: 1 }) : null;
+  if (opsRedis) {
+    app.addHook("onClose", async () => {
+      opsRedis.disconnect();
+    });
+  }
+  registerOpsRoutes(app, {
+    db,
+    env,
+    redis: opsRedis,
+    enrichmentQueue: enrichmentQueue as never,
+    actionQueue: actionQueue as never,
+    store: mediaStore,
+    mediaAvailable: media !== null,
+  });
   registerAccountRoutes(app, {
     db,
     media,
@@ -593,7 +668,7 @@ export async function buildApp({
        LIMIT $${params.length}`,
       params,
     );
-    const items = await attachMedia(rows.map(rowToMoment));
+    const items = await attachEnrichmentMeta(await attachMedia(rows.map(rowToMoment)));
     const response: ListContextMomentsResponse = {
       items,
       next_before: items.length === limit ? items[items.length - 1]!.captured_at : null,
@@ -617,7 +692,7 @@ export async function buildApp({
     if (!row) {
       return reply.code(404).send({ error: "not_found" });
     }
-    const [withMedia] = await attachMedia([rowToMoment(row)]);
+    const [withMedia] = await attachEnrichmentMeta(await attachMedia([rowToMoment(row)]));
     return withMedia;
   });
 

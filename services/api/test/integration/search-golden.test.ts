@@ -54,7 +54,7 @@ describe.skipIf(!databaseUrl)("M8: golden search fixtures", () => {
   async function seed(
     key: string,
     text: string,
-    opts: { ocrTexts?: string[] } = {},
+    opts: { ocrTexts?: string[]; title?: string; intent?: string } = {},
   ): Promise<void> {
     let screenshot: string | null = null;
     if (opts.ocrTexts) {
@@ -67,10 +67,10 @@ describe.skipIf(!databaseUrl)("M8: golden search fixtures", () => {
       url: "/v1/context/moments",
       payload: {
         source_mode: "instant_capture",
-        source_meta: { url: `https://golden.example.com/${key}`, title: key },
+        source_meta: { url: `https://golden.example.com/${key}`, title: opts.title ?? key },
         payload: screenshot ? { screenshot_data_url: screenshot } : {},
         extracted_text: text,
-        intent_text: null,
+        intent_text: opts.intent ?? null,
       },
     });
     expect(res.statusCode).toBe(201);
@@ -126,6 +126,15 @@ describe.skipIf(!databaseUrl)("M8: golden search fixtures", () => {
       // The card number word is masked by visual redaction (Luhn detector);
       // only the safe words may reach the index.
       ocrTexts: [`${NONCE}checkout`, "confirm", "4111111111111111"],
+    });
+    // M11 tuning fixtures: the same term in a TITLE (weight B) must beat
+    // it buried in body text (weight C); intent (A) beats both.
+    await seed("title-hit", `${NONCE} unrelated body copy`, {
+      title: `${NONCE} migraine research overview`,
+    });
+    await seed("body-hit", `${NONCE} notes that mention migraine treatments in passing`);
+    await seed("intent-hit", `${NONCE} plain body`, {
+      intent: `${NONCE} remind me about the migraine appointment`,
     });
   });
 
@@ -185,6 +194,25 @@ describe.skipIf(!databaseUrl)("M8: golden search fixtures", () => {
 
     const without = await search({ query: `${NONCE} kubernetes rollout` });
     expect(without.items[0].diagnostics).toBeUndefined();
+  });
+
+  it("M11: field weights rank intent over title over body for the same term", async () => {
+    const { items } = await search({ query: `${NONCE} migraine`, debug: true });
+    const order = items.map((i) => i.id);
+    expect(order.indexOf(ids.intent!)).toBe(-1); // sanity: no such key
+    const intentPos = order.indexOf(ids["intent-hit"]!);
+    const titlePos = order.indexOf(ids["title-hit"]!);
+    const bodyPos = order.indexOf(ids["body-hit"]!);
+    expect(intentPos).toBeGreaterThanOrEqual(0);
+    expect(titlePos).toBeGreaterThanOrEqual(0);
+    expect(bodyPos).toBeGreaterThanOrEqual(0);
+    // A (intent) > B (title) > C (body) — the tuning contract, pinned.
+    expect(intentPos).toBeLessThan(titlePos);
+    expect(titlePos).toBeLessThan(bodyPos);
+    // Diagnostics expose the raw ranks that justify the order.
+    expect(items[intentPos]!.diagnostics.fts_rank).toBeGreaterThan(
+      items[bodyPos]!.diagnostics.fts_rank,
+    );
   });
 
   it("M9: masked sensitive OCR values are unreachable — even via prefix", async () => {

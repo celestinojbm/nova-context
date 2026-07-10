@@ -54,6 +54,17 @@ export async function migrate(databaseUrl: string): Promise<string[]> {
   return applied;
 }
 
+/** M11: migrations on disk that have not been applied (readiness check). */
+export async function pendingMigrations(db: {
+  query(sql: string): Promise<{ rows: Array<Record<string, unknown>> }>;
+}): Promise<string[]> {
+  const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "../../migrations");
+  const files = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql")).sort();
+  const { rows } = await db.query("SELECT name FROM schema_migrations");
+  const appliedSet = new Set(rows.map((r) => r.name as string));
+  return files.filter((f) => !appliedSet.has(f));
+}
+
 const isMain = process.argv[1] === fileURLToPath(import.meta.url);
 if (isMain) {
   const env = loadEnv();

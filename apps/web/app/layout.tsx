@@ -42,6 +42,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                 <a href="/projects">Projects</a>
                 <a href="/approvals">Approvals</a>
                 <a href="/audit">Audit</a>
+                <a href="/status">Status</a>
                 <a href="/settings">Settings</a>
               </nav>
               <div className="session-chip">

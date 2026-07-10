@@ -42,6 +42,13 @@ const envSchema = z.object({
   // M9: previous encryption key, set ONLY while running the key-rotation
   // command (`media:rotate-key`). The API itself never reads it.
   NOVA_ENCRYPTION_KEY_OLD: z.string().min(32).optional().or(z.literal("").transform(() => undefined)),
+  // M11: comma-separated PREVIOUS keys the API may still READ media with
+  // during a gradual rotation (writes always use NOVA_ENCRYPTION_KEY).
+  // Set new key + list old one here, deploy (no read outage), run
+  // `media:rotate-key -- --apply`, then remove this once it reports clean.
+  NOVA_ENCRYPTION_KEYS_PREVIOUS: z.string().optional().or(z.literal("").transform(() => undefined)),
+  // M11: build/commit identifier surfaced on the ops status page.
+  NOVA_GIT_SHA: z.string().optional().or(z.literal("").transform(() => undefined)),
   // M6: Notion OAuth app (per-user connections). All three required to
   // enable the connect flow; endpoints return 503 otherwise.
   NOTION_CLIENT_ID: z.string().min(8).optional().or(z.literal("").transform(() => undefined)),

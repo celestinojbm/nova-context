@@ -244,7 +244,7 @@ describe.skipIf(!databaseUrl)("M9: media reliability + storage operations", () =
   });
 
   it("adapter media access is guarded by redaction state (and never silent)", async () => {
-    const media = new MediaService(db, store, KEY);
+    const media = new MediaService(db, store, [KEY]);
 
     const applied = await capture(user); // FakeOcr clean → state 'applied'
     const ok = await media.getForAdapter(user.userId, applied.media[0]!.id);

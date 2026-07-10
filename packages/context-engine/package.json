@@ -21,6 +21,10 @@
     "./object-store": {
       "types": "./dist/object-store.d.ts",
       "import": "./dist/object-store.js"
+    },
+    "./media-gate": {
+      "types": "./dist/media-gate.d.ts",
+      "import": "./dist/media-gate.js"
     }
   },
   "scripts": {

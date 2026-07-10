@@ -81,3 +81,34 @@ export function encryptSecret(key: Buffer, plaintext: string): Buffer {
 export function decryptSecret(key: Buffer, box: Buffer): string {
   return decryptBytes(key, box).toString("utf8");
 }
+
+/**
+ * M11 multi-key read (zero-downtime rotation). A keyring is the CURRENT
+ * key (index 0 — the only one ever used to encrypt) followed by previous
+ * keys that may still open old blobs during a gradual re-encryption.
+ * GCM's auth tag makes trial decryption safe: a wrong key cannot produce
+ * garbage output, it just fails.
+ */
+export function parseKeyList(value: string): Buffer[] {
+  return value
+    .split(",")
+    .map((k) => k.trim())
+    .filter(Boolean)
+    .map(parseEncryptionKey);
+}
+
+/** Try each key in order; throws SecretBoxError when none opens the box. */
+export function decryptBytesWithAny(keys: Buffer[], box: Buffer): Buffer {
+  for (const key of keys) {
+    try {
+      return decryptBytes(key, box);
+    } catch {
+      /* try the next key */
+    }
+  }
+  throw new SecretBoxError("decryption failed (no configured key opens this data)");
+}
+
+export function decryptSecretWithAny(keys: Buffer[], box: Buffer): string {
+  return decryptBytesWithAny(keys, box).toString("utf8");
+}

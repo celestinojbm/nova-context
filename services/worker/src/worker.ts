@@ -1,5 +1,6 @@
 import { Worker, type Job } from "bullmq";
 import pg from "pg";
+import { log } from "./log.js";
 import {
   AnthropicEnricher,
   OpenAIEmbedder,
@@ -60,19 +61,26 @@ export function startWorker({
   worker.on("failed", (job, err) => {
     const attempts = job?.opts.attempts ?? 1;
     const madeAll = (job?.attemptsMade ?? 0) >= attempts;
-    console.error(
-      `[worker] enrich ${job?.data.momentId} attempt ${job?.attemptsMade}/${attempts} failed: ${err.message}`,
+    log.error(
+      {
+        job_id: job?.id,
+        moment_id: job?.data.momentId,
+        attempt: job?.attemptsMade,
+        attempts,
+        error_class: err.name,
+      },
+      `enrichment failed: ${err.message.slice(0, 200)}`,
     );
     // Mark failed only after the FINAL attempt; earlier failures retry and
     // the moment stays 'processing'.
     if (job && madeAll) {
       void markFailed(db, job.data.momentId, job.data.userId, err.message).catch(
-        (markErr) => console.error("[worker] markFailed errored:", markErr),
+        (markErr) => log.error({ job_id: job.id, moment_id: job.data.momentId, err: markErr }, "markFailed errored"),
       );
     }
   });
   worker.on("completed", (job) => {
-    console.log(`[worker] enriched moment ${job.data.momentId}`);
+    log.info({ job_id: job.id, moment_id: job.data.momentId }, "moment enriched");
   });
 
   if (!pool) {

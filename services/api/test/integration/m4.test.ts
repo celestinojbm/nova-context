@@ -91,12 +91,18 @@ describe.skipIf(!databaseUrl)("M4: audit, analytics, export filters, project del
       });
       expect(res.statusCode).toBe(202);
 
-      const stored = await db.query(
-        `SELECT props FROM product_events
-         WHERE user_id = $1 AND event = 'live_session_started'
-         ORDER BY created_at DESC LIMIT 1`,
-        [userId],
-      );
+      // Analytics.track is fire-and-forget (the 202 does not wait for the
+      // insert), so poll briefly for the row instead of racing it.
+      let stored = { rows: [] as Array<{ props: { mode: string } }> };
+      for (let attempt = 0; attempt < 40 && stored.rows.length === 0; attempt++) {
+        stored = await db.query(
+          `SELECT props FROM product_events
+           WHERE user_id = $1 AND event = 'live_session_started'
+           ORDER BY created_at DESC LIMIT 1`,
+          [userId],
+        );
+        if (stored.rows.length === 0) await new Promise((r) => setTimeout(r, 50));
+      }
       expect(stored.rows[0].props.mode).toBe("text_only");
 
       const audit = await db.query(

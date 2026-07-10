@@ -1,13 +1,18 @@
-import { decryptBytes } from "@nova/context-engine/secret-box";
+import {
+  readMediaForAdapter,
+  type AdapterMediaFailure,
+} from "@nova/context-engine/media-gate";
 import type { ObjectStore } from "@nova/context-engine/object-store";
 import type pg from "pg";
 
 /**
- * M10: the worker's adapter-facing media read — the mirror of the API's
- * MediaService.getForAdapter, with the SAME guard: only the owner's media,
- * and only media whose visual redaction provably ran (redaction_state
- * 'applied'), can ever reach an external provider. Every successful read
- * is audited (media.adapter_access) by the caller BEFORE upload.
+ * M10/M11: the worker's adapter media read — a thin wrapper over THE
+ * shared gate (`@nova/context-engine/media-gate`), the same code path
+ * `MediaService.getForAdapter` uses, so the policy cannot drift between
+ * services. Execution keeps the STRICTER stance: only redaction_state
+ * 'applied' passes (no 'none', no override) — what the user ticked at
+ * approval is exactly what may leave. Callers audit each success
+ * (media.adapter_access) BEFORE upload.
  */
 export interface AdapterMedia {
   id: string;
@@ -15,37 +20,22 @@ export interface AdapterMedia {
   data: Buffer; // decrypted, already-redacted pixels
 }
 
-export type AdapterMediaFailure =
-  | "not_found"
-  | "redaction_not_applied"
-  | "blob_missing";
+export type { AdapterMediaFailure };
 
 export async function readApprovedMedia(
   db: pg.Pool,
   store: ObjectStore,
-  key: Buffer,
+  keys: Buffer[],
   userId: string,
   mediaId: string,
 ): Promise<{ ok: true; media: AdapterMedia } | { ok: false; reason: AdapterMediaFailure }> {
-  const { rows } = await db.query<{
-    id: string;
-    content_type: string;
-    storage_key: string;
-    redaction_state: string;
-  }>(
-    `SELECT id, content_type, storage_key, redaction_state
-     FROM moment_media WHERE id = $1 AND user_id = $2`,
-    [mediaId, userId],
-  );
-  const row = rows[0];
-  if (!row) return { ok: false, reason: "not_found" };
-  if (row.redaction_state !== "applied") {
-    return { ok: false, reason: "redaction_not_applied" };
-  }
-  const blob = await store.get(row.storage_key);
-  if (!blob) return { ok: false, reason: "blob_missing" };
+  const result = await readMediaForAdapter(db, store, keys, userId, mediaId, {
+    allowNone: false,
+    allowUnredacted: false,
+  });
+  if (!result.ok) return result;
   return {
     ok: true,
-    media: { id: row.id, contentType: row.content_type, data: decryptBytes(key, blob) },
+    media: { id: result.id, contentType: result.contentType, data: result.data },
   };
 }
