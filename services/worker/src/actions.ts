@@ -3,8 +3,10 @@ import {
   buildNotionPageContent,
   validateNotionMapping,
 } from "@nova/context-engine";
+import { storeFromEnv, type ObjectStore } from "@nova/context-engine/object-store";
 import { decryptSecret, parseEncryptionKey } from "@nova/context-engine/secret-box";
 import type { NotionPropertyMapping } from "@nova/schema";
+import { readApprovedMedia } from "./media-reader.js";
 import { UnrecoverableError, Worker, type Job } from "bullmq";
 import pg from "pg";
 import type { WorkerEnv } from "./env.js";
@@ -25,6 +27,8 @@ export interface ActionJobData {
 export interface ActionDeps {
   notion: NotionClient;
   encryptionKey: Buffer | null;
+  /** M10: object storage for explicitly-approved media uploads. */
+  mediaStore: ObjectStore | null;
 }
 
 export function buildActionDeps(env: WorkerEnv): ActionDeps {
@@ -33,6 +37,7 @@ export function buildActionDeps(env: WorkerEnv): ActionDeps {
     encryptionKey: env.NOVA_ENCRYPTION_KEY
       ? parseEncryptionKey(env.NOVA_ENCRYPTION_KEY)
       : null,
+    mediaStore: storeFromEnv(env),
   };
 }
 
@@ -160,6 +165,8 @@ export async function executeAction(
     title?: string;
     detail?: string | null;
     destination?: { id: string; type: "page_id" | "database_id"; title: string } | null;
+    /** M10: media ids the user EXPLICITLY ticked at approval time. */
+    media_ids?: string[];
   };
   const content = buildNotionPageContent(
     { title: payload.title ?? "Nova Context page", detail: payload.detail ?? null },
@@ -244,7 +251,54 @@ export async function executeAction(
       }
     }
 
-    const page = await deps.notion.createPage(token, parent, content, mappedProperties);
+    // M10: explicitly approved media — read through the guarded adapter
+    // path, audit the access, upload via Notion's File Upload API. Consent
+    // was validated at approval time; re-verify NOW so that media deleted,
+    // re-captured, or no longer provably redacted since then fails the
+    // action safely instead of publishing something the user didn't see.
+    const approvedMediaIds = Array.isArray(payload.media_ids) ? payload.media_ids : [];
+    let mediaUploadIds: string[] | undefined;
+    if (approvedMediaIds.length) {
+      if (!deps.mediaStore) return terminal("media_store_unavailable");
+      const uploads: string[] = [];
+      for (const mediaId of approvedMediaIds) {
+        const read = await readApprovedMedia(
+          db,
+          deps.mediaStore,
+          deps.encryptionKey!,
+          data.userId,
+          mediaId,
+        );
+        if (!read.ok) return terminal(`approved_media_${read.reason}`);
+        // Adapter access is ALWAYS audited (M9 policy) — id only, no pixels.
+        await db.query(
+          `INSERT INTO audit_log (user_id, event_type, subject_kind, subject_id, detail)
+           VALUES ($1, 'media.adapter_access', 'media', $2, $3)`,
+          [
+            data.userId,
+            mediaId,
+            JSON.stringify({ provider: "notion", action_id: action.id }),
+          ],
+        );
+        const ext = read.media.contentType.split("/")[1]?.split("+")[0] ?? "png";
+        const upload = await deps.notion.uploadMedia(
+          token,
+          `nova-${mediaId}.${ext}`,
+          read.media.contentType,
+          read.media.data,
+        );
+        uploads.push(upload.id);
+      }
+      mediaUploadIds = uploads;
+    }
+
+    const page = await deps.notion.createPage(
+      token,
+      parent,
+      content,
+      mappedProperties,
+      mediaUploadIds,
+    );
     // External id lands in the SAME statement that completes the action, so
     // any later redelivery takes the short-circuit path above.
     await db.query(
@@ -267,6 +321,7 @@ export async function executeAction(
       external_id: page.id,
       workspace: conn.rows[0]!.external_account,
       destination_title: parent.title,
+      media_included: mediaUploadIds?.length ?? 0,
     });
     return "done";
   } catch (err) {

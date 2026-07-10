@@ -27,9 +27,20 @@ export interface NotionClient {
     /** M9: explicit properties for a database parent (from the user's
      * validated mapping). Undefined = title-only (M6 behavior). */
     properties?: Record<string, unknown>,
+    /** M10: file-upload ids of explicitly approved, redacted media —
+     * attached as image blocks after the content sections. */
+    mediaUploadIds?: string[],
   ): Promise<CreatedNotionPage>;
   /** M9: live property schema of a database (name → type). */
   getDatabaseProperties(token: string, databaseId: string): Promise<Map<string, string>>;
+  /** M10: push one media file into the workspace via Notion's File Upload
+   * API; the returned id attaches to blocks. Never inline base64. */
+  uploadMedia(
+    token: string,
+    filename: string,
+    contentType: string,
+    data: Buffer,
+  ): Promise<{ id: string }>;
 }
 
 /** Transient provider trouble → retry; anything else is terminal. */
@@ -94,11 +105,50 @@ export class HttpNotionClient implements NotionClient {
     };
   }
 
+  async uploadMedia(
+    token: string,
+    filename: string,
+    contentType: string,
+    data: Buffer,
+  ): Promise<{ id: string }> {
+    // Notion File Upload API: create the upload object, then send the
+    // bytes as multipart form data. Both legs share the transient/terminal
+    // error semantics of every other call.
+    const created = await this.call(token, "/file_uploads", {
+      filename,
+      content_type: contentType,
+    });
+    const uploadId = created.id as string;
+    let res: Response;
+    try {
+      const form = new FormData();
+      form.append("file", new Blob([new Uint8Array(data)], { type: contentType }), filename);
+      res = await fetch(`https://api.notion.com/v1/file_uploads/${uploadId}/send`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "notion-version": NOTION_VERSION,
+        },
+        body: form,
+      });
+    } catch (err) {
+      throw new NotionTransientError(`notion upload unreachable: ${(err as Error).message}`);
+    }
+    if (res.status === 429 || res.status >= 500) {
+      throw new NotionTransientError(`notion upload responded ${res.status}`);
+    }
+    if (!res.ok) {
+      throw new Error(`notion rejected the media upload (${res.status})`);
+    }
+    return { id: uploadId };
+  }
+
   async createPage(
     token: string,
     parent: NotionParent,
     content: NotionPageContent,
     properties?: Record<string, unknown>,
+    mediaUploadIds?: string[],
   ): Promise<CreatedNotionPage> {
     const children = content.sections.flatMap((section) => {
       const blocks: Array<Record<string, unknown>> = [];
@@ -118,6 +168,15 @@ export class HttpNotionClient implements NotionClient {
       });
       return blocks;
     });
+    // M10: explicitly approved media attaches by upload id — the page body
+    // never carries pixels or base64.
+    for (const uploadId of mediaUploadIds ?? []) {
+      children.push({
+        object: "block",
+        type: "image",
+        image: { type: "file_upload", file_upload: { id: uploadId } },
+      });
+    }
     const body = await this.call(token, "/pages", {
       parent:
         parent.type === "page_id"

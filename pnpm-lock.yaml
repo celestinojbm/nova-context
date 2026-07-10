@@ -84,6 +84,9 @@ importers:
 
   packages/context-engine:
     dependencies:
+      '@aws-sdk/client-s3':
+        specifier: ^3.1084.0
+        version: 3.1084.0
       '@nova/schema':
         specifier: workspace:*
         version: link:../schema

@@ -120,6 +120,37 @@ describe.skipIf(!databaseUrl || !redisUrl)("enrichment worker (integration)", ()
     expect(actions.rows[0].n).toBe(1);
   });
 
+  it("M10: every run appends an enrichment version; history is never overwritten", async () => {
+    const momentId = await createMoment("version this enrichment");
+    await enrichMoment(db, { enricher: null, embedder: null }, momentId);
+    await enrichMoment(db, { enricher: null, embedder: null }, momentId);
+
+    const versions = await db.query(
+      `SELECT version, summary, enrichment, provider, model, created_at
+       FROM enrichment_versions WHERE moment_id = $1 ORDER BY version ASC`,
+      [momentId],
+    );
+    expect(versions.rows).toHaveLength(2);
+    expect(versions.rows.map((r) => r.version)).toEqual([1, 2]);
+    // Provider/model recorded per run; local heuristics have no model.
+    expect(versions.rows[0].provider).toBe("heuristic");
+    expect(versions.rows[0].model).toBeNull();
+    expect(versions.rows[0].created_at).toBeTruthy();
+    expect(versions.rows[0].enrichment.tags).toBeTruthy();
+
+    // The moment's CURRENT enrichment equals the latest version.
+    const moment = await db.query(
+      `SELECT summary, enrichment FROM context_moments WHERE id = $1`,
+      [momentId],
+    );
+    expect(moment.rows[0].summary).toBe(versions.rows[1].summary);
+    expect(moment.rows[0].enrichment).toEqual(versions.rows[1].enrichment);
+
+    // Version records carry derived data only — never the raw capture text
+    // is fine (it's already redacted upstream), but no secrets ever.
+    expect(JSON.stringify(versions.rows)).not.toContain("token");
+  });
+
   it("writes an embedding when an embedder is configured", async () => {
     const fakeEmbedder: EmbeddingProvider = {
       name: "fake",

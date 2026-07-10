@@ -93,9 +93,14 @@ export const setDestinationRequestSchema = z
   .strict();
 export type SetDestinationRequest = z.infer<typeof setDestinationRequestSchema>;
 
-/** M7: optional approval-time destination override for external actions. */
+/** M7: optional approval-time destination override for external actions.
+ * M10: optional EXPLICIT media consent — ids of the moment's media the user
+ * ticks on the approval card. Absent/empty = no media leaves Nova. */
 export const approveActionRequestSchema = z
-  .object({ destination: notionDestinationSchema.optional() })
+  .object({
+    destination: notionDestinationSchema.optional(),
+    media_ids: z.array(z.string().uuid()).max(10).optional(),
+  })
   .strict();
 export type ApproveActionRequest = z.infer<typeof approveActionRequestSchema>;
 
@@ -123,9 +128,24 @@ export interface ActionPreviewResponse {
     /** M9: property mapping applied when the destination is a database. */
     property_mapping: NotionPropertyMapping | null;
   };
-  /** M9: media policy surfaced on the card — screenshots are NEVER included
-   * unless a future explicitly-approved flow (M10) turns this on. */
-  media: { included: boolean; count: number };
+  /** M9/M10: media consent surface. Nothing is included by default; the
+   * user ticks eligible items on the card, and only redacted
+   * (redaction_state 'applied') media is ever eligible. */
+  media: {
+    included: boolean;
+    count: number;
+    /** Every media object on the linked moment, with eligibility. */
+    items: Array<{
+      id: string;
+      kind: string;
+      redaction_state: string;
+      width: number | null;
+      height: number | null;
+      eligible: boolean;
+    }>;
+    /** Ids already approved for inclusion (post-approval previews). */
+    approved_ids: string[];
+  };
   title: string;
   summary: string | null;
   source_url: string | null;

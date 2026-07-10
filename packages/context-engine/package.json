@@ -17,6 +17,10 @@
     "./visual-redaction": {
       "types": "./dist/visual-redaction.d.ts",
       "import": "./dist/visual-redaction.js"
+    },
+    "./object-store": {
+      "types": "./dist/object-store.d.ts",
+      "import": "./dist/object-store.js"
     }
   },
   "scripts": {
@@ -26,7 +30,8 @@
   },
   "dependencies": {
     "@nova/schema": "workspace:*",
-    "jimp": "^1.6.1"
+    "jimp": "^1.6.1",
+    "@aws-sdk/client-s3": "^3.1084.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

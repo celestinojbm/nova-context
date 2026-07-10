@@ -18,11 +18,12 @@ const ERROR_MESSAGES: Record<string, string> = {
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; next?: string; mode?: string }>;
+  searchParams: Promise<{ error?: string; next?: string; mode?: string; deleted?: string }>;
 }) {
-  const { error, next, mode } = await searchParams;
+  const { error, next, mode, deleted } = await searchParams;
   const message = error ? (ERROR_MESSAGES[error] ?? "Something went wrong.") : null;
   const signup = mode === "signup";
+  const accountDeleted = deleted === "1";
 
   return (
     <div className="auth-page">
@@ -33,6 +34,11 @@ export default async function LoginPage({
         revoke any device from Settings.
       </p>
 
+      {accountDeleted && (
+        <div className="success">
+          Your account and all its data were permanently deleted.
+        </div>
+      )}
       {message && <div className="error-banner">{message}</div>}
 
       {!signup ? (

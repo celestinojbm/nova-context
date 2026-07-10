@@ -249,6 +249,18 @@ export async function enrichMoment(
     model: draft.model,
     embedded,
   };
+  // M10 enrichment versioning: history is never overwritten. Every run
+  // appends an immutable version row (provider/model/created_at); the
+  // moment's summary/enrichment columns stay the CURRENT pointer, which
+  // the API can move to any recorded version. Version content is derived
+  // from already-redacted moment data — nothing unredacted can enter here.
+  await db.query(
+    `INSERT INTO enrichment_versions (moment_id, user_id, version, summary, enrichment, provider, model)
+     SELECT $1, $2,
+            coalesce((SELECT max(version) FROM enrichment_versions WHERE moment_id = $1), 0) + 1,
+            $3, $4, $5, $6`,
+    [momentId, moment.user_id, draft.summary, JSON.stringify(result), draft.provider, draft.model ?? null],
+  );
   await db.query(
     `UPDATE context_moments
      SET summary = $1, enrichment = $2, enrichment_status = 'completed',

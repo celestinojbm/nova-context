@@ -20,6 +20,16 @@ const envSchema = z.object({
   // M6: key for decrypting integration tokens (same value as the API's).
   // Without it, external actions fail closed with 'encryption_key_missing'.
   NOVA_ENCRYPTION_KEY: z.string().min(32).optional().or(z.literal("").transform(() => undefined)),
+  // M10: media pipeline access for explicitly-approved Notion media
+  // uploads. Same values as the API — the worker reads (never writes)
+  // encrypted blobs through the shared object-store abstraction.
+  NOVA_MEDIA_STORE: z.enum(["fs", "s3"]).default("fs"),
+  NOVA_MEDIA_FS_ROOT: z.string().default("./var/media"),
+  NOVA_MEDIA_S3_BUCKET: z.string().optional().or(z.literal("").transform(() => undefined)),
+  NOVA_MEDIA_S3_REGION: z.string().default("us-east-1"),
+  NOVA_MEDIA_S3_ENDPOINT: z.string().url().optional().or(z.literal("").transform(() => undefined)),
+  NOVA_MEDIA_S3_ACCESS_KEY_ID: z.string().optional().or(z.literal("").transform(() => undefined)),
+  NOVA_MEDIA_S3_SECRET_ACCESS_KEY: z.string().optional().or(z.literal("").transform(() => undefined)),
 });
 
 export type WorkerEnv = z.infer<typeof envSchema>;

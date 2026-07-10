@@ -179,7 +179,9 @@ describe.skipIf(!databaseUrl)("M9: media reliability + storage operations", () =
       deleteOrphans: true,
       minAgeMinutes: 9999, // age guard must NOT protect tombstoned keys
     });
-    expect(report.queueDeleted).toBe(2);
+    // >= because earlier suites may have left their own (already-satisfied)
+    // tombstones; ours are provably drained by the assertions below.
+    expect(report.queueDeleted).toBeGreaterThanOrEqual(2);
     expect(report.queueRemaining).toBe(0);
     await expect(access(join(fsRoot, keys[0]!))).rejects.toThrow();
     const drained = await db.query(`SELECT 1 FROM media_delete_queue WHERE user_id = $1`, [

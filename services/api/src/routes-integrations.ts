@@ -357,18 +357,29 @@ export function registerIntegrationRoutes(
       ((row.payload as Record<string, unknown>).destination as NotionDestination | undefined) ??
       null;
     const effectiveDestination = payloadDestination ?? savedDefault;
-    // M9: how much media the moment carries — surfaced on the card with the
-    // explicit "not included" policy (Notion upload is an M10 decision).
-    const mediaCount = row.moment_id
-      ? Number(
-          (
-            await db.query<{ n: string }>(
-              `SELECT count(*) AS n FROM moment_media WHERE moment_id = $1 AND user_id = $2`,
-              [row.moment_id, userId],
-            )
-          ).rows[0]!.n,
-        )
-      : 0;
+    // M10: the moment's media, per item, with eligibility — the consent
+    // surface. Only visually redacted media ('applied') is ever eligible;
+    // nothing is included unless the user ticks it at approval time.
+    const mediaRows = row.moment_id
+      ? (
+          await db.query<{
+            id: string;
+            kind: string;
+            redaction_state: string;
+            width: number | null;
+            height: number | null;
+          }>(
+            `SELECT id, kind, redaction_state, width, height FROM moment_media
+             WHERE moment_id = $1 AND user_id = $2 ORDER BY created_at ASC`,
+            [row.moment_id, userId],
+          )
+        ).rows
+      : [];
+    const approvedMediaIds = Array.isArray(
+      (row.payload as Record<string, unknown>).media_ids,
+    )
+      ? ((row.payload as Record<string, unknown>).media_ids as string[])
+      : [];
 
     const payload = row.payload as { title?: string; detail?: string | null };
     const sourceUrl =
@@ -408,7 +419,19 @@ export function registerIntegrationRoutes(
         property_mapping:
           effectiveDestination?.type === "database_id" ? savedMapping : null,
       },
-      media: { included: false, count: mediaCount },
+      media: {
+        included: approvedMediaIds.length > 0,
+        count: mediaRows.length,
+        items: mediaRows.map((m) => ({
+          id: m.id,
+          kind: m.kind,
+          redaction_state: m.redaction_state,
+          width: m.width,
+          height: m.height,
+          eligible: m.redaction_state === "applied",
+        })),
+        approved_ids: approvedMediaIds,
+      },
       title: content.title,
       summary: row.summary ?? payload.detail ?? null,
       source_url: sourceUrl,

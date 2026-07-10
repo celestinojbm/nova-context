@@ -362,3 +362,21 @@ h3 { margin: 26px 0 10px; }
   max-width: 140px;
   text-align: center;
 }
+
+/* M10: media consent checkboxes on the approval card */
+.media-consent {
+  border: 1px solid var(--border, #d0d0d0);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  margin: 0.5rem 0;
+}
+.media-consent legend {
+  font-size: 0.85rem;
+  color: #666;
+  padding: 0 0.3rem;
+}
+.media-consent-item {
+  display: block;
+  font-size: 0.9rem;
+  margin: 0.25rem 0;
+}
