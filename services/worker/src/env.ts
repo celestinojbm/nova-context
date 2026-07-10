@@ -20,6 +20,9 @@ const envSchema = z.object({
   // M6: key for decrypting integration tokens (same value as the API's).
   // Without it, external actions fail closed with 'encryption_key_missing'.
   NOVA_ENCRYPTION_KEY: z.string().min(32).optional().or(z.literal("").transform(() => undefined)),
+  // M11: previous keys still valid for READS during gradual rotation
+  // (comma-separated; same value as the API's).
+  NOVA_ENCRYPTION_KEYS_PREVIOUS: z.string().optional().or(z.literal("").transform(() => undefined)),
   // M10: media pipeline access for explicitly-approved Notion media
   // uploads. Same values as the API — the worker reads (never writes)
   // encrypted blobs through the shared object-store abstraction.

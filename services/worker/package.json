@@ -17,7 +17,9 @@
     "@nova/schema": "workspace:*",
     "bullmq": "^5.34.0",
     "pg": "^8.13.0",
-    "zod": "^3.24.0"
+    "zod": "^3.24.0",
+    "ioredis": "^5.11.1",
+    "pino": "^9.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

@@ -127,6 +127,33 @@ export default async function TimelinePage({
                     )}
                   </p>
                   {m.summary && <p className="muted">{m.summary}</p>}
+                  {(() => {
+                    // M11: enrichment provenance — latest version, provider/
+                    // model, and how deep the history goes. Failed/skipped
+                    // runs already show as a badge on the title above.
+                    const meta = (
+                      m as {
+                        enrichment_meta?: {
+                          latest_version: number;
+                          versions: number;
+                          provider: string | null;
+                          model: string | null;
+                          created_at: string;
+                        } | null;
+                      }
+                    ).enrichment_meta;
+                    if (!meta) return null;
+                    return (
+                      <div className="muted enrichment-meta">
+                        Enrichment v{meta.latest_version}
+                        {meta.provider ? ` · ${meta.provider}` : ""}
+                        {meta.model ? ` (${meta.model})` : ""}
+                        {" · "}
+                        {new Date(meta.created_at).toLocaleDateString()}
+                        {meta.versions > 1 ? ` · ${meta.versions - 1} previous` : ""}
+                      </div>
+                    );
+                  })()}
                   {m.source_meta.url && (
                     <div className="moment-url">
                       <a href={m.source_meta.url} target="_blank" rel="noreferrer">

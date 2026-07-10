@@ -1,4 +1,5 @@
-import { decryptBytes, encryptBytes } from "@nova/context-engine/secret-box";
+import { readMediaForAdapter } from "@nova/context-engine/media-gate";
+import { decryptBytesWithAny, encryptBytes } from "@nova/context-engine/secret-box";
 import { parseDataUrl } from "@nova/context-engine/visual-redaction";
 import type { MomentMediaRef } from "@nova/schema";
 import { Jimp, JimpMime } from "jimp";
@@ -51,11 +52,19 @@ function toRef(row: MediaRow): MomentMediaRef {
 }
 
 export class MediaService {
+  /** keys[0] is the CURRENT key (all writes); the rest are previous keys
+   * still valid for reads during a gradual rotation (M11). */
   constructor(
     private readonly db: pg.Pool,
     private readonly store: ObjectStore,
-    private readonly key: Buffer,
-  ) {}
+    private readonly keys: Buffer[],
+  ) {
+    if (!keys.length) throw new Error("MediaService needs at least one key");
+  }
+
+  private get writeKey(): Buffer {
+    return this.keys[0]!;
+  }
 
   /** Encrypt + store images for a just-created moment; returns refs. */
   async storeMomentImages(
@@ -87,8 +96,8 @@ export class MediaService {
         thumb = null;
       }
 
-      await this.store.put(storageKey, encryptBytes(this.key, buffer));
-      if (thumb) await this.store.put(thumbKey, encryptBytes(this.key, thumb));
+      await this.store.put(storageKey, encryptBytes(this.writeKey, buffer));
+      if (thumb) await this.store.put(thumbKey, encryptBytes(this.writeKey, thumb));
 
       const { rows } = await this.db.query<MediaRow>(
         `INSERT INTO moment_media
@@ -136,7 +145,7 @@ export class MediaService {
     if (!blob) return null;
     return {
       contentType: useThumb ? "image/jpeg" : row.content_type,
-      data: decryptBytes(this.key, blob),
+      data: decryptBytesWithAny(this.keys, blob),
     };
   }
 
@@ -285,11 +294,10 @@ export class MediaService {
   }
 
   /**
-   * Adapter-facing read (M9 — the ONLY path external adapters may use,
-   * starting with Notion in M10). Refuses media whose visual redaction is
-   * not provably applied unless the caller passes the user's explicit
-   * override. Callers MUST audit the access (media.adapter_access) — this
-   * method returns the decrypted bytes and the reason string for the audit.
+   * Adapter-facing read (M9; unified in M11). Delegates to THE shared
+   * gate (`@nova/context-engine/media-gate`) — the same code path the
+   * worker executes, so the policy cannot drift between services.
+   * Callers MUST audit the access (media.adapter_access).
    */
   async getForAdapter(
     userId: string,
@@ -299,25 +307,23 @@ export class MediaService {
     | { ok: true; contentType: string; data: Buffer; redactionState: string }
     | { ok: false; reason: "not_found" | "redaction_not_applied" }
   > {
-    const { rows } = await this.db.query<MediaRow>(
-      `SELECT id, moment_id, kind, content_type, bytes, width, height,
-              redaction_state, storage_key, thumb_key
-       FROM moment_media WHERE id = $1 AND user_id = $2`,
-      [mediaId, userId],
-    );
-    const row = rows[0];
-    if (!row) return { ok: false, reason: "not_found" };
-    const safeStates = new Set(["applied", "none"]);
-    if (!safeStates.has(row.redaction_state) && !opts.allowUnredacted) {
-      return { ok: false, reason: "redaction_not_applied" };
+    const result = await readMediaForAdapter(this.db, this.store, this.keys, userId, mediaId, {
+      allowUnredacted: opts.allowUnredacted,
+      allowNone: true,
+    });
+    if (!result.ok) {
+      // Blob-missing/undecryptable map to not_found for API callers: the
+      // media is effectively gone; details stay in ops logs, not responses.
+      return {
+        ok: false,
+        reason: result.reason === "redaction_not_applied" ? "redaction_not_applied" : "not_found",
+      };
     }
-    const blob = await this.store.get(row.storage_key);
-    if (!blob) return { ok: false, reason: "not_found" };
     return {
       ok: true,
-      contentType: row.content_type,
-      data: decryptBytes(this.key, blob),
-      redactionState: row.redaction_state,
+      contentType: result.contentType,
+      data: result.data,
+      redactionState: result.redactionState,
     };
   }
 
@@ -338,7 +344,7 @@ export class MediaService {
     for (const row of rows) {
       const blob = await this.store.get(row.storage_key);
       const dataUrl = blob
-        ? `data:${row.content_type};base64,${decryptBytes(this.key, blob).toString("base64")}`
+        ? `data:${row.content_type};base64,${decryptBytesWithAny(this.keys, blob).toString("base64")}`
         : null;
       const list = out.get(row.moment_id) ?? [];
       list.push({ ...toRef(row), data_url: dataUrl });

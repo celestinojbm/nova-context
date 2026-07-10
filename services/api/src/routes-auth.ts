@@ -2,6 +2,8 @@ import {
   changePasswordRequestSchema,
   loginRequestSchema,
   pairingClaimRequestSchema,
+  passwordResetConfirmSchema,
+  passwordResetRequestSchema,
   signupRequestSchema,
   type CreateSessionResponse,
   type ListSessionsResponse,
@@ -20,7 +22,9 @@ import {
   createPairingCode,
   createSession,
   revokeSession,
+  sha256Hex,
 } from "./auth/sessions.js";
+import { randomBytes } from "node:crypto";
 
 export interface AuthRouteDeps {
   db: pg.Pool;
@@ -115,6 +119,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       return reply.code(400).send({ error: "invalid_request" });
     }
     if (!(await allowAttempt(`login:${req.ip}`))) {
+      req.log.warn({ event: "login_rate_limited" }, "login rate limited");
       return reply.code(429).send({ error: "rate_limited" });
     }
     const { rows } = await db.query<{
@@ -134,6 +139,8 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       ? await verifyPassword(parsed.data.password, user.password_hash)
       : await verifyPassword(parsed.data.password, DUMMY_HASH).then(() => false);
     if (!user || !ok) {
+      // Security event: outcome only — never the email or password.
+      req.log.warn({ event: "login_failed" }, "login failed");
       return reply.code(401).send({ error: "invalid_credentials" });
     }
     const session = await createSession(db, {
@@ -275,6 +282,83 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       revoked_sessions: revoked.rowCount ?? 0,
     });
     return { changed: true, revoked_sessions: revoked.rowCount ?? 0 };
+  });
+
+  /**
+   * M11 self-service password reset. Alpha has no email sender, so the
+   * token is DELIVERED BY THE OPERATOR: the request leg records the
+   * request and mints a token (stored hashed, 30-minute TTL, single use);
+   * the operator retrieves and hands over the reset URL out-of-band via
+   * `pnpm --filter @nova/api auth:reset-token <email>`. The response is
+   * identical whether or not the email exists — no account enumeration.
+   */
+  app.post("/v1/auth/password-reset/request", async (req, reply) => {
+    const parsed = passwordResetRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid_request" });
+    }
+    if (!(await allowAttempt(`pwreset-req:${req.ip}`))) {
+      return reply.code(429).send({ error: "rate_limited" });
+    }
+    const { rows } = await db.query<{ id: string }>(
+      `SELECT id FROM users WHERE email = $1 AND deleted_at IS NULL`,
+      [parsed.data.email.toLowerCase()],
+    );
+    if (rows.length) {
+      const userId = rows[0]!.id;
+      const token = `nova_reset_${randomBytes(32).toString("base64url")}`;
+      await db.query(
+        `INSERT INTO password_resets (user_id, token_hash, expires_at)
+         VALUES ($1, $2, now() + interval '30 minutes')`,
+        [userId, sha256Hex(token)],
+      );
+      // Audited without the token; the security log line carries no
+      // identifiers beyond the event itself.
+      await audit(userId, "auth.password.reset_requested", {});
+      req.log.info({ event: "password_reset_requested" }, "password reset requested");
+      // The token is NOT returned here — the operator command prints it.
+    }
+    return reply.code(202).send({
+      accepted: true,
+      delivery: "operator",
+      message:
+        "If that account exists, a reset was recorded. In the private alpha, the operator delivers the reset link out-of-band.",
+    });
+  });
+
+  app.post("/v1/auth/password-reset/confirm", async (req, reply) => {
+    const parsed = passwordResetConfirmSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid_request" });
+    }
+    if (!(await allowAttempt(`pwreset-confirm:${req.ip}`))) {
+      return reply.code(429).send({ error: "rate_limited" });
+    }
+    // Atomic single-use claim: expired, unknown, or replayed tokens all
+    // fail identically.
+    const claim = await db.query<{ user_id: string }>(
+      `UPDATE password_resets SET used_at = now()
+       WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
+       RETURNING user_id`,
+      [sha256Hex(parsed.data.token)],
+    );
+    if (!claim.rowCount) {
+      return reply.code(400).send({ error: "invalid_or_expired_token" });
+    }
+    const userId = claim.rows[0]!.user_id;
+    const newHash = await hashPassword(parsed.data.new_password);
+    await db.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [newHash, userId]);
+    // Every existing session dies — whoever reset the password holds the
+    // only way in now.
+    const revoked = await db.query(
+      `UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`,
+      [userId],
+    );
+    await audit(userId, "auth.password.reset_completed", {
+      revoked_sessions: revoked.rowCount ?? 0,
+    });
+    req.log.info({ event: "password_reset_completed" }, "password reset completed");
+    return { reset: true };
   });
 
   /** M7: panic button — sign out every other device/session at once. */

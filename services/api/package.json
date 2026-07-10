@@ -15,7 +15,10 @@
     "media:cleanup": "tsx src/db/cleanup-media.ts",
     "media:rotate-key": "tsx src/db/rotate-media-key.ts",
     "test": "vitest run --dir src",
-    "test:integration": "vitest run --dir test"
+    "test:integration": "vitest run --dir test",
+    "ops:maintenance": "tsx src/db/run-maintenance.ts",
+    "media:verify": "tsx src/db/verify-media.ts",
+    "auth:reset-token": "tsx src/db/reset-token.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1084.0",

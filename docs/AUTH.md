@@ -545,7 +545,81 @@ version (audited, nothing lost). Version content derives from already-
 redacted moment data — text redaction ran before anything reached the
 enrichment pipeline.
 
-## Search (M9 quality pass v2)
+## Private alpha operations (M11 — implemented)
+
+**Health & readiness.** `GET /healthz` (liveness) and `GET /readyz`
+(Postgres + pending-migrations + Redis + a media-store write/read/delete
+probe; booleans only, public — this is the deploy gate). The worker writes
+a Redis heartbeat every 30s (90s TTL); `GET /v1/ops/status` (authed, like
+every /v1 route) adds worker freshness, queue depths, failed-action and
+pending-delete counts, global storage totals, the last maintenance run,
+and the build sha — counts and booleans only, rendered on the web
+`/status` page. Full checklist, failure-mode table, backup/restore
+procedure, and smoke instructions: `infra/DEPLOY.md`.
+
+**Maintenance.** `ops:maintenance` (dry-run default, `--apply` to act):
+media orphan cleanup + delete-queue drain, dead-session sweep (7-day
+retention window), expired pairing codes / OAuth states / password-reset
+tokens, failed-action VISIBILITY (never deleted), and product-event
+pruning only with an explicit `--prune-events-days`. Sections fail in
+isolation; every run is recorded (ops_maintenance_runs) and shown on
+/status.
+
+**Observability.** API responses carry `x-request-id` (incoming header
+honored, otherwise minted); worker logs are structured (pino) with
+job/action/moment ids and error classes; security events (login failed /
+rate limited, password reset requested/completed) are logged by NAME only.
+The log contract is tested: captured content, passwords, session tokens,
+and encryption keys never appear in log output.
+
+**Password reset (self-service, operator-delivered).** `POST
+/v1/auth/password-reset/request` always answers 202 identically (no
+account enumeration) and mints a hashed, single-use, 30-minute token when
+the account exists; alpha has no email sender, so the OPERATOR retrieves
+and delivers the link out-of-band: `pnpm --filter @nova/api
+auth:reset-token -- <email>` (prints the URL once; refuses in production
+without NOVA_OPERATOR_RESET=yes). `POST /v1/auth/password-reset/confirm`
+claims the token atomically, sets the new password, and revokes EVERY
+session. Both legs are rate-limited; audits carry no token material.
+
+**Multi-key media read (zero-downtime rotation).** The M9 limitation is
+gone: `NOVA_ENCRYPTION_KEYS_PREVIOUS` (comma-separated) lets the API and
+worker READ media — and integration tokens — encrypted under previous
+keys while all writes use the current `NOVA_ENCRYPTION_KEY`. Rotation is
+now: deploy new-key + previous-key config (no read outage), run
+`media:rotate-key -- --apply` gradually, `media:verify` with only the new
+key, drop the previous key. GCM trial decryption means a wrong key can
+never emit garbage plaintext; blobs no configured key opens are refused
+(and surfaced by `media:verify`, the backup/restore verification command).
+
+**Shared adapter media gate.** The policy for pixels leaving Nova toward
+ANY adapter lives in exactly one place now:
+`@nova/context-engine/media-gate` (`readMediaForAdapter`). The API's
+`MediaService.getForAdapter` and the worker's execution read are both thin
+wrappers over it — user-scoped, redaction-state-gated (worker keeps the
+stricter applied-only stance), deleted/tombstoned media blocked, audited
+by every caller. The gate cannot drift between services because there is
+only one gate.
+
+**Notion media upload hardening.** Upload ids are persisted onto the
+action row per media BEFORE the next step, so queue retries re-use them —
+no duplicate media objects in the workspace (test-pinned). Uploads run
+BEFORE page creation by design, so "upload failed after the page exists"
+cannot occur; the page is created once, last, with everything attached,
+and the existing page-id short-circuit still dedups page creation. A gated
+live smoke (`notion-live-smoke.test.ts` + checklist in DEPLOY.md) covers
+the real provider.
+
+## Search (M9 quality pass v2, tuned in M11)
+
+M11 tuning notes: field weights are the ranking contract — intent text
+(A) > title (B) > body/OCR text (C) — now pinned by a golden test with
+the same term planted in all three fields. Fusion stays 0.6 FTS / 0.4
+vector (unchanged after review: with FTS-only rankings pinned by goldens
+and the vector leg optional, retuning the blend without embedding
+coverage would overfit). Ranking diagnostics remain opt-in via
+`debug: true` and expose raw per-leg scores for the caller's own data
+only.
 
 - **Prefix fallback**: when whole-word FTS finds nothing, the query reruns
   with prefix-matching lexemes (`kubernet deplo` → `kubernet:* & deplo:*`)

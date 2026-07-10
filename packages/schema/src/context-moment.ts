@@ -120,6 +120,15 @@ export interface MomentMediaRef {
   thumbnail_url: string | null;
 }
 
+/** M11: enrichment version metadata attached to timeline moments. */
+export interface EnrichmentMeta {
+  latest_version: number;
+  versions: number;
+  provider: string | null;
+  model: string | null;
+  created_at: string;
+}
+
 /** M9: per-user storage accounting — aggregates only, never content. */
 export interface MediaUsageResponse {
   objects: number;

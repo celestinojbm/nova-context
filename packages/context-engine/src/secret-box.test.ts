@@ -1,9 +1,13 @@
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  decryptBytesWithAny,
   decryptSecret,
+  decryptSecretWithAny,
+  encryptBytes,
   encryptSecret,
   parseEncryptionKey,
+  parseKeyList,
   SecretBoxError,
 } from "./secret-box.js";
 
@@ -53,5 +57,40 @@ describe("secret box (integration-token encryption)", () => {
     expect(parseEncryptionKey(b64).length).toBe(32);
     expect(() => parseEncryptionKey("too-short")).toThrow(SecretBoxError);
     expect(() => parseEncryptionKey(randomBytes(16).toString("hex"))).toThrow(SecretBoxError);
+  });
+});
+
+describe("M11 multi-key read (keyring)", () => {
+  it("parses comma-separated key lists", () => {
+    const a = randomBytes(32).toString("hex");
+    const b = randomBytes(32).toString("base64");
+    const keys = parseKeyList(` ${a} , ${b} ,`);
+    expect(keys).toHaveLength(2);
+    expect(keys[0]!.length).toBe(32);
+  });
+
+  it("decrypts with any keyring key; new writes stay new-key-only", () => {
+    const oldKey = randomBytes(32);
+    const newKey = randomBytes(32);
+    const oldBox = encryptBytes(oldKey, Buffer.from("old-era"));
+    const newBox = encryptBytes(newKey, Buffer.from("new-era"));
+    const ring = [newKey, oldKey]; // current first
+    expect(decryptBytesWithAny(ring, oldBox).toString()).toBe("old-era");
+    expect(decryptBytesWithAny(ring, newBox).toString()).toBe("new-era");
+    // A ring without the old key cannot open old data.
+    expect(() => decryptBytesWithAny([newKey], oldBox)).toThrow(SecretBoxError);
+  });
+
+  it("fails with SecretBoxError when no key fits (no partial output)", () => {
+    const box = encryptBytes(randomBytes(32), Buffer.from("locked"));
+    expect(() => decryptBytesWithAny([randomBytes(32), randomBytes(32)], box)).toThrow(
+      SecretBoxError,
+    );
+  });
+
+  it("decryptSecretWithAny round-trips strings across the ring", () => {
+    const oldKey = randomBytes(32);
+    const box = encryptSecret(oldKey, "token-value");
+    expect(decryptSecretWithAny([randomBytes(32), oldKey], box)).toBe("token-value");
   });
 });

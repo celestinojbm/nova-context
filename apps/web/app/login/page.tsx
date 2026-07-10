@@ -1,4 +1,20 @@
+import { redirect } from "next/navigation";
+import { API_URL } from "../lib/api";
 import { loginAction, signupAction } from "../lib/auth-actions";
+
+async function requestReset(formData: FormData) {
+  "use server";
+  const email = formData.get("email");
+  if (typeof email !== "string" || !email) redirect("/login?error=missing");
+  await fetch(`${API_URL}/v1/auth/password-reset/request`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email }),
+    cache: "no-store",
+  }).catch(() => undefined);
+  // Same outcome whether or not the account exists.
+  redirect("/login?requested=1");
+}
 
 export const dynamic = "force-dynamic";
 
@@ -18,9 +34,9 @@ const ERROR_MESSAGES: Record<string, string> = {
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; next?: string; mode?: string; deleted?: string }>;
+  searchParams: Promise<{ error?: string; next?: string; mode?: string; deleted?: string; reset?: string; requested?: string }>;
 }) {
-  const { error, next, mode, deleted } = await searchParams;
+  const { error, next, mode, deleted, reset, requested } = await searchParams;
   const message = error ? (ERROR_MESSAGES[error] ?? "Something went wrong.") : null;
   const signup = mode === "signup";
   const accountDeleted = deleted === "1";
@@ -39,9 +55,22 @@ export default async function LoginPage({
           Your account and all its data were permanently deleted.
         </div>
       )}
+      {reset === "1" && (
+        <div className="success">
+          Password reset. Sign in with your new password — all previous
+          sessions were signed out.
+        </div>
+      )}
+      {requested === "1" && (
+        <div className="success">
+          If that account exists, a reset was recorded. The operator will
+          deliver your reset link out-of-band (private alpha has no email).
+        </div>
+      )}
       {message && <div className="error-banner">{message}</div>}
 
       {!signup ? (
+        <>
         <form action={loginAction} className="auth-form">
           <input type="hidden" name="next" value={next ?? "/"} />
           <label>
@@ -54,6 +83,21 @@ export default async function LoginPage({
           </label>
           <button type="submit" className="primary">Sign in</button>
         </form>
+        <details className="account-tools">
+          <summary>Forgot your password?</summary>
+          <form action={requestReset} className="auth-form">
+            <label>
+              Account email
+              <input type="email" name="email" autoComplete="email" required />
+            </label>
+            <button type="submit">Request reset</button>
+            <p className="muted">
+              The operator delivers the single-use reset link out-of-band
+              (private alpha has no email sending).
+            </p>
+          </form>
+        </details>
+        </>
       ) : (
         <form action={signupAction} className="auth-form">
           <label>
