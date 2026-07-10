@@ -12,6 +12,8 @@
     "db:seed-dev": "tsx src/db/seed-dev.ts",
     "auth:reset-password": "tsx src/db/reset-password.ts",
     "media:backfill": "tsx src/db/backfill-media.ts",
+    "media:cleanup": "tsx src/db/cleanup-media.ts",
+    "media:rotate-key": "tsx src/db/rotate-media-key.ts",
     "test": "vitest run --dir src",
     "test:integration": "vitest run --dir test"
   },

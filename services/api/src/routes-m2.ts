@@ -100,10 +100,12 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
       row: Record<string, unknown>;
       fts: number | null;
       vector: number | null;
+      prefixFallback: boolean;
     }
     const byId = new Map<string, Scored>();
 
     let ftsRan = false;
+    let prefixFallbackRan = false;
     if (query) {
       ftsRan = true;
       const qParam = addParam(query);
@@ -117,9 +119,43 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
         params,
       );
       for (const row of rows) {
-        byId.set(row.id as string, { row, fts: Number(row.rank), vector: null });
+        byId.set(row.id as string, {
+          row,
+          fts: Number(row.rank),
+          vector: null,
+          prefixFallback: false,
+        });
       }
       params.pop();
+
+      // M9 fuzzy/partial fallback: whole-word FTS found nothing, so retry
+      // the same tsvector with prefix-matching lexemes ("kuber" → kuber:*).
+      // Documented limitation: this is prefix matching, not typo tolerance.
+      if (!rows.length) {
+        const prefixQuery = buildPrefixTsQuery(query);
+        if (prefixQuery) {
+          const pParam = addParam(prefixQuery);
+          const { rows: prefixRows } = await db.query(
+            `SELECT ${momentColumnsPrefixed},
+                    ts_rank(m.tsv, to_tsquery('english', $${pParam})) AS rank
+             FROM context_moments m
+             WHERE ${where} AND m.tsv @@ to_tsquery('english', $${pParam})
+             ORDER BY rank DESC
+             LIMIT 50`,
+            params,
+          );
+          prefixFallbackRan = prefixRows.length > 0;
+          for (const row of prefixRows) {
+            byId.set(row.id as string, {
+              row,
+              fts: Number(row.rank),
+              vector: null,
+              prefixFallback: true,
+            });
+          }
+          params.pop();
+        }
+      }
     }
 
     let vectorRan = false;
@@ -141,7 +177,13 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
         for (const row of rows) {
           const existing = byId.get(row.id as string);
           if (existing) existing.vector = Number(row.similarity);
-          else byId.set(row.id as string, { row, fts: null, vector: Number(row.similarity) });
+          else
+            byId.set(row.id as string, {
+              row,
+              fts: null,
+              vector: Number(row.similarity),
+              prefixFallback: false,
+            });
         }
         params.pop();
       } catch (err) {
@@ -165,6 +207,16 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
             ...rowToMoment(s.row),
             score: Number((0.6 * ftsNorm + 0.4 * vecNorm).toFixed(4)),
             match: match as MemorySearchResult["match"],
+            // M9 ranking diagnostics: raw leg scores on request.
+            ...(input.debug
+              ? {
+                  diagnostics: {
+                    fts_rank: s.fts,
+                    vector_similarity: s.vector,
+                    prefix_fallback: s.prefixFallback,
+                  },
+                }
+              : {}),
           };
         })
         .sort((a, b) => b.score - a.score)
@@ -196,7 +248,7 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
     });
     const response: MemorySearchResponse = {
       items,
-      legs: { fts: ftsRan, vector: vectorRan },
+      legs: { fts: ftsRan, vector: vectorRan, prefix_fallback: prefixFallbackRan },
     };
     return response;
   });
@@ -523,4 +575,19 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
     };
     return response;
   });
+}
+
+/**
+ * M9: turn free text into a prefix-matching tsquery ("kuber deplo" →
+ * "kuber:* & deplo:*"). Tokens are stripped to word characters so user
+ * input can never inject tsquery syntax; empty result = no fallback.
+ */
+export function buildPrefixTsQuery(query: string): string | null {
+  const tokens = query
+    .split(/\s+/)
+    .map((t) => t.replace(/[^\p{L}\p{N}]/gu, ""))
+    .filter((t) => t.length >= 2)
+    .slice(0, 8);
+  if (!tokens.length) return null;
+  return tokens.map((t) => `${t}:*`).join(" & ");
 }

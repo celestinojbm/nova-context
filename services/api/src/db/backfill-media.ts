@@ -7,7 +7,7 @@ import pg from "pg";
 import { loadEnv } from "../env.js";
 import { extractPayloadImages } from "../image-redaction.js";
 import { MediaService } from "../media/media-service.js";
-import { FsObjectStore, S3ObjectStore, type ObjectStore } from "../media/object-store.js";
+import { storeFromEnv } from "../media/object-store.js";
 import { TesseractOcrEngine } from "../ocr.js";
 
 /**
@@ -34,16 +34,7 @@ if (!env.NOVA_ENCRYPTION_KEY) {
   process.exit(1);
 }
 const key = parseEncryptionKey(env.NOVA_ENCRYPTION_KEY);
-const store: ObjectStore =
-  env.NOVA_MEDIA_STORE === "s3"
-    ? new S3ObjectStore({
-        bucket: env.NOVA_MEDIA_S3_BUCKET!,
-        region: env.NOVA_MEDIA_S3_REGION,
-        endpoint: env.NOVA_MEDIA_S3_ENDPOINT,
-        accessKeyId: env.NOVA_MEDIA_S3_ACCESS_KEY_ID!,
-        secretAccessKey: env.NOVA_MEDIA_S3_SECRET_ACCESS_KEY!,
-      })
-    : new FsObjectStore(env.NOVA_MEDIA_FS_ROOT);
+const store = storeFromEnv(env);
 const ocr: OcrEngine | null =
   env.NOVA_IMAGE_REDACTION === "on"
     ? new TesseractOcrEngine({ langPath: env.NOVA_OCR_LANG_PATH, timeoutMs: env.NOVA_OCR_TIMEOUT_MS })

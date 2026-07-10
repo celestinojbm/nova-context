@@ -47,6 +47,9 @@ export const AUDIT_EVENT_LABELS: Record<string, string> = {
   "auth.password.reset": "Password reset by operator (all sessions signed out)",
   "auth.sessions.revoke_all": "All other sessions signed out",
   "media.backfill": "Legacy screenshot moved into encrypted media storage",
+  "media.cleanup": "Orphaned media object(s) removed from storage",
+  "media.view": "Stored media viewed",
+  "media.adapter_access": "Stored media read for an external integration",
 };
 
 export function registerM4Routes(app: FastifyInstance, deps: M4RouteDeps): void {
@@ -154,6 +157,7 @@ export function registerM4Routes(app: FastifyInstance, deps: M4RouteDeps): void 
     let momentCount = 0;
     let taskCount = 0;
     let actionCount = 0;
+    let mediaResult = { deleted: 0, queued: 0 };
     try {
       await client.query("BEGIN");
       if (deleteMoments) {
@@ -166,7 +170,8 @@ export function registerM4Routes(app: FastifyInstance, deps: M4RouteDeps): void 
         momentCount = momentIds.length;
         if (momentIds.length && media) {
           // M8: object cleanup before the rows cascade away.
-          await media.deleteForMoments(userId, momentIds);
+          // M9: failed blob deletes tombstone into media_delete_queue.
+          mediaResult = await media.deleteForMoments(userId, momentIds);
         }
         if (momentIds.length) {
           await client.query(
@@ -201,6 +206,8 @@ export function registerM4Routes(app: FastifyInstance, deps: M4RouteDeps): void 
             deleted_moments: momentCount,
             deleted_tasks: taskCount,
             deleted_actions: actionCount,
+            deleted_media_objects: mediaResult.deleted,
+            queued_media_deletions: mediaResult.queued,
             content_deleted: deleteMoments,
           }),
         ],

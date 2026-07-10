@@ -1,13 +1,15 @@
 import { randomBytes } from "node:crypto";
-import { buildNotionPageContent } from "@nova/context-engine";
+import { buildNotionPageContent, validateNotionMapping } from "@nova/context-engine";
 import { decryptSecret, encryptSecret, parseEncryptionKey } from "@nova/context-engine/secret-box";
 import {
   oauthCallbackRequestSchema,
   setDestinationRequestSchema,
   type ActionPreviewResponse,
+  type ListDatabasePropertiesResponse,
   type ListDestinationsResponse,
   type ListIntegrationsResponse,
   type NotionDestination,
+  type NotionPropertyMapping,
   type OAuthStartResponse,
 } from "@nova/schema";
 import type { FastifyInstance } from "fastify";
@@ -196,34 +198,109 @@ export function registerIntegrationRoutes(
     const response: ListDestinationsResponse = {
       items,
       default: (conn.rows[0]!.meta?.default_destination as NotionDestination | undefined) ?? null,
+      property_mapping:
+        (conn.rows[0]!.meta?.destination_mapping as NotionPropertyMapping | undefined) ?? null,
     };
     return response;
   });
 
+  /** M9: properties of a shared database, for the mapping UI + validation. */
+  app.get("/v1/integrations/notion/destinations/:id/properties", async (req, reply) => {
+    const params = z.object({ id: z.string().min(8).max(64) }).safeParse(req.params);
+    if (!params.success) return reply.code(404).send({ error: "not_found" });
+    const userId = requireAuth(req).userId;
+    if (!encryptionKey || !notionApi) {
+      return reply.code(503).send({ error: "notion_not_configured" });
+    }
+    const conn = await db.query<{ token_ciphertext: Buffer }>(
+      `SELECT token_ciphertext FROM integration_connections
+       WHERE user_id = $1 AND provider = 'notion' AND status = 'active'`,
+      [userId],
+    );
+    if (!conn.rows.length) return reply.code(409).send({ error: "notion_not_connected" });
+    try {
+      const token = decryptSecret(encryptionKey, conn.rows[0]!.token_ciphertext);
+      const properties = await notionApi.getDatabaseProperties(token, params.data.id);
+      const response: ListDatabasePropertiesResponse = {
+        destination_id: params.data.id,
+        properties,
+      };
+      return response;
+    } catch (err) {
+      req.log.warn({ err }, "notion database properties fetch failed");
+      return reply.code(502).send({ error: "notion_unreachable" });
+    }
+  });
+
   /** M7: save (or clear, with null) the user's default destination. Stored
-   * per user in their own connection row — never shared. */
+   * per user in their own connection row — never shared. M9: a DATABASE
+   * destination may carry a property mapping, validated against the live
+   * database schema before anything is saved. */
   app.put("/v1/integrations/notion/destination", async (req, reply) => {
     const userId = requireAuth(req).userId;
     const parsed = setDestinationRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: "invalid_request" });
     }
+    const destination = parsed.data.destination;
+    let mapping: NotionPropertyMapping | null = null;
+    if (parsed.data.property_mapping) {
+      if (destination?.type !== "database_id") {
+        return reply.code(400).send({
+          error: "invalid_mapping",
+          message: "property_mapping is only valid for database destinations",
+        });
+      }
+      if (!encryptionKey || !notionApi) {
+        return reply.code(503).send({ error: "notion_not_configured" });
+      }
+      const conn = await db.query<{ token_ciphertext: Buffer }>(
+        `SELECT token_ciphertext FROM integration_connections
+         WHERE user_id = $1 AND provider = 'notion' AND status = 'active'`,
+        [userId],
+      );
+      if (!conn.rows.length) return reply.code(409).send({ error: "notion_not_connected" });
+      // Validate BEFORE saving: every mapped field must hit an existing,
+      // type-compatible property of the actual database.
+      let issues;
+      try {
+        const token = decryptSecret(encryptionKey, conn.rows[0]!.token_ciphertext);
+        const properties = await notionApi.getDatabaseProperties(token, destination.id);
+        issues = validateNotionMapping(parsed.data.property_mapping, properties);
+      } catch (err) {
+        req.log.warn({ err }, "notion mapping validation failed");
+        return reply.code(502).send({ error: "notion_unreachable" });
+      }
+      if (issues.length) {
+        return reply.code(400).send({ error: "invalid_mapping", issues });
+      }
+      mapping = parsed.data.property_mapping;
+    }
     const { rowCount } = await db.query(
       `UPDATE integration_connections
-       SET meta = CASE WHEN $2::jsonb IS NULL THEN meta - 'default_destination'
-                       ELSE jsonb_set(meta, '{default_destination}', $2::jsonb) END,
+       SET meta = CASE WHEN $2::jsonb IS NULL
+                       THEN (meta - 'default_destination') - 'destination_mapping'
+                       WHEN $3::jsonb IS NULL
+                       THEN jsonb_set(meta - 'destination_mapping', '{default_destination}', $2::jsonb)
+                       ELSE jsonb_set(jsonb_set(meta, '{default_destination}', $2::jsonb),
+                                      '{destination_mapping}', $3::jsonb) END,
            updated_at = now()
        WHERE user_id = $1 AND provider = 'notion' AND status = 'active'`,
-      [userId, parsed.data.destination ? JSON.stringify(parsed.data.destination) : null],
+      [
+        userId,
+        destination ? JSON.stringify(destination) : null,
+        mapping ? JSON.stringify(mapping) : null,
+      ],
     );
     if (!rowCount) return reply.code(409).send({ error: "notion_not_connected" });
     // Title only — a page title is user-chosen metadata, never captured content.
     await audit(userId, "notion.destination.set", {
-      destination_title: parsed.data.destination?.title ?? null,
-      destination_type: parsed.data.destination?.type ?? null,
-      cleared: parsed.data.destination === null,
+      destination_title: destination?.title ?? null,
+      destination_type: destination?.type ?? null,
+      mapped_fields: mapping ? Object.keys(mapping).length : 0,
+      cleared: destination === null,
     });
-    return { destination: parsed.data.destination };
+    return { destination, property_mapping: mapping };
   });
 
   app.delete("/v1/integrations/notion", async (req, reply) => {
@@ -273,9 +350,25 @@ export function registerIntegrationRoutes(
     );
     const savedDefault =
       (connection.rows[0]?.meta?.default_destination as NotionDestination | undefined) ?? null;
+    const savedMapping =
+      (connection.rows[0]?.meta?.destination_mapping as NotionPropertyMapping | undefined) ??
+      null;
     const payloadDestination =
       ((row.payload as Record<string, unknown>).destination as NotionDestination | undefined) ??
       null;
+    const effectiveDestination = payloadDestination ?? savedDefault;
+    // M9: how much media the moment carries — surfaced on the card with the
+    // explicit "not included" policy (Notion upload is an M10 decision).
+    const mediaCount = row.moment_id
+      ? Number(
+          (
+            await db.query<{ n: string }>(
+              `SELECT count(*) AS n FROM moment_media WHERE moment_id = $1 AND user_id = $2`,
+              [row.moment_id, userId],
+            )
+          ).rows[0]!.n,
+        )
+      : 0;
 
     const payload = row.payload as { title?: string; detail?: string | null };
     const sourceUrl =
@@ -310,8 +403,12 @@ export function registerIntegrationRoutes(
         provider: "notion",
         workspace: connection.rows[0]?.external_account ?? null,
         // Approval-time override > user default > first shared page.
-        destination: payloadDestination ?? savedDefault,
+        destination: effectiveDestination,
+        // Mapping applies only when the effective destination is a database.
+        property_mapping:
+          effectiveDestination?.type === "database_id" ? savedMapping : null,
       },
+      media: { included: false, count: mediaCount },
       title: content.title,
       summary: row.summary ?? payload.detail ?? null,
       source_url: sourceUrl,

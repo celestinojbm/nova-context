@@ -60,6 +60,22 @@ release takes traffic. Manual run: `fly ssh console -c infra/deploy/fly.api.toml
   screenshots. Move them with the manual operator command
   `pnpm --filter @nova/api media:backfill` (idempotent; skips anything it
   cannot prove was redacted — see `docs/AUTH.md`, "Legacy backfill").
+
+## Media operations (M9)
+
+- **Orphan cleanup / failed-delete retry**: `pnpm --filter @nova/api
+  media:cleanup` (dry run) then `-- --delete`. Run occasionally, or after
+  storage incidents; it retries tombstoned deletes (media_delete_queue)
+  and removes blobs no `moment_media` row references. `--min-age-minutes`
+  (default 60) protects in-flight captures.
+- **Key rotation**: `NOVA_ENCRYPTION_KEY=<new> NOVA_ENCRYPTION_KEY_OLD=<current>
+  pnpm --filter @nova/api media:rotate-key -- --apply`, verify
+  `undecryptable: 0`, then redeploy API + worker with the new key. Offline
+  rotation — do it in a maintenance window (see `docs/AUTH.md` §Media
+  operations for the exact order and limitations).
+- **Storage visibility**: per-user usage on the web Settings page (or
+  `GET /v1/media/usage`); `pending_deletions` > 0 means the delete queue
+  needs a `media:cleanup -- --delete` run.
 - The worker and web can roll back independently of the API; the API's
   contracts are additive within a milestone.
 

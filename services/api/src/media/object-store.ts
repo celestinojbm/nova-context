@@ -1,5 +1,5 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, join, normalize } from "node:path";
+import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, join, normalize, relative, sep } from "node:path";
 
 /**
  * Object storage abstraction (M8). Deliberately tiny — put/get/delete of
@@ -9,11 +9,20 @@ import { dirname, join, normalize } from "node:path";
  * Blobs are ALWAYS ciphertext (AES-256-GCM via secret-box) before they
  * reach a store; the store never sees plaintext captured pixels.
  */
+export interface StoredObject {
+  key: string;
+  size: number;
+  lastModified: Date | null;
+}
+
 export interface ObjectStore {
   readonly name: string;
   put(key: string, data: Buffer): Promise<void>;
   get(key: string): Promise<Buffer | null>;
   delete(key: string): Promise<void>;
+  /** Every object under the prefix (M9 orphan cleanup). Loads the full key
+   * list into memory — fine at alpha scale; revisit before millions. */
+  list(prefix?: string): Promise<StoredObject[]>;
 }
 
 export class FsObjectStore implements ObjectStore {
@@ -47,6 +56,32 @@ export class FsObjectStore implements ObjectStore {
   async delete(key: string): Promise<void> {
     await rm(this.pathFor(key), { force: true });
   }
+
+  async list(prefix = ""): Promise<StoredObject[]> {
+    const out: StoredObject[] = [];
+    const walk = async (dir: string): Promise<void> => {
+      let entries;
+      try {
+        entries = await readdir(dir, { withFileTypes: true });
+      } catch (err) {
+        if ((err as { code?: string }).code === "ENOENT") return;
+        throw err;
+      }
+      for (const entry of entries) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          await walk(full);
+        } else if (entry.isFile()) {
+          const key = relative(this.root, full).split(sep).join("/");
+          if (!key.startsWith(prefix)) continue;
+          const info = await stat(full);
+          out.push({ key, size: info.size, lastModified: info.mtime });
+        }
+      }
+    };
+    await walk(this.root);
+    return out;
+  }
 }
 
 export interface S3Config {
@@ -55,6 +90,30 @@ export interface S3Config {
   endpoint?: string; // MinIO/R2; unset = AWS
   accessKeyId: string;
   secretAccessKey: string;
+}
+
+/** Structural slice of Env so this module stays dependency-free. */
+export interface MediaStoreEnv {
+  NOVA_MEDIA_STORE: "fs" | "s3";
+  NOVA_MEDIA_FS_ROOT: string;
+  NOVA_MEDIA_S3_BUCKET?: string;
+  NOVA_MEDIA_S3_REGION: string;
+  NOVA_MEDIA_S3_ENDPOINT?: string;
+  NOVA_MEDIA_S3_ACCESS_KEY_ID?: string;
+  NOVA_MEDIA_S3_SECRET_ACCESS_KEY?: string;
+}
+
+/** One place to turn env into a store (app + operator commands). */
+export function storeFromEnv(env: MediaStoreEnv): ObjectStore {
+  return env.NOVA_MEDIA_STORE === "s3"
+    ? new S3ObjectStore({
+        bucket: env.NOVA_MEDIA_S3_BUCKET!,
+        region: env.NOVA_MEDIA_S3_REGION,
+        endpoint: env.NOVA_MEDIA_S3_ENDPOINT,
+        accessKeyId: env.NOVA_MEDIA_S3_ACCESS_KEY_ID!,
+        secretAccessKey: env.NOVA_MEDIA_S3_SECRET_ACCESS_KEY!,
+      })
+    : new FsObjectStore(env.NOVA_MEDIA_FS_ROOT);
 }
 
 export class S3ObjectStore implements ObjectStore {
@@ -119,5 +178,31 @@ export class S3ObjectStore implements ObjectStore {
     await (await this.client()).send(
       new DeleteObjectCommand({ Bucket: this.cfg.bucket, Key: key }),
     );
+  }
+
+  async list(prefix = ""): Promise<StoredObject[]> {
+    const { ListObjectsV2Command } = await import("@aws-sdk/client-s3");
+    const client = await this.client();
+    const out: StoredObject[] = [];
+    let continuationToken: string | undefined;
+    do {
+      const res = await client.send(
+        new ListObjectsV2Command({
+          Bucket: this.cfg.bucket,
+          Prefix: prefix || undefined,
+          ContinuationToken: continuationToken,
+        }),
+      );
+      for (const obj of res.Contents ?? []) {
+        if (!obj.Key) continue;
+        out.push({
+          key: obj.Key,
+          size: obj.Size ?? 0,
+          lastModified: obj.LastModified ?? null,
+        });
+      }
+      continuationToken = res.IsTruncated ? res.NextContinuationToken : undefined;
+    } while (continuationToken);
+    return out;
   }
 }

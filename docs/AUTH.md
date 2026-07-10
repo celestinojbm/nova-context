@@ -357,7 +357,108 @@ M9 designs explicit per-action consent for it.
 
 **Known limitations.** Blob writes are not transactional with the DB row —
 a crash mid-store can orphan a blob (never the reverse: the row is written
-after the bytes land), and orphans are invisible ciphertext pending a
-cleanup sweep. Media failures at capture never fail the capture itself
-(the moment is stored without media). The fs backend has no built-in
-replication — production should prefer the s3 backend.
+after the bytes land); M9's `media:cleanup` command removes such orphans.
+Media failures at capture never fail the capture itself (the moment is
+stored without media). The fs backend has no built-in replication —
+production should prefer the s3 backend.
+
+## Media operations (M9 — implemented)
+
+M8 built the pipeline; M9 makes it operable before captured media ever
+flows to external tools.
+
+**Orphan cleanup (`media:cleanup`).** Blobs can exist without a
+`moment_media` row (crash between the blob write and the DB insert). The
+manual command lists object storage, diffs against EVERY user's
+`moment_media` keys (so deleting valid media is structurally impossible),
+and removes the orphans. Dry-run is the default; `--delete` opts in; blobs
+younger than `--min-age-minutes` (default 60) are never touched because an
+in-flight capture writes its blob before its row. Deletions are audited
+per affected user as `media.cleanup` with counts only. The command handles
+opaque ciphertext keys — it needs no encryption key and sees no pixels.
+
+**Delete hardening.** A user's delete (moment or project) now NEVER fails
+or silently leaks because object storage hiccuped: each blob delete that
+fails is tombstoned into `media_delete_queue` (UNIQUE per key; repeated
+failures bump `attempts`), the delete succeeds, and the audit records
+`deleted_media_objects` + `queued_media_deletions`. `media:cleanup` drains
+the queue on every run (the retry/recovery path), and the per-user storage
+usage surfaces `pending_deletions` so a stuck queue is visible, not
+invisible.
+
+**Storage accounting.** `GET /v1/media/usage` (authenticated, strictly
+user-scoped) returns aggregates only: object count, encrypted bytes,
+thumbnail bytes, per kind, per redaction state, per project, plus pending
+deletions. The web Settings page renders it. No keys, no content, ever.
+
+**Media access audit policy (decided + documented).**
+- *Exports* — always audited (`export` event, media object counts).
+- *Deletes* — always audited (`moment.delete` / `project.delete` with
+  media counts; cleanup as `media.cleanup`).
+- *External adapter access* — always audited (`media.adapter_access`) and
+  gated: `MediaService.getForAdapter` is the ONLY adapter-facing read and
+  refuses media whose visual redaction is not provably `applied` unless
+  the user's explicit override is passed. No adapter currently calls it —
+  Notion upload is an M10 consent decision.
+- *Direct views* (timeline thumbnails, full view) — NOT audited by
+  default, same policy as reading a moment; `NOVA_MEDIA_VIEW_AUDIT=on`
+  enables per-view rows (`media.view`, id + variant only) for deployments
+  that want the noise.
+
+**Key rotation v0 (`media:rotate-key`).** Re-encrypts every media blob
+(full + thumbnail) AND every active integration token from
+`NOVA_ENCRYPTION_KEY_OLD` to `NOVA_ENCRYPTION_KEY`. Dry-run default,
+`--apply` to write. Resumable by construction: each item is first tried
+with the new key and skipped if it already opens, so an interrupted run
+continues where it stopped and reruns are no-ops. Items neither key opens
+are counted, named by id (never content), left untouched, and flagged via
+exit code 2. Plaintext exists only in process memory between decrypt and
+re-encrypt. *Limitations (documented):* the rotation is offline — run it,
+verify `undecryptable: 0`, then redeploy API+worker with the new key
+(until the flip, already-rotated blobs are unreadable by the running old-
+key API, so rotate in a maintenance window); there is no multi-key read
+mode; the version byte in the box format remains the hook for that future
+improvement.
+
+## Notion database property mapping (M9 — implemented)
+
+Destinations now distinguish pages from databases end to end. For a
+DATABASE default destination the user can map Nova fields — title
+(required), summary, source URL, tags, priority, captured-at, Nova moment
+reference — onto their database's property NAMES (Settings → database
+property mapping; available properties listed from the live schema via
+`GET /v1/integrations/notion/destinations/:id/properties`).
+
+The mapping is validated BEFORE saving (`PUT
+/v1/integrations/notion/destination` fetches the database schema and
+rejects unknown properties and incompatible types with per-field issues),
+stored per user in their own connection row, and shown on the approval
+card. At execution the worker re-validates against the live schema:
+properties renamed/retyped since save are dropped (the approved page still
+lands, title always survives) rather than failing the action. Type
+compatibility: title→title, summary→rich_text, source URL→url|rich_text,
+tags→multi_select, priority→select|rich_text, captured-at→date, moment
+ref→rich_text|url. One shared validator + property builder
+(`@nova/context-engine` notion-mapping) serves API and worker — the
+mapping previewed is the mapping executed. Screenshots remain excluded
+from Notion (the preview card now says so explicitly, with the moment's
+media count).
+
+## Search (M9 quality pass v2)
+
+- **Prefix fallback**: when whole-word FTS finds nothing, the query reruns
+  with prefix-matching lexemes (`kubernet deplo` → `kubernet:* & deplo:*`)
+  over the same tsvector (which includes safe OCR text). Tokens are
+  stripped to letters/digits so user input cannot inject tsquery syntax.
+  Fallback hits are flagged (`legs.prefix_fallback`, per-item diagnostics).
+- **Ranking diagnostics**: `debug: true` on `/v1/memory/search` adds raw
+  per-item leg scores (`fts_rank`, `vector_similarity`, `prefix_fallback`)
+  — the user's own data only.
+- **Golden fixtures**: a pinned suite asserts expected top hits, media-OCR
+  retrieval (incl. partial), filters, and that masked sensitive values are
+  unreachable even via prefix search.
+- **Documented limitations**: prefix matching is not typo tolerance
+  (transpositions/misspellings miss); fusion weights (0.6 FTS/0.4 vector)
+  remain untuned; the vector leg needs `OPENAI_API_KEY` and existing
+  embeddings; English stemming only; `ocr_text` is capped at 50k chars per
+  moment.

@@ -29,7 +29,7 @@ import { registerAuth, requireAuth } from "./auth/plugin.js";
 import { createRateLimiter } from "./auth/rate-limit.js";
 import { extractPayloadImages, redactPayloadImages } from "./image-redaction.js";
 import { MediaService } from "./media/media-service.js";
-import { FsObjectStore, S3ObjectStore, type ObjectStore } from "./media/object-store.js";
+import { storeFromEnv, type ObjectStore } from "./media/object-store.js";
 import { registerMediaRoutes } from "./routes-media.js";
 import { TesseractOcrEngine } from "./ocr.js";
 import { HttpNotionApiClient, type NotionApiClient } from "./integrations/notion-api.js";
@@ -187,17 +187,7 @@ export async function buildApp({
   // and captures strip images (state 'media_unavailable') rather than
   // storing pixels outside it. Production refuses to boot without the key.
   const mediaKey = env.NOVA_ENCRYPTION_KEY ? parseEncryptionKey(env.NOVA_ENCRYPTION_KEY) : null;
-  const mediaStore: ObjectStore =
-    objectStore ??
-    (env.NOVA_MEDIA_STORE === "s3"
-      ? new S3ObjectStore({
-          bucket: env.NOVA_MEDIA_S3_BUCKET!,
-          region: env.NOVA_MEDIA_S3_REGION,
-          endpoint: env.NOVA_MEDIA_S3_ENDPOINT,
-          accessKeyId: env.NOVA_MEDIA_S3_ACCESS_KEY_ID!,
-          secretAccessKey: env.NOVA_MEDIA_S3_SECRET_ACCESS_KEY!,
-        })
-      : new FsObjectStore(env.NOVA_MEDIA_FS_ROOT));
+  const mediaStore: ObjectStore = objectStore ?? storeFromEnv(env);
   const media = mediaKey ? new MediaService(db, mediaStore, mediaKey) : null;
   /** Attach media refs to a batch of API-shaped moments (single query). */
   async function attachMedia<T extends { id: string }>(
@@ -270,7 +260,7 @@ export async function buildApp({
     notionOauth: notionOauthClient,
     notionApi: notionApiClient,
   });
-  registerMediaRoutes(app, { media });
+  registerMediaRoutes(app, { db, media, viewAudit: env.NOVA_MEDIA_VIEW_AUDIT === "on" });
 
   app.get("/healthz", async () => {
     await db.query("SELECT 1");

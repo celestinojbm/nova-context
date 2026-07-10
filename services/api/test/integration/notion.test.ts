@@ -276,6 +276,7 @@ describe.skipIf(!databaseUrl || !redisUrl)("M6: Notion OAuth + queued actions", 
       provider: "notion",
       workspace: "Test Workspace",
       destination: null, // M7: no default saved in this suite
+      property_mapping: null, // M9: mapping only exists for database defaults
     });
     expect(preview.title).toBe("Save paper to Notion");
     expect(preview.source_host).toBe("research.example.com");

@@ -2,13 +2,13 @@
 
 > Working notes to resume without losing the thread. Not a design doc — the
 > real design lives in `docs/`. This file tracks *where we are* and *what's next*.
-> **Last updated: end of M8 (Media Pipeline v1).**
+> **Last updated: end of M9 (Media Reliability + Storage Operations).**
 
 ## Where we are
 
-**Milestones M0 → M8 are complete.** M0–M7 are MERGED to `main` (PR #1:
-docs+M0–M4; PR #2: M5+M6; PR #3: M7). **M8 lives on branch
-`claude/m8-nova-context`.**
+**Milestones M0 → M9 are complete.** M0–M8 are MERGED to `main` (PR #1:
+docs+M0–M4; PR #2: M5+M6; PR #3: M7; PR #4: M8). **M9 lives on branch
+`claude/m9-nova-context`.**
 
 | Milestone | What shipped | Commit |
 |---|---|---|
@@ -21,7 +21,8 @@ docs+M0–M4; PR #2: M5+M6; PR #3: M7). **M8 lives on branch
 | M5 | Real auth (scrypt passwords + opaque revocable sessions), HttpOnly-cookie web sessions, extension pairing-code flow, fail-closed /v1 middleware, per-user isolation + suite, signup policy (invite-only prod), sessions UI | `1d15faf` |
 | M6 | Notion OAuth per user (state-validated, AES-256-GCM tokens), job-based external action execution (proposed→queued→executing→done/failed, idempotent, retries), preview cards, connect/disconnect UI, audit chain incl. external ids | `79aa23e` |
 | M7 | Visual Redaction v1 (Tesseract OCR-box masking before storage/live/export, strict mode, storage kill switch, values-free reports+audit), Notion destination selector + content hardening, auth hardening (password change, revoke-all, operator reset, Redis rate limit, prod checks) | `3847feb` |
-| M8 | Media Pipeline v1: moment_media as source of truth, AES-256-GCM-encrypted blobs in object storage (fs default / any S3-compatible via abstraction, MinIO in compose), proxied user-scoped `/v1/media/:id` + thumbnails, delete/export lifecycle, manual legacy backfill, search over safe OCR text + media filters + golden fixtures, prod fail-closed on missing key | this branch |
+| M8 | Media Pipeline v1: moment_media as source of truth, AES-256-GCM-encrypted blobs in object storage (fs default / any S3-compatible via abstraction, MinIO in compose), proxied user-scoped `/v1/media/:id` + thumbnails, delete/export lifecycle, manual legacy backfill, search over safe OCR text + media filters + golden fixtures, prod fail-closed on missing key | `07e4e5c` |
+| M9 | Media Reliability + Storage Ops: orphan cleanup command (dry-run default, age guard, audited), tombstoned/retryable blob deletes (media_delete_queue), per-user storage accounting API + Settings UI, media audit policy (view audit opt-in), key rotation v0 command (media + tokens, resumable), Notion database property mapping (validated, previewed, re-validated at execution), adapter media-access guard, search prefix fallback + ranking diagnostics | this branch |
 
 ## Repo shape (pnpm + Turborepo monorepo)
 
@@ -34,11 +35,11 @@ packages/
   config/          shared tsconfig base
 services/
   api/             Fastify /v1 — auth/ (passwords, sessions, plugin), routes-auth.ts,
-                   routes-integrations.ts (M6 Notion OAuth + preview),
-                   routes-m1..m4.ts, routes-media.ts (M8 proxied media),
-                   media/ (object-store.ts fs+s3, media-service.ts),
-                   db/backfill-media.ts (manual legacy migration);
-                   migrations/*.sql (latest 0008_m8_media_pipeline.sql)
+                   routes-integrations.ts (M6 Notion OAuth + preview + M9 mapping),
+                   routes-m1..m4.ts, routes-media.ts (M8 proxied media + M9 usage),
+                   media/ (object-store.ts fs+s3+list, media-service.ts, cleanup.ts),
+                   db/{backfill-media,cleanup-media,rotate-media-key}.ts (operator cmds);
+                   migrations/*.sql (latest 0009_m9_media_ops.sql)
   worker/          BullMQ consumers: enrichment + action execution (actions.ts,
                    notion-client.ts) — decrypts per-user tokens, idempotent
 apps/
@@ -56,7 +57,7 @@ infra/
 ```bash
 pnpm install
 pnpm db:up                         # Postgres+pgvector + Redis via Docker
-pnpm db:migrate                    # forward-only; latest 0008_m8_media_pipeline.sql
+pnpm db:migrate                    # forward-only; latest 0009_m9_media_ops.sql
 pnpm --filter @nova/api db:seed-dev  # gives dev@nova.local a password (local only)
 pnpm --filter @nova/api dev        # :3001
 pnpm --filter @nova/worker dev     # enrichment worker
@@ -65,8 +66,8 @@ pnpm --filter @nova/extension build  # load .output/chrome-mv3; connect via Sett
 ```
 
 Tests:
-- `pnpm test` — unit (~110: schema, engines incl. visual redaction, env, auth helpers)
-- `DATABASE_URL=postgres://nova:nova@localhost:5432/nova REDIS_URL=redis://localhost:6379 pnpm test:integration` — 127 API (+1 gated) + 21 worker (M0–M8; media, search-golden, backfill suites are M8)
+- `pnpm test` — unit (~120: schema, engines incl. visual redaction + notion mapping, env, auth helpers)
+- `DATABASE_URL=postgres://nova:nova@localhost:5432/nova REDIS_URL=redis://localhost:6379 pnpm test:integration` — 146 API (+1 gated) + 24 worker (M0–M9; media-ops, rotate-key suites are M9)
 - `NOVA_OCR_E2E=1 DATABASE_URL=... pnpm --filter @nova/api exec vitest run test/integration/ocr-e2e.test.ts` — real-Tesseract proof (downloads ~2MB language data once)
 - CI (`.github/workflows/ci.yml`) provisions Postgres+Redis and runs build → typecheck → unit → migrate → integration.
 
@@ -120,24 +121,38 @@ Note: the Docker daemon in this environment sometimes needs `sudo dockerd &` bef
   Safe OCR words land in `context_moments.ocr_text` (tsv weight C);
   masked words never reach the index. Legacy inline media moves ONLY via
   the manual `media:backfill` command (skips what it can't prove redacted).
+- **Media ops are REAL (M9, docs/AUTH.md §Media operations)**: failed blob
+  deletes tombstone into `media_delete_queue` (never silent, never fail
+  the user's delete); `media:cleanup` retries them + removes orphans
+  (dry-run default, min-age guard, global valid-set so referenced media
+  can't be deleted); `media:rotate-key` re-encrypts blobs + tokens old→new
+  (resumable, offline — redeploy with the new key after). Audit policy:
+  exports/deletes/adapter access ALWAYS; views opt-in
+  (NOVA_MEDIA_VIEW_AUDIT). Adapters may read media ONLY through
+  `MediaService.getForAdapter` (refuses non-'applied' redaction without
+  explicit override) — no adapter calls it yet; Notion upload is M10.
+- **Notion database mapping (M9)**: per-user mapping stored in the user's
+  connection meta (`destination_mapping`), validated against the live DB
+  schema at save AND execution (drift → field dropped, not action failed);
+  shared validator/builder in `@nova/context-engine` notion-mapping.
 - **Live sessions are client-side only**; server stateless for Q&A.
-- **DB migrations are forward-only**; latest `0008_m8_media_pipeline.sql`.
+- **DB migrations are forward-only**; latest `0009_m9_media_ops.sql`.
 - **API integration tests run file-serial** (`services/api/vitest.config.ts`); regression suites log in as the dev user, auth/isolation suites create fresh accounts.
 
-## Recommended next work — M9 (in priority order)
+## Recommended next work — M10 (in priority order)
 
-1. **Notion screenshot upload** — the media pipeline now exposes everything
-   needed (per-media redaction state, stable ids, decrypted export access).
-   M9 designs the consent: explicitly approved per action, redacted media
-   only, reflected in the preview card, audited. Notion's file-upload API
-   avoids public hosting.
-2. **Notion database-property mapping** — when the destination is a
-   database, map tags/priority/source to real properties.
-3. **Media housekeeping** — orphan-blob sweep (crash between blob write and
-   DB row), storage usage per user, and the key-rotation sweep tool
-   (strategy documented in docs/AUTH.md §Media pipeline).
-4. **Enrichment versioning** — enrichment re-runs still overwrite
+1. **Notion screenshot upload with explicit consent** — everything is
+   staged: `MediaService.getForAdapter` gates by redaction state and the
+   `media.adapter_access` audit event exists; the preview card already
+   shows the media count + policy. M10 designs the consent UX (per-action
+   opt-in on the approval card), uses Notion's file-upload API (no public
+   hosting), and audits every upload.
+2. **Account-level data lifecycle** — full user deletion (sessions, rows,
+   blobs, queue) building on M9's delete hardening; export already exists.
+3. **Enrichment versioning** — enrichment re-runs still overwrite
    summary/tags; no interpretation history.
+4. **Media housekeeping niceties** — periodic scheduled cleanup (currently
+   manual by design), multi-key read mode so rotation needs no window.
 
 ## Future roadmap note (do NOT build yet)
 
@@ -155,19 +170,22 @@ This is only a roadmap note.
 - Duplicate-page window exists if the worker dies between the Notion create
   call and the one-statement DB completion (Notion has no idempotency keys).
 - No password reset flow (operator resets via `auth:reset-password` in alpha).
-- Search fusion weights (0.6 FTS / 0.4 vector) untuned, but golden fixtures
-  now pin expected retrieval (`test/integration/search-golden.test.ts`).
+- Search fusion weights (0.6 FTS / 0.4 vector) untuned; prefix fallback is
+  not typo tolerance. Golden fixtures pin expected retrieval
+  (`test/integration/search-golden.test.ts`).
 - Enrichment re-runs overwrite summary/tags; no interpretation versioning.
-- Media blob writes are not transactional with the DB row — a crash can
-  orphan an (encrypted, unreadable) blob; no cleanup sweep yet.
+- Media cleanup + key rotation are manual operator commands (deliberate for
+  alpha); rotation is offline (no multi-key read mode yet).
+- `ObjectStore.list()` loads the full key list into memory — fine at alpha
+  scale, revisit before millions of objects.
 - Fs media store has no replication — production should use the s3 backend.
 - CSS blur is not cryptographic redaction.
 - Security suite covers structural containment, not model-level jailbreaks.
 
 ## Operational reminders for the next session
 
-- M8 branch: `claude/m8-nova-context` (based on merged main with M0–M7).
-- If the M8 PR gets **merged**, treat follow-up as fresh work: restart from
+- M9 branch: `claude/m9-nova-context` (based on merged main with M0–M8).
+- If the M9 PR gets **merged**, treat follow-up as fresh work: restart from
   the latest main and open a new PR.
 - Commit message trailers in use:
   `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>` and the `Claude-Session:` line.

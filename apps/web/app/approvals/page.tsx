@@ -87,10 +87,26 @@ export default async function ApprovalsPage() {
                     ? `Notion workspace “${preview.connection.workspace}”`
                     : "your Notion workspace"}
                   {preview.connection.destination
-                    ? ` under “${preview.connection.destination.title}”`
+                    ? ` ${preview.connection.destination.type === "database_id" ? "in database" : "under"} “${preview.connection.destination.title}”`
                     : " under the most recently edited page you shared with Nova"}
                   . Change the default in Settings.
                 </div>
+                {preview.connection.property_mapping && (
+                  <div className="task-meta">
+                    Database properties:{" "}
+                    {Object.entries(preview.connection.property_mapping)
+                      .filter(([, prop]) => prop)
+                      .map(([field, prop]) => `${field} → ${prop}`)
+                      .join(", ")}
+                  </div>
+                )}
+                {preview.media && (
+                  <div className="task-meta">
+                    {preview.media.count > 0
+                      ? `${preview.media.count} screenshot(s) on this moment — NOT included (screenshots are never sent to Notion).`
+                      : "No screenshots will be sent to Notion."}
+                  </div>
+                )}
                 {preview.source_host && (
                   <div className="task-meta">Source: {preview.source_host}</div>
                 )}
