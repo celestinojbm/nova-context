@@ -43,7 +43,7 @@ async function check<T>(fn: () => Promise<T>): Promise<{ ok: boolean; error?: st
 }
 
 /** Write-read-delete probe: proves the object store accepts our traffic. */
-async function probeStore(store: ObjectStore): Promise<void> {
+export async function probeStore(store: ObjectStore): Promise<void> {
   const key = `__ops/probe-${Date.now()}`;
   const payload = Buffer.from("nova-ops-probe");
   await store.put(key, payload);
@@ -153,12 +153,49 @@ export async function opsStatus(deps: OpsDeps): Promise<Record<string, unknown>>
     return rows[0] ?? null;
   });
 
+  // M13 cost/usage visibility: which cloud features are live (each is
+  // opt-in by design) so the operator can see — and kill — spend quickly.
+  const features = {
+    live_qa:
+      deps.env.NOVA_LIVE_QA !== "off" && deps.env.ANTHROPIC_API_KEY ? "on" : "off",
+    transcription: deps.env.OPENAI_API_KEY ? "on" : "off",
+    search_embeddings: deps.env.OPENAI_API_KEY ? "on" : "off",
+    analytics: deps.env.NOVA_ANALYTICS,
+    text_redaction: deps.env.NOVA_REDACTION,
+    image_redaction: deps.env.NOVA_IMAGE_REDACTION,
+    screenshot_storage: deps.env.NOVA_SCREENSHOT_STORAGE,
+    notion: deps.env.NOTION_CLIENT_ID ? "configured" : "off",
+    // Cloud enrichment is a WORKER setting; the API reports observed usage
+    // instead (enrichment_versions by provider — see ops:report).
+  };
+
+  // M13 guardrails: conditions worth acting on, as flags, not pages.
+  const warnings: string[] = [];
+  if (!worker.ok) warnings.push("worker heartbeat missing/stale");
+  if (totals.ok) {
+    const t = totals.value!;
+    const warnBytes = deps.env.NOVA_MEDIA_WARN_MB * 1024 * 1024;
+    if (t.media_bytes + t.thumbnail_bytes > warnBytes) {
+      warnings.push(
+        `media storage above ${deps.env.NOVA_MEDIA_WARN_MB}MB threshold — review usage / run media:cleanup`,
+      );
+    }
+    if (t.pending_media_deletes > 0) {
+      warnings.push(`${t.pending_media_deletes} pending media delete(s) — run media:cleanup -- --delete`);
+    }
+    if (t.failed_actions > 0) {
+      warnings.push(`${t.failed_actions} failed action(s) — see ops:report / ops:maintenance`);
+    }
+  }
+
   return {
     ready: ready.ready,
     checks: ready.checks,
     worker,
     queues,
     totals: totals.ok ? totals.value : { error: totals.error },
+    features,
+    warnings,
     last_maintenance: lastMaintenance.ok ? lastMaintenance.value : null,
     version: deps.env.NOVA_GIT_SHA ?? null,
     generated_at: new Date().toISOString(),

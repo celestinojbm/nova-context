@@ -28,6 +28,12 @@ export const PRODUCT_EVENTS = [
   "transcription_failed",
   "onboarding_completed",
   "consent_reset",
+  // M13 alpha usage loop additions. Account lifecycle is deliberately NOT
+  // an event here: product_events cascade-delete with the account, so the
+  // durable lifecycle record is account_tombstones (M10).
+  "task_created",
+  "notion_action_executed",
+  "feedback_submitted",
 ] as const;
 export type ProductEvent = (typeof PRODUCT_EVENTS)[number];
 

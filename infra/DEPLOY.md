@@ -100,12 +100,15 @@ Web Store distribution is deliberately out of scope for the private alpha.
 
 One trusted user, boring infrastructure. In order:
 
-1. **Env validation** — every service validates env at boot and refuses to
-   start on bad config. Pre-check locally: `NODE_ENV=production
-   NOVA_ENCRYPTION_KEY=... node -e "require('./services/api/dist/env.js')"`
-   or simply let the release fail fast. Production REQUIRES
-   `NOVA_ENCRYPTION_KEY`; Notion requires the three `NOTION_*` vars and
-   https redirect; s3 media requires bucket + credentials.
+1. **Preflight (M13)** — run `pnpm --filter @nova/api ops:preflight` with
+   the production env set. It validates the same rules boot enforces
+   (production REQUIRES `NOVA_ENCRYPTION_KEY`; redaction off needs
+   `NOVA_ALLOW_UNSAFE_REDACTION=yes`; Notion needs all three `NOTION_*`
+   vars + https redirect; s3 needs bucket + credentials) AND probes what
+   boot can't: DB connectivity + pending migrations, Redis, an
+   object-store write/read/delete, key material validity, signup policy
+   (production + `NOVA_SIGNUP=open` FAILS), lingering previous keys.
+   Must print `PREFLIGHT OK` before deploying.
 2. **Migrations** — applied automatically by the API release_command.
    `/readyz` reports `migrations: ok` only when nothing is pending.
 3. **Health gates** — API: `GET /healthz` (liveness), `GET /readyz`
@@ -114,12 +117,19 @@ One trusted user, boring infrastructure. In order:
 4. **Worker readiness** — the worker writes a Redis heartbeat every 30s
    (90s TTL). Check `/v1/ops/status` (or the web `/status` page): worker
    `ok: true` with a fresh `last_beat`.
-5. **Post-deploy smoke** (5 minutes):
-   - sign in on the web app; check `/status` shows every component OK;
-   - capture a moment from the extension (with a screenshot);
-   - confirm the timeline shows the thumbnail; search finds the moment;
-   - approve a `nova_task` action; if Notion is connected, approve a
-     notion_page action WITHOUT media and confirm the page lands;
+5. **Post-deploy smoke (M13, scripted)** —
+   `pnpm --filter @nova/api ops:smoke -- --base-url=https://<api-host>
+   --invite=<code>`. Creates a synthetic account and walks readyz,
+   signup/login, extension pairing, capture with a synthetic screenshot,
+   visual redaction, media storage + authenticated fetch, timeline,
+   search, live Q&A, save-from-live, task creation, approval queue,
+   Notion status, full export, worker processing, delete, audit log,
+   status page, and worker heartbeat — then deletes the synthetic account
+   through the real deletion flow. Exit 0 = pass; `degraded` steps
+   reflect what the deploy intentionally disabled (e.g. live Q&A without
+   a key). Finish manually:
+   - approve a `nova_task` action from a real capture; if Notion is
+     connected, approve a notion_page action and confirm the page lands;
    - `pnpm --filter @nova/api media:verify` → everything verifies;
    - `pnpm --filter @nova/api ops:maintenance` (dry run) → sane counts.
 6. **Rollback** — `fly releases` + redeploy previous image (see Rollback
@@ -201,3 +211,90 @@ The fake-provider path is covered in CI. Before first real use:
    tick the image, confirm the page carries it; approve another WITHOUT
    ticking and confirm no image lands. Check `media.adapter_access` in the
    audit log.
+
+## Secrets & domain checklist (M13)
+
+**Secrets (secret store, never in git or backups):**
+
+| Secret | Where | Notes |
+|---|---|---|
+| `NOVA_ENCRYPTION_KEY` | API + worker (same value) | 32 bytes hex/base64; loss = media+tokens unrecoverable |
+| `NOVA_ENCRYPTION_KEYS_PREVIOUS` | API + worker, DURING rotation only | remove after `media:verify` passes on the new key |
+| `NOVA_ALPHA_INVITE_CODE` | API | 8+ chars; share only with the alpha user |
+| `NOTION_CLIENT_SECRET` (+ID, redirect) | API | only if Notion is enabled |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | API (worker for enrichment) | optional; each enables a cloud feature |
+| `DATABASE_URL`, `REDIS_URL` | all services | managed-service credentials |
+
+**Config (not secret, but load-bearing):** `NODE_ENV=production`,
+`NOVA_SIGNUP` (leave unset → invite-only), `NOVA_MEDIA_STORE` + fs root or
+S3 vars, `NOVA_GIT_SHA` (release id on /status), `NOVA_MEDIA_WARN_MB`,
+`NOVA_REQUEST_TIMEOUT_MS`. The `.env.example` files are the full reference.
+
+**Domain/HTTPS assumptions:** three hostnames (api, web, optionally the
+extension talks straight to api). TLS terminates at the platform (Fly
+certs); the API itself speaks HTTP behind it. HttpOnly session cookie on
+the web app requires same-site or properly configured cross-site fetch —
+the web app proxies API calls server-side, so only the WEB hostname needs
+to be user-facing. `NOTION_REDIRECT_URI` must be the https WEB callback.
+
+## Alpha usage loop (M13)
+
+- `pnpm --filter @nova/api ops:report [-- --days=30]` — allowlisted event
+  counts (captures, live sessions/questions, searches, tasks, approvals,
+  Notion executions, exports, deletes, feedback), friction (failed
+  captures/enrichments/transcriptions, failed actions + recent reasons),
+  usage (users/moments/tasks, enrichment by provider = observed cloud
+  spend, media bytes), latest feedback with excerpts, and warnings
+  (storage threshold, pending deletes, failed actions, untriaged
+  feedback). Weekly cadence is plenty for one user.
+- `/v1/ops/status` (web `/status`) now carries a `features` block (which
+  cloud switches are live — the kill switches are the envs themselves:
+  unset the key or set `NOVA_LIVE_QA=off`, `NOVA_ANALYTICS=off`,
+  `NOVA_CLOUD_ENRICHMENT=off`, redeploy) and a `warnings` array.
+- Bug intake: web Settings → "Report a problem" → `alpha_feedback` table
+  (category + user-authored text only; data-URL pastes rejected). Shows up
+  in `ops:report`; triage via the runbook.
+- Account lifecycle events are NOT product events (they'd cascade-delete
+  with the account): the durable record is `account_tombstones` (M10).
+
+## Private-alpha security checklist (M13)
+
+Each item names its enforcement — run the commands before onboarding:
+
+- [ ] No shared dev token: `NOVA_API_TOKEN` removed in M5; `git grep
+      NOVA_API_TOKEN` returns docs/history only. Dev seed user has no
+      password unless `db:seed-dev` ran (refuses in production).
+- [ ] Signup invite-only in production: `ops:preflight` FAILS on
+      `NOVA_SIGNUP=open`; default is invite; no code ⇒ no signups.
+- [ ] No silent capture: no server capture endpoint exists besides
+      user-triggered `/v1/context/moments`; extension captures only on
+      click/live-session; pinned by the M4 security suite.
+- [ ] Auth on protected routes: fail-closed /v1 middleware; allowlist is
+      signup/login/pairing-claim/password-reset only (`auth/plugin.ts`).
+- [ ] Media access user-scoped: `/v1/media/:id` 404s across users
+      (`media.test.ts`, `browser-shell.test.ts`).
+- [ ] Export never leaks unredacted media: full-mode inlines only
+      `applied`/`none` states; others excluded with reason
+      (`account-lifecycle.test.ts`).
+- [ ] Account delete locks first: `deleted_at` + all sessions revoked
+      before destructive steps; pipeline-down path tombstones blobs.
+- [ ] No secrets/content in logs: pinned by log-hygiene tests (ops,
+      password-reset, browser-shell, alpha-feedback suites).
+- [ ] Audit is values-free: counts/states/ids only; feedback audit rows
+      carry category only (`alpha-feedback.test.ts`).
+- [ ] Tokens encrypted: AES-256-GCM at rest; export excludes ciphertext
+      structurally; connect/execute fails closed without the key.
+- [ ] Media encrypted: blob-at-rest tests assert ciphertext; `media:verify`
+      proves decryptability after restore/rotation.
+- [ ] Old keys handled: multi-key READ only via
+      `NOVA_ENCRYPTION_KEYS_PREVIOUS`; preflight warns until removed;
+      writes always use the current key.
+- [ ] Notion writes require explicit approval: approve→queue→worker is the
+      only path; worker re-verifies consent + media eligibility at send.
+
+## Browser shell status (M12 note)
+
+`apps/browser-shell` remains an experimental spike. The extension is the
+primary alpha surface. Test the shell manually only if the extension shows
+clear limitations (occluded-window screenshots, live-context lifetime); no
+packaging or browser feature expansion in M13.

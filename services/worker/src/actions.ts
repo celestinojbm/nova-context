@@ -357,6 +357,16 @@ export async function executeAction(
       destination_title: parent.title,
       media_included: mediaUploadIds?.length ?? 0,
     });
+    // M13 usage loop: allowlisted event, counts only — fire-and-forget like
+    // the API's Analytics (never fails the action on analytics trouble).
+    if (process.env.NOVA_ANALYTICS !== "off") {
+      void db
+        .query(
+          `INSERT INTO product_events (user_id, event, props) VALUES ($1, 'notion_action_executed', $2)`,
+          [data.userId, JSON.stringify({ media_included: mediaUploadIds?.length ?? 0 })],
+        )
+        .catch(() => undefined);
+    }
     return "done";
   } catch (err) {
     if (err instanceof UnrecoverableError) throw err;
