@@ -1,7 +1,10 @@
 import { type NotionPageContent } from "@nova/context-engine";
-import { encryptSecret } from "@nova/context-engine/secret-box";
+import { FsObjectStore, type ObjectStore } from "@nova/context-engine/object-store";
+import { encryptBytes, encryptSecret } from "@nova/context-engine/secret-box";
 import { UnrecoverableError } from "bullmq";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -36,6 +39,9 @@ class FakeNotion implements NotionClient {
   lastParent: NotionParent | null = null;
   /** M9: properties passed to createPage (undefined = title-only shape). */
   lastProperties: Record<string, unknown> | undefined;
+  /** M10: media consent — uploads received and ids attached to the page. */
+  uploads: Array<{ filename: string; contentType: string; bytes: number }> = [];
+  lastMediaUploadIds: string[] | undefined;
   /** M9: live database schema returned to the worker's re-validation. */
   databaseProperties = new Map<string, string>([
     ["Name", "title"],
@@ -58,11 +64,27 @@ class FakeNotion implements NotionClient {
     return this.databaseProperties;
   }
 
+  async uploadMedia(
+    token: string,
+    filename: string,
+    contentType: string,
+    data: Buffer,
+  ): Promise<{ id: string }> {
+    if (token !== TOKEN) throw new Error("wrong token reached the provider");
+    // The provider must NEVER see base64 payload strings — only raw bytes.
+    if (data.toString("latin1").includes("data:image")) {
+      throw new Error("inline base64 reached the provider");
+    }
+    this.uploads.push({ filename, contentType, bytes: data.length });
+    return { id: `upload-${this.uploads.length}` };
+  }
+
   async createPage(
     token: string,
     parent: NotionParent,
     content: NotionPageContent,
     properties?: Record<string, unknown>,
+    mediaUploadIds?: string[],
   ): Promise<CreatedNotionPage> {
     if (token !== TOKEN) throw new Error("wrong token reached the provider");
     if (this.failCreatesRemaining > 0) {
@@ -73,6 +95,7 @@ class FakeNotion implements NotionClient {
     this.lastParent = parent;
     this.lastContent = content;
     this.lastProperties = properties;
+    this.lastMediaUploadIds = mediaUploadIds;
     return { id: `page-${this.createCalls}`, url: "https://notion.test/page" };
   }
 }
@@ -103,8 +126,12 @@ describe.skipIf(!databaseUrl)("M6: action execution worker", () => {
     return rows[0]!.id;
   }
 
-  function deps(notion: FakeNotion, key: Buffer | null = KEY): ActionDeps {
-    return { notion, encryptionKey: key };
+  function deps(
+    notion: FakeNotion,
+    key: Buffer | null = KEY,
+    mediaStore: ObjectStore | null = null,
+  ): ActionDeps {
+    return { notion, encryptionKey: key, mediaStore };
   }
 
   beforeAll(async () => {
@@ -443,6 +470,118 @@ describe.skipIf(!databaseUrl)("M6: action execution worker", () => {
     await executeAction(db, deps(notion2), { actionId: unmappedDb, userId });
     expect(notion2.lastParent?.type).toBe("database_id");
     expect(notion2.lastProperties).toBeUndefined();
+  });
+
+  // --- M10: explicit media consent ------------------------------------------
+
+  /** Insert an encrypted media row + blob the way the M8 pipeline stores
+   * them; returns the media id. */
+  async function seedMedia(
+    store: ObjectStore,
+    redactionState: string,
+    opts: { skipBlob?: boolean } = {},
+  ): Promise<string> {
+    const mediaId = randomUUID();
+    const storageKey = `${userId}/${momentId}/${mediaId}`;
+    if (!opts.skipBlob) {
+      await store.put(storageKey, encryptBytes(KEY, Buffer.from("redacted-pixels")));
+    }
+    await db.query(
+      `INSERT INTO moment_media
+         (id, moment_id, user_id, kind, storage_key, content_type, bytes, encrypted, redaction_state)
+       VALUES ($1, $2, $3, 'screenshot', $4, 'image/png', 15, true, $5)`,
+      [mediaId, momentId, userId, storageKey, redactionState],
+    );
+    return mediaId;
+  }
+
+  it("M10: executes WITHOUT media by default — nothing is uploaded", async () => {
+    const store = new FsObjectStore(join(tmpdir(), `nova-worker-media-${Date.now()}-a`));
+    const notion = new FakeNotion();
+    const actionId = await makeAction(); // no media_ids in payload
+    const outcome = await executeAction(db, deps(notion, KEY, store), { actionId, userId });
+    expect(outcome).toBe("done");
+    expect(notion.uploads).toHaveLength(0);
+    expect(notion.lastMediaUploadIds).toBeUndefined();
+  });
+
+  it("M10: uploads ONLY explicitly approved, redacted media — audited, never base64", async () => {
+    const store = new FsObjectStore(join(tmpdir(), `nova-worker-media-${Date.now()}-b`));
+    const approved = await seedMedia(store, "applied");
+    await seedMedia(store, "applied"); // exists but NOT approved — must stay home
+    const notion = new FakeNotion();
+    const actionId = await makeAction("queued", userId, null, { media_ids: [approved] });
+
+    const outcome = await executeAction(db, deps(notion, KEY, store), { actionId, userId });
+    expect(outcome).toBe("done");
+    // Exactly the ticked media, decrypted server-side, raw bytes to the API.
+    expect(notion.uploads).toHaveLength(1);
+    expect(notion.uploads[0]).toMatchObject({ contentType: "image/png", bytes: 15 });
+    expect(notion.lastMediaUploadIds).toEqual(["upload-1"]);
+
+    // Adapter access audited: media id + provider, no pixels.
+    const audit = await db.query(
+      `SELECT detail FROM audit_log
+       WHERE user_id = $1 AND event_type = 'media.adapter_access' AND subject_id = $2`,
+      [userId, approved],
+    );
+    expect(audit.rows).toHaveLength(1);
+    expect(audit.rows[0].detail.provider).toBe("notion");
+    expect(audit.rows[0].detail.action_id).toBe(actionId);
+    expect(JSON.stringify(audit.rows[0].detail)).not.toContain("redacted-pixels");
+
+    const done = await db.query(
+      `SELECT detail FROM audit_log WHERE subject_id = $1 AND event_type = 'action.execute'`,
+      [actionId],
+    );
+    expect(done.rows[0].detail.media_included).toBe(1);
+  });
+
+  it("M10: fails safely when approved media is missing, deleted, or unredacted", async () => {
+    const store = new FsObjectStore(join(tmpdir(), `nova-worker-media-${Date.now()}-c`));
+
+    // Media row deleted since approval.
+    const gone = await makeAction("queued", userId, null, { media_ids: [randomUUID()] });
+    const notion1 = new FakeNotion();
+    await expect(
+      executeAction(db, deps(notion1, KEY, store), { actionId: gone, userId }),
+    ).rejects.toThrow(UnrecoverableError);
+    expect(notion1.createCalls).toBe(0);
+    const goneRow = await db.query(`SELECT status, result FROM actions WHERE id = $1`, [gone]);
+    expect(goneRow.rows[0].status).toBe("failed");
+    expect(goneRow.rows[0].result.error).toContain("approved_media_not_found");
+
+    // Redaction state regressed since approval (e.g. re-processed) — refuse.
+    const unredacted = await seedMedia(store, "failed");
+    const bad = await makeAction("queued", userId, null, { media_ids: [unredacted] });
+    const notion2 = new FakeNotion();
+    await expect(
+      executeAction(db, deps(notion2, KEY, store), { actionId: bad, userId }),
+    ).rejects.toThrow(UnrecoverableError);
+    expect(notion2.uploads).toHaveLength(0);
+    expect(notion2.createCalls).toBe(0);
+    const badRow = await db.query(`SELECT result FROM actions WHERE id = $1`, [bad]);
+    expect(badRow.rows[0].result.error).toContain("approved_media_redaction_not_applied");
+
+    // Blob vanished from object storage.
+    const noBlob = await seedMedia(store, "applied", { skipBlob: true });
+    const missing = await makeAction("queued", userId, null, { media_ids: [noBlob] });
+    const notion3 = new FakeNotion();
+    await expect(
+      executeAction(db, deps(notion3, KEY, store), { actionId: missing, userId }),
+    ).rejects.toThrow(UnrecoverableError);
+    const missingRow = await db.query(`SELECT result FROM actions WHERE id = $1`, [missing]);
+    expect(missingRow.rows[0].result.error).toContain("approved_media_blob_missing");
+
+    // No store configured at all: approved media cannot be honored → fail.
+    const applied = await seedMedia(store, "applied");
+    const noStore = await makeAction("queued", userId, null, { media_ids: [applied] });
+    const notion4 = new FakeNotion();
+    await expect(
+      executeAction(db, deps(notion4, KEY, null), { actionId: noStore, userId }),
+    ).rejects.toThrow(UnrecoverableError);
+    const noStoreRow = await db.query(`SELECT result FROM actions WHERE id = $1`, [noStore]);
+    expect(noStoreRow.rows[0].result.error).toContain("media_store_unavailable");
   });
 
   it("M7: page content carries provenance + privacy note and never any image data", async () => {

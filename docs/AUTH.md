@@ -444,6 +444,107 @@ mapping previewed is the mapping executed. Screenshots remain excluded
 from Notion (the preview card now says so explicitly, with the moment's
 media count).
 
+## Account data lifecycle (M10 — implemented)
+
+The user is root authority over their data. Two endpoints complete the
+loop that per-item export/delete started:
+
+**Full account export.** `GET /v1/export/account?media=refs|full`
+(authenticated; web Settings → Account data lifecycle). One JSON document:
+profile, projects, every moment (payload, redaction reports, ocr_text,
+enrichment), tasks, actions (incl. external ids), integration connection
+METADATA (the `token_ciphertext` column is never even selected — tokens
+cannot appear in an export in any form), active session metadata, the full
+audit log, product events, and all enrichment versions. `media=refs`
+(default) links media by authenticated URL; `media=full` inlines blobs as
+data URLs ONLY for media whose visual redaction provably ran
+(`redaction_state` 'applied', or 'none' — the image never carried maskable
+text); anything else exports as metadata with
+`excluded_reason: "redaction_not_applied"` — unredacted pixels never leave.
+The export itself is audited (`export`, scope `account`).
+
+**Full account deletion.** `POST /v1/auth/account/delete` requires three
+independent proofs of intent: a WEB session (extension tokens get 403),
+the account password, and the literal confirmation string `"DELETE"`. The
+web UI adds a fourth (native confirm dialog) and recommends exporting
+first. Because it verifies the password, the endpoint is rate-limited like
+login — deletion cannot double as a brute-force oracle. Flow: the account
+is LOCKED first (`users.deleted_at` set + every session revoked, so a
+crash mid-deletion leaves an unusable account, never a half-deleted usable
+one); media blobs are then deleted from object storage (failures
+tombstone into `media_delete_queue`, which survives the account so
+`media:cleanup` can finish the job — the deletion itself never fails on a
+storage outage; if the media pipeline is down entirely, every key is
+queued instead of silently leaking objects); integration token ciphertext
+is overwritten before the
+rows go; then one transaction writes the tombstone and deletes the user
+row, cascading every table. The dead sessions make all future API use an
+ordinary 401.
+
+**Retention contract — what survives a deletion, explicitly:**
+| Data | Fate |
+|---|---|
+| Captured content (payloads, text, OCR, media blobs, thumbnails) | **Deleted.** Never retained. |
+| Projects, tasks, actions, enrichment (+versions), embeddings, entities | Deleted (cascade). |
+| Sessions, pairing codes, OAuth states | Deleted → all tokens dead. |
+| Integration tokens | Ciphertext overwritten, then row deleted. |
+| Audit log, product events | Deleted (cascade) — they reference a person who asked to be gone. |
+| `account_tombstones` row | **Retained**: deleted user id, sha256(email), row/object counts, timestamp. The security/abuse record that an account existed and was deleted. No content, no plaintext identity. |
+| `media_delete_queue` rows | **Retained until drained**: keys of encrypted blobs whose storage delete failed; `media:cleanup` removes the objects. Ciphertext only, unreadable without the (user-independent) service key. |
+
+**External deletion semantics (documented policy).** Nova never silently
+deletes content it created in external systems. Deleting the account (or
+disconnecting Notion) revokes the connection, destroys the token, and
+deletes Nova's local records of external objects (action results with page
+ids) — the pages themselves remain in the user's Notion workspace, where
+the user already has native control over them. Optional external cleanup
+(archiving Nova-created pages on request) is deliberately NOT implemented;
+if it ever is, it must be explicit, previewed, and audited per object.
+
+## Notion media consent (M10 — implemented)
+
+Screenshots now CAN reach Notion — but only through an explicit, per-
+action, per-image consent chain with the M8/M9 pipeline as the sole
+source:
+
+1. **Preview** (`GET /v1/actions/:id/preview`) lists every media object on
+   the linked moment with its redaction state and an `eligible` flag —
+   only `redaction_state = 'applied'` (visually redacted) media is ever
+   eligible. The approval card renders one checkbox per eligible image,
+   all UNCHECKED; ineligible media is shown greyed with the reason.
+2. **Approval** (`POST /v1/actions/:id/approve` with `media_ids`) accepts
+   only the caller's own media, attached to THIS action's moment, with
+   redaction applied — anything else rejects with `invalid_media` before
+   any state change. The consented ids land in the action payload
+   (preview == execution) and the approval audit records the count.
+   Approving without ticking anything stores an explicit empty list.
+3. **Execution** (worker) re-verifies each approved media NOW — deleted
+   rows, missing blobs, or a redaction state that regressed since approval
+   fail the action terminally (`approved_media_*`) rather than publishing
+   something the user didn't see. Reads go through the guarded adapter
+   path (same rule as the API's `getForAdapter`), each access is audited
+   (`media.adapter_access`: media id + provider + action id, never
+   pixels), and bytes are uploaded via **Notion's File Upload API**
+   (create upload → multipart send → attach as `file_upload` image
+   blocks). Raw base64 never appears in any page body. Media-free actions
+   never touch the store.
+
+Notion API note: file uploads require the workspace/integration to
+support the File Upload API; upload legs share the transient(429/5xx =
+retry)/terminal(4xx = fail) semantics of every other Notion call.
+
+## Enrichment versioning (M10 — implemented)
+
+Enrichment runs no longer overwrite history. Every run appends an
+immutable `enrichment_versions` row (version n+1, summary, enrichment
+JSON, provider, model when one ran, created_at); the moment's
+`summary`/`enrichment` columns remain the CURRENT pointer.
+`GET /v1/context/moments/:id/enrichment/versions` lists the history;
+`POST .../enrichment/select {version}` moves the pointer to any recorded
+version (audited, nothing lost). Version content derives from already-
+redacted moment data — text redaction ran before anything reached the
+enrichment pipeline.
+
 ## Search (M9 quality pass v2)
 
 - **Prefix fallback**: when whole-word FTS finds nothing, the query reruns

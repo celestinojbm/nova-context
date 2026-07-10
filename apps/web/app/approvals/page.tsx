@@ -14,9 +14,17 @@ async function decide(formData: FormData) {
   const decision = formData.get("decision");
   if (typeof id !== "string" || (decision !== "approve" && decision !== "reject"))
     return;
+  // M10: media inclusion is EXPLICIT — only the checkboxes the user ticked
+  // travel with the approval; nothing is included by default.
+  const mediaIds = formData
+    .getAll("media_ids")
+    .filter((v): v is string => typeof v === "string" && v.length > 0);
+  const body =
+    decision === "approve" && mediaIds.length ? { media_ids: mediaIds } : undefined;
   await fetch(`${API_URL}/v1/actions/${id}/${decision}`, {
     method: "POST",
-    headers: await authHeaders(),
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    ...(body ? { body: JSON.stringify(body) } : {}),
   });
   revalidatePath("/approvals");
 }
@@ -100,12 +108,8 @@ export default async function ApprovalsPage() {
                       .join(", ")}
                   </div>
                 )}
-                {preview.media && (
-                  <div className="task-meta">
-                    {preview.media.count > 0
-                      ? `${preview.media.count} screenshot(s) on this moment — NOT included (screenshots are never sent to Notion).`
-                      : "No screenshots will be sent to Notion."}
-                  </div>
+                {preview.media && preview.media.count === 0 && (
+                  <div className="task-meta">No screenshots will be sent to Notion.</div>
                 )}
                 {preview.source_host && (
                   <div className="task-meta">Source: {preview.source_host}</div>
@@ -145,6 +149,29 @@ export default async function ApprovalsPage() {
                 <form action={decide}>
                   <input type="hidden" name="id" value={a.id} />
                   <input type="hidden" name="decision" value="approve" />
+                  {preview?.media && preview.media.items.length > 0 && (
+                    <fieldset className="media-consent">
+                      <legend>
+                        Screenshots on this moment — none are sent unless you
+                        tick them:
+                      </legend>
+                      {preview.media.items.map((m) =>
+                        m.eligible ? (
+                          <label key={m.id} className="media-consent-item">
+                            <input type="checkbox" name="media_ids" value={m.id} />{" "}
+                            Include {m.kind}
+                            {m.width && m.height ? ` (${m.width}×${m.height}` : " ("}
+                            , visually redacted)
+                          </label>
+                        ) : (
+                          <div key={m.id} className="task-meta">
+                            {m.kind} — cannot be included (redaction:{" "}
+                            {m.redaction_state})
+                          </div>
+                        ),
+                      )}
+                    </fieldset>
+                  )}
                   <button type="submit" className="approve">
                     {isNotion ? "Approve & send to Notion" : "Approve"}
                   </button>

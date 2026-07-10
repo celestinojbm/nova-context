@@ -340,17 +340,46 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
         });
       }
 
+      // M10: explicit media consent. Every requested id must be the user's
+      // own media, attached to THIS action's moment, and provably redacted
+      // (redaction_state 'applied'). Anything else rejects the approval
+      // before any state change — unredacted or foreign media can never be
+      // consented onto an external write.
+      const mediaIds = approveBody.data.media_ids ?? [];
+      if (mediaIds.length) {
+        const eligible = await db.query<{ id: string }>(
+          `SELECT mm.id FROM moment_media mm
+           JOIN actions a ON a.moment_id = mm.moment_id
+           WHERE a.id = $1 AND a.user_id = $2 AND mm.user_id = $2
+             AND mm.id = ANY($3::uuid[]) AND mm.redaction_state = 'applied'`,
+          [params.data.id, userId, mediaIds],
+        );
+        const eligibleIds = new Set(eligible.rows.map((r) => r.id));
+        const rejected = mediaIds.filter((id) => !eligibleIds.has(id));
+        if (rejected.length) {
+          return reply.code(400).send({
+            error: "invalid_media",
+            message:
+              "Only your own, visually redacted media attached to this action's moment can be included.",
+            rejected_ids: rejected,
+          });
+        }
+      }
+
       const claim = await db.query(
         `UPDATE actions
          SET status = 'queued', approved_by = $1, approved_at = now(), updated_at = now(),
-             payload = CASE WHEN $3::jsonb IS NULL THEN payload
-                            ELSE jsonb_set(payload, '{destination}', $3::jsonb) END
+             payload = jsonb_set(
+               CASE WHEN $3::jsonb IS NULL THEN payload
+                    ELSE jsonb_set(payload, '{destination}', $3::jsonb) END,
+               '{media_ids}', $4::jsonb)
          WHERE id = $2 AND user_id = $1 AND status = 'proposed'
          RETURNING id, action_type`,
         [
           userId,
           params.data.id,
           approveBody.data.destination ? JSON.stringify(approveBody.data.destination) : null,
+          JSON.stringify(mediaIds),
         ],
       );
       const queuedAction = claim.rows[0];
@@ -375,6 +404,7 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
           JSON.stringify({
             action_type: queuedAction.action_type,
             destination_override: approveBody.data.destination?.title ?? null,
+            media_approved: mediaIds.length,
           }),
         ],
       );

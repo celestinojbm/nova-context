@@ -30,6 +30,7 @@ import { createRateLimiter } from "./auth/rate-limit.js";
 import { extractPayloadImages, redactPayloadImages } from "./image-redaction.js";
 import { MediaService } from "./media/media-service.js";
 import { storeFromEnv, type ObjectStore } from "./media/object-store.js";
+import { registerAccountRoutes } from "./routes-account.js";
 import { registerMediaRoutes } from "./routes-media.js";
 import { TesseractOcrEngine } from "./ocr.js";
 import { HttpNotionApiClient, type NotionApiClient } from "./integrations/notion-api.js";
@@ -261,6 +262,14 @@ export async function buildApp({
     notionApi: notionApiClient,
   });
   registerMediaRoutes(app, { db, media, viewAudit: env.NOVA_MEDIA_VIEW_AUDIT === "on" });
+  registerAccountRoutes(app, {
+    db,
+    media,
+    analytics,
+    momentColumns: MOMENT_COLUMNS,
+    rowToMoment: rowToMoment as (row: never) => ContextMoment,
+    rateLimiter,
+  });
 
   app.get("/healthz", async () => {
     await db.query("SELECT 1");

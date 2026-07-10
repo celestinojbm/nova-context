@@ -50,6 +50,7 @@ export const AUDIT_EVENT_LABELS: Record<string, string> = {
   "media.cleanup": "Orphaned media object(s) removed from storage",
   "media.view": "Stored media viewed",
   "media.adapter_access": "Stored media read for an external integration",
+  "enrichment.version.selected": "Enrichment version selected as current",
 };
 
 export function registerM4Routes(app: FastifyInstance, deps: M4RouteDeps): void {

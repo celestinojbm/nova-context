@@ -8,9 +8,10 @@ import type {
   NotionPropertyMapping,
 } from "@nova/schema";
 import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { ConfirmSubmit } from "../components/ConfirmSubmit";
-import { API_URL, apiGet, authHeaders } from "../lib/api";
+import { API_URL, apiGet, authHeaders, SESSION_COOKIE } from "../lib/api";
 import { PairExtension } from "./PairExtension";
 
 export const dynamic = "force-dynamic";
@@ -101,6 +102,26 @@ async function saveNotionMapping(formData: FormData) {
   redirect("/settings?mapping=saved");
 }
 
+async function deleteAccount(formData: FormData) {
+  "use server";
+  const password = formData.get("password");
+  const confirm = formData.get("confirm");
+  if (typeof password !== "string" || confirm !== "DELETE") {
+    redirect("/settings?account=confirm");
+  }
+  const res = await fetch(`${API_URL}/v1/auth/account/delete`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ password, confirm: "DELETE" }),
+    cache: "no-store",
+  });
+  if (res.status === 401) redirect("/settings?account=password");
+  if (!res.ok) redirect("/settings?account=failed");
+  const store = await cookies();
+  store.delete(SESSION_COOKIE);
+  redirect("/login?deleted=1");
+}
+
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
@@ -151,12 +172,24 @@ const MAPPING_MESSAGES: Record<string, { kind: "ok" | "error"; text: string }> =
   failed: { kind: "error", text: "Could not save the mapping. Try again." },
 };
 
+const ACCOUNT_MESSAGES: Record<string, { kind: "ok" | "error"; text: string }> = {
+  confirm: { kind: "error", text: 'Type DELETE exactly to confirm account deletion.' },
+  password: { kind: "error", text: "Password is wrong — account not deleted." },
+  failed: { kind: "error", text: "Account deletion failed. Try again." },
+};
+
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ notion?: string; pw?: string; mapping?: string }>;
+  searchParams: Promise<{ notion?: string; pw?: string; mapping?: string; account?: string }>;
 }) {
-  const { notion: notionParam, pw: pwParam, mapping: mappingParam } = await searchParams;
+  const {
+    notion: notionParam,
+    pw: pwParam,
+    mapping: mappingParam,
+    account: accountParam,
+  } = await searchParams;
+  const accountMessage = accountParam ? (ACCOUNT_MESSAGES[accountParam] ?? null) : null;
   const notionMessage = notionParam ? (NOTION_MESSAGES[notionParam] ?? null) : null;
   const passwordMessage = pwParam ? (PASSWORD_MESSAGES[pwParam] ?? null) : null;
   const mappingMessage = mappingParam ? (MAPPING_MESSAGES[mappingParam] ?? null) : null;
@@ -485,6 +518,48 @@ export default async function SettingsPage({
         links. The audit log records that a deletion happened (source domain
         and counts only) — never the deleted content.
       </p>
+
+      <h3>Account data lifecycle</h3>
+      <p className="muted">
+        Your context is yours in full. Download everything the account owns —
+        including audit history, integration metadata (never tokens), and
+        media — or delete the account entirely.
+      </p>
+      <p>
+        <a className="button-link" href="/export/account" download>
+          Full account export (media as links)
+        </a>{" "}
+        <a className="button-link" href="/export/account?media=full" download>
+          Full account export (media inlined)
+        </a>
+      </p>
+      {accountMessage && (
+        <div className="error-banner">{accountMessage.text}</div>
+      )}
+      <details className="account-tools">
+        <summary>Delete account permanently</summary>
+        <p className="muted">
+          This removes every project, moment, task, action, media file,
+          session, integration token, product event, and audit entry —
+          immediately and irreversibly. What survives: a single tombstone
+          (deletion date, hashed email, row counts — never content). Pages
+          Nova created in Notion stay in your Notion workspace; only Nova&apos;s
+          connection and local records are removed. Export first.
+        </p>
+        <form action={deleteAccount} className="auth-form">
+          <label>
+            Your password
+            <input type="password" name="password" autoComplete="current-password" required />
+          </label>
+          <label>
+            Type <code>DELETE</code> to confirm
+            <input type="text" name="confirm" placeholder="DELETE" required />
+          </label>
+          <ConfirmSubmit message="Permanently delete this account and all its data? This cannot be undone.">
+            Delete my account
+          </ConfirmSubmit>
+        </form>
+      </details>
 
       <h3>Privacy status</h3>
       <ul className="muted">

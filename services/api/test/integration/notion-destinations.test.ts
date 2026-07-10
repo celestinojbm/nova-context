@@ -367,8 +367,13 @@ describe.skipIf(!databaseUrl || !redisUrl)("M7: Notion destinations", () => {
     expect(preview.statusCode).toBe(200);
     expect(preview.json().connection.destination).toEqual(ALICE_DB);
     expect(preview.json().connection.property_mapping).toEqual(VALID_MAPPING);
-    // M9 media policy on the card: nothing included, count honest.
-    expect(preview.json().media).toEqual({ included: false, count: 0 });
+    // M9/M10 media policy on the card: nothing included, count honest.
+    expect(preview.json().media).toEqual({
+      included: false,
+      count: 0,
+      items: [],
+      approved_ids: [],
+    });
   });
 
   it("M9: mapping is strictly user-scoped — Bob sees none of Alice's", async () => {
