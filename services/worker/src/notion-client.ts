@@ -24,7 +24,12 @@ export interface NotionClient {
     token: string,
     parent: NotionParent,
     content: NotionPageContent,
+    /** M9: explicit properties for a database parent (from the user's
+     * validated mapping). Undefined = title-only (M6 behavior). */
+    properties?: Record<string, unknown>,
   ): Promise<CreatedNotionPage>;
+  /** M9: live property schema of a database (name → type). */
+  getDatabaseProperties(token: string, databaseId: string): Promise<Map<string, string>>;
 }
 
 /** Transient provider trouble → retry; anything else is terminal. */
@@ -41,18 +46,18 @@ export class HttpNotionClient implements NotionClient {
   private async call(
     token: string,
     path: string,
-    body: Record<string, unknown>,
+    body?: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
     let res: Response;
     try {
       res = await fetch(`https://api.notion.com/v1${path}`, {
-        method: "POST",
+        method: body ? "POST" : "GET",
         headers: {
           authorization: `Bearer ${token}`,
-          "content-type": "application/json",
           "notion-version": NOTION_VERSION,
+          ...(body ? { "content-type": "application/json" } : {}),
         },
-        body: JSON.stringify(body),
+        ...(body ? { body: JSON.stringify(body) } : {}),
       });
     } catch (err) {
       throw new NotionTransientError(`notion unreachable: ${(err as Error).message}`);
@@ -65,6 +70,12 @@ export class HttpNotionClient implements NotionClient {
       throw new Error(`notion rejected the request (${res.status})`);
     }
     return (await res.json()) as Record<string, unknown>;
+  }
+
+  async getDatabaseProperties(token: string, databaseId: string): Promise<Map<string, string>> {
+    const body = await this.call(token, `/databases/${databaseId}`);
+    const props = (body.properties ?? {}) as Record<string, { type?: string }>;
+    return new Map(Object.entries(props).map(([name, p]) => [name, p.type ?? "unknown"]));
   }
 
   async findParent(token: string): Promise<NotionParent | null> {
@@ -87,6 +98,7 @@ export class HttpNotionClient implements NotionClient {
     token: string,
     parent: NotionParent,
     content: NotionPageContent,
+    properties?: Record<string, unknown>,
   ): Promise<CreatedNotionPage> {
     const children = content.sections.flatMap((section) => {
       const blocks: Array<Record<string, unknown>> = [];
@@ -111,7 +123,9 @@ export class HttpNotionClient implements NotionClient {
         parent.type === "page_id"
           ? { page_id: parent.id }
           : { database_id: parent.id },
-      properties: {
+      // M9: a database parent may carry the user's validated property
+      // mapping; pages (and unmapped databases) keep the M6 title-only shape.
+      properties: properties ?? {
         title: {
           title: [{ type: "text", text: { content: content.title.slice(0, 200) } }],
         },

@@ -34,6 +34,18 @@ class FakeNotion implements NotionClient {
   parent: NotionParent | null = { type: "page_id", id: "parent-1", title: "Home" };
   lastContent: NotionPageContent | null = null;
   lastParent: NotionParent | null = null;
+  /** M9: properties passed to createPage (undefined = title-only shape). */
+  lastProperties: Record<string, unknown> | undefined;
+  /** M9: live database schema returned to the worker's re-validation. */
+  databaseProperties = new Map<string, string>([
+    ["Name", "title"],
+    ["Summary", "rich_text"],
+    ["Link", "url"],
+    ["Tags", "multi_select"],
+    ["Priority", "select"],
+    ["Captured", "date"],
+    ["Ref", "rich_text"],
+  ]);
 
   async findParent(token: string): Promise<NotionParent | null> {
     this.findCalls += 1;
@@ -41,10 +53,16 @@ class FakeNotion implements NotionClient {
     return this.parent;
   }
 
+  async getDatabaseProperties(token: string): Promise<Map<string, string>> {
+    if (token !== TOKEN) throw new Error("wrong token reached the provider");
+    return this.databaseProperties;
+  }
+
   async createPage(
     token: string,
     parent: NotionParent,
     content: NotionPageContent,
+    properties?: Record<string, unknown>,
   ): Promise<CreatedNotionPage> {
     if (token !== TOKEN) throw new Error("wrong token reached the provider");
     if (this.failCreatesRemaining > 0) {
@@ -54,6 +72,7 @@ class FakeNotion implements NotionClient {
     this.createCalls += 1;
     this.lastParent = parent;
     this.lastContent = content;
+    this.lastProperties = properties;
     return { id: `page-${this.createCalls}`, url: "https://notion.test/page" };
   }
 }
@@ -338,6 +357,92 @@ describe.skipIf(!databaseUrl)("M6: action execution worker", () => {
     await executeAction(db, deps(notion2), { actionId: plain, userId });
     expect(notion2.findCalls).toBe(1);
     expect(notion2.lastParent?.id).toBe("parent-1");
+  });
+
+  it("M9: database destination with saved mapping creates the page with mapped properties", async () => {
+    const notion = new FakeNotion();
+    await db.query(
+      `UPDATE integration_connections
+       SET meta = jsonb_set(
+             jsonb_set(meta, '{default_destination}',
+               '{"id":"db-1","type":"database_id","title":"Mapped DB"}'::jsonb),
+             '{destination_mapping}',
+             '{"title":"Name","summary":"Summary","source_url":"Link","tags":"Tags","created":"Captured","moment_ref":"Ref"}'::jsonb)
+       WHERE user_id = $1 AND provider = 'notion'`,
+      [userId],
+    );
+    try {
+      const actionId = await makeAction();
+      const outcome = await executeAction(db, deps(notion), { actionId, userId });
+      expect(outcome).toBe("done");
+      expect(notion.lastParent?.type).toBe("database_id");
+      const props = notion.lastProperties!;
+      expect(props).toBeTruthy();
+      // Title always present under the mapped property name.
+      expect(props["Name"]).toEqual({
+        title: [{ type: "text", text: { content: "Worker test page" } }],
+      });
+      expect(props["Link"]).toEqual({ url: "https://w.example.com/doc" });
+      expect(props["Ref"]).toEqual({
+        rich_text: [{ type: "text", text: { content: `Nova moment ${momentId}` } }],
+      });
+      expect(props["Captured"]).toBeTruthy();
+      // No pixels, ever.
+      expect(JSON.stringify(props)).not.toContain("data:image");
+    } finally {
+      await db.query(
+        `UPDATE integration_connections
+         SET meta = (meta - 'default_destination') - 'destination_mapping'
+         WHERE user_id = $1`,
+        [userId],
+      );
+    }
+  });
+
+  it("M9: a property renamed since save is dropped; the page still lands", async () => {
+    const notion = new FakeNotion();
+    notion.databaseProperties.delete("Tags"); // user renamed/deleted it in Notion
+    await db.query(
+      `UPDATE integration_connections
+       SET meta = jsonb_set(
+             jsonb_set(meta, '{default_destination}',
+               '{"id":"db-1","type":"database_id","title":"Mapped DB"}'::jsonb),
+             '{destination_mapping}',
+             '{"title":"Name","tags":"Tags","summary":"Summary"}'::jsonb)
+       WHERE user_id = $1 AND provider = 'notion'`,
+      [userId],
+    );
+    try {
+      const actionId = await makeAction();
+      const outcome = await executeAction(db, deps(notion), { actionId, userId });
+      expect(outcome).toBe("done");
+      const props = notion.lastProperties!;
+      expect(props["Name"]).toBeTruthy();
+      expect(props["Summary"]).toBeTruthy();
+      expect(props["Tags"]).toBeUndefined(); // dropped, not fatal
+    } finally {
+      await db.query(
+        `UPDATE integration_connections
+         SET meta = (meta - 'default_destination') - 'destination_mapping'
+         WHERE user_id = $1`,
+        [userId],
+      );
+    }
+  });
+
+  it("M9: page destinations (and unmapped databases) keep the title-only shape", async () => {
+    const notion = new FakeNotion();
+    const actionId = await makeAction(); // no destination → findParent page
+    await executeAction(db, deps(notion), { actionId, userId });
+    expect(notion.lastProperties).toBeUndefined();
+
+    const unmappedDb = await makeAction("queued", userId, null, {
+      destination: { id: "db-2", type: "database_id", title: "Unmapped DB" },
+    });
+    const notion2 = new FakeNotion();
+    await executeAction(db, deps(notion2), { actionId: unmappedDb, userId });
+    expect(notion2.lastParent?.type).toBe("database_id");
+    expect(notion2.lastProperties).toBeUndefined();
   });
 
   it("M7: page content carries provenance + privacy note and never any image data", async () => {

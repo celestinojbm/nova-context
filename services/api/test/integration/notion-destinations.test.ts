@@ -37,8 +37,9 @@ const fakeOauth: NotionOAuthClient = {
 };
 
 /** Destinations depend on WHOSE token arrives — proves per-user scoping. */
-const fakeNotionApi: NotionApiClient & { calls: string[] } = {
+const fakeNotionApi: NotionApiClient & { calls: string[]; propertyCalls: string[] } = {
   calls: [],
+  propertyCalls: [],
   async listDestinations(token: string) {
     this.calls.push(token);
     if (token === TOKEN_BY_CODE["alice-code"]) {
@@ -48,6 +49,21 @@ const fakeNotionApi: NotionApiClient & { calls: string[] } = {
       ];
     }
     return [{ id: "c".repeat(32), type: "page_id" as const, title: "Bob Board" }];
+  },
+  // M9: the live schema of "Alice DB" — mapping validation runs against this.
+  async getDatabaseProperties(token: string, databaseId: string) {
+    this.propertyCalls.push(`${token}:${databaseId}`);
+    if (databaseId !== "b".repeat(32)) throw new Error("database not shared");
+    return [
+      { name: "Name", type: "title" },
+      { name: "Summary", type: "rich_text" },
+      { name: "Link", type: "url" },
+      { name: "Tags", type: "multi_select" },
+      { name: "Priority", type: "select" },
+      { name: "Captured", type: "date" },
+      { name: "Ref", type: "rich_text" },
+      { name: "Status", type: "status" },
+    ];
   },
 };
 
@@ -243,5 +259,152 @@ describe.skipIf(!databaseUrl || !redisUrl)("M7: Notion destinations", () => {
       url: "/v1/integrations/notion/destinations",
     });
     expect(list.statusCode).toBe(409);
+  });
+
+  // --- M9: database property mapping -----------------------------------------
+
+  const ALICE_DB = { id: "b".repeat(32), type: "database_id", title: "Alice DB" };
+  const VALID_MAPPING = {
+    title: "Name",
+    summary: "Summary",
+    source_url: "Link",
+    tags: "Tags",
+    priority: "Priority",
+    created: "Captured",
+    moment_ref: "Ref",
+  };
+
+  it("M9: lists a shared database's properties with the caller's token", async () => {
+    const res = await alice.inject({
+      method: "GET",
+      url: `/v1/integrations/notion/destinations/${ALICE_DB.id}/properties`,
+    });
+    expect(res.statusCode).toBe(200);
+    const names = res.json().properties.map((p: { name: string }) => p.name);
+    expect(names).toContain("Name");
+    expect(names).toContain("Tags");
+    expect(
+      fakeNotionApi.propertyCalls.some((c) =>
+        c.startsWith(TOKEN_BY_CODE["alice-code"]!),
+      ),
+    ).toBe(true);
+  });
+
+  it("M9: rejects a mapping whose property is missing or type-incompatible", async () => {
+    const missing = await alice.inject({
+      method: "PUT",
+      url: "/v1/integrations/notion/destination",
+      payload: {
+        destination: ALICE_DB,
+        property_mapping: { ...VALID_MAPPING, tags: "NoSuchProperty" },
+      },
+    });
+    expect(missing.statusCode).toBe(400);
+    expect(missing.json().error).toBe("invalid_mapping");
+    expect(missing.json().issues[0]).toMatchObject({
+      field: "tags",
+      problem: "missing_property",
+    });
+
+    // "Status" exists but its type (status) can't carry a summary.
+    const incompatible = await alice.inject({
+      method: "PUT",
+      url: "/v1/integrations/notion/destination",
+      payload: {
+        destination: ALICE_DB,
+        property_mapping: { ...VALID_MAPPING, summary: "Status" },
+      },
+    });
+    expect(incompatible.statusCode).toBe(400);
+    expect(incompatible.json().issues[0]).toMatchObject({
+      field: "summary",
+      problem: "incompatible_type",
+      found: "status",
+    });
+
+    // Neither rejection saved anything.
+    const list = await alice.inject({
+      method: "GET",
+      url: "/v1/integrations/notion/destinations",
+    });
+    expect(list.json().property_mapping).toBeNull();
+  });
+
+  it("M9: mapping on a PAGE destination is rejected", async () => {
+    const res = await alice.inject({
+      method: "PUT",
+      url: "/v1/integrations/notion/destination",
+      payload: {
+        destination: { id: "a".repeat(32), type: "page_id", title: "Alice Notes" },
+        property_mapping: { title: "Name" },
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("invalid_mapping");
+  });
+
+  it("M9: saves a validated mapping, returns it, and shows it in the preview", async () => {
+    const put = await alice.inject({
+      method: "PUT",
+      url: "/v1/integrations/notion/destination",
+      payload: { destination: ALICE_DB, property_mapping: VALID_MAPPING },
+    });
+    expect(put.statusCode).toBe(200);
+    expect(put.json().property_mapping).toEqual(VALID_MAPPING);
+
+    const list = await alice.inject({
+      method: "GET",
+      url: "/v1/integrations/notion/destinations",
+    });
+    expect(list.json().default).toEqual(ALICE_DB);
+    expect(list.json().property_mapping).toEqual(VALID_MAPPING);
+
+    const actionId = await proposeNotionAction(alice);
+    const preview = await alice.inject({
+      method: "GET",
+      url: `/v1/actions/${actionId}/preview`,
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json().connection.destination).toEqual(ALICE_DB);
+    expect(preview.json().connection.property_mapping).toEqual(VALID_MAPPING);
+    // M9 media policy on the card: nothing included, count honest.
+    expect(preview.json().media).toEqual({ included: false, count: 0 });
+  });
+
+  it("M9: mapping is strictly user-scoped — Bob sees none of Alice's", async () => {
+    const bobList = await bob.inject({
+      method: "GET",
+      url: "/v1/integrations/notion/destinations",
+    });
+    expect(bobList.json().property_mapping).toBeNull();
+
+    // Bob saving his own destination doesn't disturb Alice's mapping.
+    await bob.inject({
+      method: "PUT",
+      url: "/v1/integrations/notion/destination",
+      payload: {
+        destination: { id: "c".repeat(32), type: "page_id", title: "Bob Board" },
+      },
+    });
+    const aliceList = await alice.inject({
+      method: "GET",
+      url: "/v1/integrations/notion/destinations",
+    });
+    expect(aliceList.json().property_mapping).toEqual(VALID_MAPPING);
+  });
+
+  it("M9: clearing the destination clears the mapping too", async () => {
+    const clear = await alice.inject({
+      method: "PUT",
+      url: "/v1/integrations/notion/destination",
+      payload: { destination: null },
+    });
+    expect(clear.statusCode).toBe(200);
+    const list = await alice.inject({
+      method: "GET",
+      url: "/v1/integrations/notion/destinations",
+    });
+    expect(list.json().default).toBeNull();
+    expect(list.json().property_mapping).toBeNull();
   });
 });

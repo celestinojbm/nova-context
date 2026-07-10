@@ -143,7 +143,7 @@ describe.skipIf(!databaseUrl)("M2: capture queue, search, actions, projects", ()
       });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body.legs).toEqual({ fts: true, vector: false });
+      expect(body.legs).toEqual({ fts: true, vector: false, prefix_fallback: false });
       expect(body.items.length).toBeGreaterThan(0);
       // The database accumulates identical fixtures across local runs, so
       // assert membership + relevance rather than exact first place.

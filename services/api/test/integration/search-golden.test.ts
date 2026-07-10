@@ -103,9 +103,10 @@ describe.skipIf(!databaseUrl)("M8: golden search fixtures", () => {
     await app.ready();
     user = await createUser(app, `golden-${NONCE}@test.local`);
 
-    // The golden set: six moments, two of which carry media. Fixture "receipt"
-    // has NO query words in its text — only its screenshot's OCR mentions the
-    // invoice term, so finding it proves media-derived text is searchable.
+    // The golden set (M8, widened in M9): ten moments, three with media.
+    // Fixture "receipt" has NO query words in its text — only its
+    // screenshot's OCR mentions the invoice term, so finding it proves
+    // media-derived text is searchable.
     await seed("kubernetes", `${NONCE} kubernetes deployment rollout guide for staging`);
     await seed("sourdough", `${NONCE} sourdough bread recipe with high hydration`);
     await seed("budget", `${NONCE} quarterly budget spreadsheet for the finance review`);
@@ -116,6 +117,16 @@ describe.skipIf(!databaseUrl)("M8: golden search fixtures", () => {
     await seed("dashboard", `${NONCE} metrics overview page`, {
       ocrTexts: ["latency", "dashboard", "uptime"],
     });
+    // M9 additions: near-duplicate topics to make top-hit ranking earn it,
+    // and a media fixture whose OCR carries a sensitive number.
+    await seed("kubernetes2", `${NONCE} kubernetes cost report for the platform team`);
+    await seed("terraform", `${NONCE} terraform module registry conventions`);
+    await seed("onboarding", `${NONCE} onboarding checklist for new engineers`);
+    await seed("cardpage", `${NONCE} checkout page capture`, {
+      // The card number word is masked by visual redaction (Luhn detector);
+      // only the safe words may reach the index.
+      ocrTexts: [`${NONCE}checkout`, "confirm", "4111111111111111"],
+    });
   });
 
   afterAll(async () => {
@@ -125,9 +136,12 @@ describe.skipIf(!databaseUrl)("M8: golden search fixtures", () => {
   it("returns the expected top hit for each golden query", async () => {
     const golden: Array<[query: string, expected: string]> = [
       [`${NONCE} kubernetes rollout`, "kubernetes"],
+      [`${NONCE} kubernetes cost`, "kubernetes2"],
       [`${NONCE} sourdough hydration`, "sourdough"],
       [`${NONCE} quarterly budget`, "budget"],
       [`${NONCE} meeting notes`, "plain"],
+      [`${NONCE} terraform module`, "terraform"],
+      [`${NONCE} onboarding checklist`, "onboarding"],
     ];
     for (const [query, expected] of golden) {
       const { items, legs } = await search({ query });
@@ -135,6 +149,54 @@ describe.skipIf(!databaseUrl)("M8: golden search fixtures", () => {
       expect(items.length).toBeGreaterThan(0);
       expect(items[0].id).toBe(ids[expected]);
     }
+  });
+
+  it("M9: partial words match through the prefix fallback", async () => {
+    // "deplo" matches no whole lexeme ("deployment" indexes as "deploy"),
+    // so the whole-word pass is empty and the prefix pass
+    // (kubernet:* & deplo:*) takes over.
+    const { items, legs } = await search({
+      query: `${NONCE} kubernet deplo`,
+      debug: true,
+    });
+    expect(legs.prefix_fallback).toBe(true);
+    expect(items.length).toBeGreaterThan(0);
+    expect(items[0].id).toBe(ids.kubernetes);
+    expect(items[0].diagnostics.prefix_fallback).toBe(true);
+
+    // Whole-word matches never take the fallback path.
+    const exact = await search({ query: `${NONCE} sourdough`, debug: true });
+    expect(exact.legs.prefix_fallback).toBe(false);
+    expect(exact.items[0].diagnostics.prefix_fallback).toBe(false);
+  });
+
+  it("M9: partial OCR-derived terms are retrievable too", async () => {
+    const { items, legs } = await search({ query: `${NONCE}womb` });
+    expect(legs.prefix_fallback).toBe(true);
+    expect(items.length).toBeGreaterThan(0);
+    expect(items[0].id).toBe(ids.receipt);
+  });
+
+  it("M9: ranking diagnostics expose raw leg scores only when asked", async () => {
+    const withDebug = await search({ query: `${NONCE} kubernetes rollout`, debug: true });
+    expect(withDebug.items[0].diagnostics).toBeTruthy();
+    expect(withDebug.items[0].diagnostics.fts_rank).toBeGreaterThan(0);
+    expect(withDebug.items[0].diagnostics.vector_similarity).toBeNull(); // no embedder
+
+    const without = await search({ query: `${NONCE} kubernetes rollout` });
+    expect(without.items[0].diagnostics).toBeUndefined();
+  });
+
+  it("M9: masked sensitive OCR values are unreachable — even via prefix", async () => {
+    // The card number was masked before storage, so neither the full value
+    // nor a prefix of it can ever come back.
+    for (const q of ["4111111111111111", "4111111111"]) {
+      const { items } = await search({ query: q });
+      expect(items.map((i) => i.id)).not.toContain(ids.cardpage);
+    }
+    // The safe OCR words on the same image ARE findable.
+    const safe = await search({ query: `${NONCE}checkout confirm` });
+    expect(safe.items.map((i) => i.id)).toContain(ids.cardpage);
   });
 
   it("finds a moment through media-derived OCR text alone", async () => {
@@ -153,7 +215,7 @@ describe.skipIf(!databaseUrl)("M8: golden search fixtures", () => {
   it("filters by media presence", async () => {
     const withMedia = await search({ query: NONCE, has_media: true });
     expect(withMedia.items.map((i) => i.id).sort()).toEqual(
-      [ids.receipt, ids.dashboard].sort(),
+      [ids.receipt, ids.dashboard, ids.cardpage].sort(),
     );
 
     const withoutMedia = await search({ query: NONCE, has_media: false });
@@ -166,7 +228,7 @@ describe.skipIf(!databaseUrl)("M8: golden search fixtures", () => {
   it("filters by image redaction state", async () => {
     const applied = await search({ query: NONCE, image_redaction_state: "applied" });
     expect(applied.items.map((i) => i.id).sort()).toEqual(
-      [ids.receipt, ids.dashboard].sort(),
+      [ids.receipt, ids.dashboard, ids.cardpage].sort(),
     );
   });
 

@@ -1,5 +1,10 @@
-import { buildNotionPageContent } from "@nova/context-engine";
+import {
+  buildNotionDatabaseProperties,
+  buildNotionPageContent,
+  validateNotionMapping,
+} from "@nova/context-engine";
 import { decryptSecret, parseEncryptionKey } from "@nova/context-engine/secret-box";
+import type { NotionPropertyMapping } from "@nova/schema";
 import { UnrecoverableError, Worker, type Job } from "bullmq";
 import pg from "pg";
 import type { WorkerEnv } from "./env.js";
@@ -188,7 +193,58 @@ export async function executeAction(
       ? { type: chosen.type, id: chosen.id, title: chosen.title }
       : await deps.notion.findParent(token);
     if (!parent) return terminal("no_accessible_notion_page");
-    const page = await deps.notion.createPage(token, parent, content);
+
+    // M9: database destinations honor the user's saved property mapping.
+    // The mapping was validated at save time; re-validate against the LIVE
+    // database schema before writing — properties renamed or retyped since
+    // then are dropped (the page still lands with everything else) rather
+    // than failing the approved action outright. Title always survives:
+    // if even the title property vanished, fall back to title-only.
+    let mappedProperties: Record<string, unknown> | undefined;
+    const savedMapping = conn.rows[0]!.meta?.destination_mapping as
+      | NotionPropertyMapping
+      | undefined;
+    if (parent.type === "database_id" && savedMapping) {
+      try {
+        const liveProps = await deps.notion.getDatabaseProperties(token, parent.id);
+        const issues = validateNotionMapping(
+          savedMapping,
+          [...liveProps.entries()].map(([name, type]) => ({ name, type })),
+        );
+        const badFields = new Set(issues.map((i) => i.field));
+        if (!badFields.has("title")) {
+          const effective = Object.fromEntries(
+            Object.entries(savedMapping).map(([field, prop]) => [
+              field,
+              badFields.has(field as keyof NotionPropertyMapping) ? null : prop,
+            ]),
+          ) as NotionPropertyMapping;
+          mappedProperties = buildNotionDatabaseProperties(
+            effective,
+            {
+              title: content.title,
+              summary: action.summary ?? payload.detail ?? null,
+              sourceUrl:
+                typeof action.source_meta?.url === "string" ? action.source_meta.url : null,
+              tags: Array.isArray(action.enrichment?.tags) ? action.enrichment.tags : [],
+              priority:
+                typeof (action.payload as { priority?: string }).priority === "string"
+                  ? (action.payload as { priority?: string }).priority!
+                  : null,
+              capturedAt: action.captured_at ? action.captured_at.toISOString() : null,
+              momentId: action.moment_id,
+            },
+            liveProps,
+          );
+        }
+      } catch (err) {
+        if (err instanceof NotionTransientError) throw err;
+        // Schema fetch rejected (revoked share, deleted database) — the
+        // create call below will surface the real terminal error.
+      }
+    }
+
+    const page = await deps.notion.createPage(token, parent, content, mappedProperties);
     // External id lands in the SAME statement that completes the action, so
     // any later redelivery takes the short-circuit path above.
     await db.query(

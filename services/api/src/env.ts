@@ -39,6 +39,9 @@ const envSchema = z.object({
   // connect/execute fails closed — and in production, configuring Notion
   // without it refuses to boot.
   NOVA_ENCRYPTION_KEY: z.string().min(32).optional().or(z.literal("").transform(() => undefined)),
+  // M9: previous encryption key, set ONLY while running the key-rotation
+  // command (`media:rotate-key`). The API itself never reads it.
+  NOVA_ENCRYPTION_KEY_OLD: z.string().min(32).optional().or(z.literal("").transform(() => undefined)),
   // M6: Notion OAuth app (per-user connections). All three required to
   // enable the connect flow; endpoints return 503 otherwise.
   NOTION_CLIENT_ID: z.string().min(8).optional().or(z.literal("").transform(() => undefined)),
@@ -67,6 +70,10 @@ const envSchema = z.object({
   NOVA_MEDIA_S3_ENDPOINT: z.string().url().optional().or(z.literal("").transform(() => undefined)),
   NOVA_MEDIA_S3_ACCESS_KEY_ID: z.string().optional().or(z.literal("").transform(() => undefined)),
   NOVA_MEDIA_S3_SECRET_ACCESS_KEY: z.string().optional().or(z.literal("").transform(() => undefined)),
+  // M9: audit direct media views (media.view, id + variant only). Off by
+  // default — every timeline render would be an audit row. Export, delete,
+  // and adapter access are ALWAYS audited regardless of this flag.
+  NOVA_MEDIA_VIEW_AUDIT: z.enum(["on", "off"]).default("off"),
   // M7: credential-surface rate limit (attempts per 15-minute window per IP)
   // and the Redis key namespace (override mainly for test isolation).
   NOVA_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),

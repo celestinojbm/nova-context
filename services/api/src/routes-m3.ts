@@ -222,7 +222,11 @@ export function registerM3Routes(app: FastifyInstance, deps: M3RouteDeps): void 
     if (!moment) return reply.code(404).send({ error: "not_found" });
 
     // M8: blobs first (rows cascade with the moment; objects don't).
-    const mediaObjects = media ? await media.deleteForMoments(userId, [moment.id]) : 0;
+    // M9: blob failures tombstone into media_delete_queue instead of
+    // failing the user's delete or silently leaking the object.
+    const mediaResult = media
+      ? await media.deleteForMoments(userId, [moment.id])
+      : { deleted: 0, queued: 0 };
 
     const client = await db.connect();
     let deletedTasks = 0;
@@ -255,7 +259,8 @@ export function registerM3Routes(app: FastifyInstance, deps: M3RouteDeps): void 
             url_host: safeHost(moment.source_meta),
             deleted_tasks: deletedTasks,
             deleted_actions: deletedActions,
-            deleted_media_objects: mediaObjects,
+            deleted_media_objects: mediaResult.deleted,
+            queued_media_deletions: mediaResult.queued,
           }),
         ],
       );
@@ -267,7 +272,13 @@ export function registerM3Routes(app: FastifyInstance, deps: M3RouteDeps): void 
       client.release();
     }
     analytics.track(userId, "delete_requested", { kind: "moment" });
-    return { deleted: true, tasks: deletedTasks, actions: deletedActions, media: mediaObjects };
+    return {
+      deleted: true,
+      tasks: deletedTasks,
+      actions: deletedActions,
+      media: mediaResult.deleted,
+      media_queued: mediaResult.queued,
+    };
   });
 }
 

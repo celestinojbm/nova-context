@@ -93,8 +93,8 @@ export class MediaService {
       const { rows } = await this.db.query<MediaRow>(
         `INSERT INTO moment_media
            (id, moment_id, user_id, kind, storage_key, thumb_key, content_type, bytes,
-            width, height, encrypted, redaction_state)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, true, $11)
+            thumb_bytes, width, height, encrypted, redaction_state)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, true, $12)
          RETURNING id, moment_id, kind, content_type, bytes, width, height,
                    redaction_state, storage_key, thumb_key`,
         [
@@ -106,6 +106,7 @@ export class MediaService {
           thumb ? thumbKey : null,
           mime,
           buffer.length,
+          thumb ? thumb.length : null,
           width,
           height,
           redactionState,
@@ -158,22 +159,166 @@ export class MediaService {
     return out;
   }
 
-  /** Object cleanup for moments about to be deleted (rows cascade with the
-   * moment; blobs need explicit removal). Returns objects deleted. */
-  async deleteForMoments(userId: string, momentIds: string[]): Promise<number> {
-    if (!momentIds.length) return 0;
+  /**
+   * Object cleanup for moments about to be deleted (rows cascade with the
+   * moment; blobs need explicit removal). M9 hardening: a blob delete that
+   * fails does NOT fail the user's delete and does NOT vanish — the key is
+   * tombstoned into media_delete_queue and retried by `media:cleanup`.
+   */
+  async deleteForMoments(
+    userId: string,
+    momentIds: string[],
+  ): Promise<{ deleted: number; queued: number }> {
+    if (!momentIds.length) return { deleted: 0, queued: 0 };
     const { rows } = await this.db.query<{ storage_key: string; thumb_key: string | null }>(
       `SELECT storage_key, thumb_key FROM moment_media
        WHERE user_id = $1 AND moment_id = ANY($2::uuid[])`,
       [userId, momentIds],
     );
     let deleted = 0;
+    let queued = 0;
     for (const row of rows) {
-      await this.store.delete(row.storage_key);
-      deleted += 1;
-      if (row.thumb_key) await this.store.delete(row.thumb_key);
+      const keys = [row.storage_key, ...(row.thumb_key ? [row.thumb_key] : [])];
+      let objectOk = true;
+      for (const key of keys) {
+        try {
+          await this.store.delete(key);
+        } catch (err) {
+          objectOk = false;
+          queued += 1;
+          await this.enqueueBlobDelete(userId, key, (err as Error).message);
+        }
+      }
+      if (objectOk) deleted += 1;
     }
-    return deleted;
+    return { deleted, queued };
+  }
+
+  /** Tombstone a blob whose delete failed; UNIQUE(storage_key) makes
+   * repeated failures bump attempts instead of duplicating rows. */
+  private async enqueueBlobDelete(
+    userId: string,
+    storageKey: string,
+    error: string,
+  ): Promise<void> {
+    await this.db.query(
+      `INSERT INTO media_delete_queue (user_id, storage_key, last_error)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (storage_key) DO UPDATE SET
+         attempts = media_delete_queue.attempts + 1,
+         last_error = EXCLUDED.last_error,
+         updated_at = now()`,
+      [userId, storageKey, error.slice(0, 500)],
+    );
+  }
+
+
+  /**
+   * Per-user storage accounting (M9). Aggregates only — object counts and
+   * encrypted byte totals, never keys or content. thumb_bytes is null for
+   * pre-M9 rows (documented; backfilled naturally as media churns).
+   */
+  async usageForUser(userId: string): Promise<{
+    objects: number;
+    total_bytes: number;
+    thumbnail_bytes: number;
+    by_kind: Record<string, { objects: number; bytes: number }>;
+    by_redaction_state: Record<string, number>;
+    by_project: Array<{ project_id: string | null; project_name: string | null; objects: number; bytes: number }>;
+    pending_deletions: number;
+  }> {
+    const totals = await this.db.query<{ objects: string; bytes: string; thumb: string }>(
+      `SELECT count(*) AS objects,
+              coalesce(sum(bytes), 0) AS bytes,
+              coalesce(sum(thumb_bytes), 0) AS thumb
+       FROM moment_media WHERE user_id = $1`,
+      [userId],
+    );
+    const byKind = await this.db.query<{ kind: string; objects: string; bytes: string }>(
+      `SELECT kind, count(*) AS objects, coalesce(sum(bytes), 0) AS bytes
+       FROM moment_media WHERE user_id = $1 GROUP BY kind`,
+      [userId],
+    );
+    const byState = await this.db.query<{ redaction_state: string; objects: string }>(
+      `SELECT redaction_state, count(*) AS objects
+       FROM moment_media WHERE user_id = $1 GROUP BY redaction_state`,
+      [userId],
+    );
+    const byProject = await this.db.query<{
+      project_id: string | null;
+      project_name: string | null;
+      objects: string;
+      bytes: string;
+    }>(
+      `SELECT m.project_id, p.name AS project_name,
+              count(*) AS objects, coalesce(sum(mm.bytes), 0) AS bytes
+       FROM moment_media mm
+       JOIN context_moments m ON m.id = mm.moment_id
+       LEFT JOIN projects p ON p.id = m.project_id
+       WHERE mm.user_id = $1
+       GROUP BY m.project_id, p.name
+       ORDER BY count(*) DESC`,
+      [userId],
+    );
+    const pending = await this.db.query<{ n: string }>(
+      `SELECT count(*) AS n FROM media_delete_queue WHERE user_id = $1`,
+      [userId],
+    );
+    return {
+      objects: Number(totals.rows[0]!.objects),
+      total_bytes: Number(totals.rows[0]!.bytes),
+      thumbnail_bytes: Number(totals.rows[0]!.thumb),
+      by_kind: Object.fromEntries(
+        byKind.rows.map((r) => [r.kind, { objects: Number(r.objects), bytes: Number(r.bytes) }]),
+      ),
+      by_redaction_state: Object.fromEntries(
+        byState.rows.map((r) => [r.redaction_state, Number(r.objects)]),
+      ),
+      by_project: byProject.rows.map((r) => ({
+        project_id: r.project_id,
+        project_name: r.project_name,
+        objects: Number(r.objects),
+        bytes: Number(r.bytes),
+      })),
+      pending_deletions: Number(pending.rows[0]!.n),
+    };
+  }
+
+  /**
+   * Adapter-facing read (M9 — the ONLY path external adapters may use,
+   * starting with Notion in M10). Refuses media whose visual redaction is
+   * not provably applied unless the caller passes the user's explicit
+   * override. Callers MUST audit the access (media.adapter_access) — this
+   * method returns the decrypted bytes and the reason string for the audit.
+   */
+  async getForAdapter(
+    userId: string,
+    mediaId: string,
+    opts: { allowUnredacted?: boolean } = {},
+  ): Promise<
+    | { ok: true; contentType: string; data: Buffer; redactionState: string }
+    | { ok: false; reason: "not_found" | "redaction_not_applied" }
+  > {
+    const { rows } = await this.db.query<MediaRow>(
+      `SELECT id, moment_id, kind, content_type, bytes, width, height,
+              redaction_state, storage_key, thumb_key
+       FROM moment_media WHERE id = $1 AND user_id = $2`,
+      [mediaId, userId],
+    );
+    const row = rows[0];
+    if (!row) return { ok: false, reason: "not_found" };
+    const safeStates = new Set(["applied", "none"]);
+    if (!safeStates.has(row.redaction_state) && !opts.allowUnredacted) {
+      return { ok: false, reason: "redaction_not_applied" };
+    }
+    const blob = await this.store.get(row.storage_key);
+    if (!blob) return { ok: false, reason: "not_found" };
+    return {
+      ok: true,
+      contentType: row.content_type,
+      data: decryptBytes(this.key, blob),
+      redactionState: row.redaction_state,
+    };
   }
 
   /** Export: redacted media as data URLs (the user's data, out in full). */

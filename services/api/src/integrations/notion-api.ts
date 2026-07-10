@@ -1,10 +1,11 @@
-import type { NotionDestination } from "@nova/schema";
+import type { NotionDatabaseProperty, NotionDestination } from "@nova/schema";
 
 /**
  * Read-only Notion API surface the API service needs (M7): list the pages
  * and databases the user shared with the integration so they can pick a
  * default destination. Injectable — tests use fakes; the worker keeps its
- * own client for writes.
+ * own client for writes. M9 adds the database property listing that backs
+ * property-mapping validation.
  *
  * Notion API limitation, documented: there is no "list everything"
  * endpoint — /v1/search only returns objects the user explicitly shared
@@ -13,6 +14,8 @@ import type { NotionDestination } from "@nova/schema";
  */
 export interface NotionApiClient {
   listDestinations(token: string): Promise<NotionDestination[]>;
+  /** M9: name + type of every property of a shared database. */
+  getDatabaseProperties(token: string, databaseId: string): Promise<NotionDatabaseProperty[]>;
 }
 
 const NOTION_VERSION = "2022-06-28";
@@ -55,6 +58,28 @@ export class HttpNotionApiClient implements NotionApiClient {
       }
     }
     return out;
+  }
+
+  async getDatabaseProperties(
+    token: string,
+    databaseId: string,
+  ): Promise<NotionDatabaseProperty[]> {
+    const res = await fetch(`https://api.notion.com/v1/databases/${databaseId}`, {
+      headers: {
+        authorization: `Bearer ${token}`,
+        "notion-version": NOTION_VERSION,
+      },
+    });
+    if (!res.ok) {
+      throw new Error(`notion database fetch failed (${res.status})`);
+    }
+    const body = (await res.json()) as {
+      properties?: Record<string, { type?: string }>;
+    };
+    return Object.entries(body.properties ?? {}).map(([name, prop]) => ({
+      name,
+      type: prop.type ?? "unknown",
+    }));
   }
 }
 

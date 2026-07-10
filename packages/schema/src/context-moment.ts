@@ -120,6 +120,23 @@ export interface MomentMediaRef {
   thumbnail_url: string | null;
 }
 
+/** M9: per-user storage accounting — aggregates only, never content. */
+export interface MediaUsageResponse {
+  objects: number;
+  total_bytes: number;
+  thumbnail_bytes: number;
+  by_kind: Record<string, { objects: number; bytes: number }>;
+  by_redaction_state: Record<string, number>;
+  by_project: Array<{
+    project_id: string | null;
+    project_name: string | null;
+    objects: number;
+    bytes: number;
+  }>;
+  /** Blob deletions awaiting retry (media_delete_queue). */
+  pending_deletions: number;
+}
+
 export const contextMomentSchema = z.object({
   id: z.string().uuid(),
   project_id: z.string().uuid().nullable(),

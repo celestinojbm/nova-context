@@ -1,8 +1,11 @@
 import type {
+  ListDatabasePropertiesResponse,
   ListDestinationsResponse,
   ListIntegrationsResponse,
   ListSessionsResponse,
+  MediaUsageResponse,
   MeResponse,
+  NotionPropertyMapping,
 } from "@nova/schema";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -63,6 +66,48 @@ async function setNotionDestination(formData: FormData) {
   revalidatePath("/settings");
 }
 
+const MAPPING_FIELDS: Array<{ key: keyof NotionPropertyMapping; label: string }> = [
+  { key: "title", label: "Title (required)" },
+  { key: "summary", label: "Summary" },
+  { key: "source_url", label: "Source URL" },
+  { key: "tags", label: "Tags" },
+  { key: "priority", label: "Priority" },
+  { key: "created", label: "Captured at" },
+  { key: "moment_ref", label: "Nova moment reference" },
+];
+
+async function saveNotionMapping(formData: FormData) {
+  "use server";
+  const destinationRaw = formData.get("destination");
+  if (typeof destinationRaw !== "string" || !destinationRaw) return;
+  const destination = JSON.parse(destinationRaw);
+  const mapping: Record<string, string | null> = {};
+  for (const { key } of MAPPING_FIELDS) {
+    const v = formData.get(`map_${key}`);
+    mapping[key] = typeof v === "string" && v !== "" ? v : null;
+  }
+  if (!mapping.title) {
+    redirect("/settings?mapping=title_required");
+  }
+  const res = await fetch(`${API_URL}/v1/integrations/notion/destination`, {
+    method: "PUT",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ destination, property_mapping: mapping }),
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    redirect(`/settings?mapping=${res.status === 400 ? "invalid" : "failed"}`);
+  }
+  redirect("/settings?mapping=saved");
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
 async function disconnectNotion() {
   "use server";
   await fetch(`${API_URL}/v1/integrations/notion`, {
@@ -96,18 +141,30 @@ const NOTION_MESSAGES: Record<string, { kind: "ok" | "error"; text: string }> = 
   start_failed: { kind: "error", text: "Could not start the Notion connection. Try again." },
 };
 
+const MAPPING_MESSAGES: Record<string, { kind: "ok" | "error"; text: string }> = {
+  saved: { kind: "ok", text: "Property mapping saved." },
+  invalid: {
+    kind: "error",
+    text: "Mapping rejected — a mapped property is missing from the database or has an incompatible type.",
+  },
+  title_required: { kind: "error", text: "The Title property mapping is required." },
+  failed: { kind: "error", text: "Could not save the mapping. Try again." },
+};
+
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ notion?: string; pw?: string }>;
+  searchParams: Promise<{ notion?: string; pw?: string; mapping?: string }>;
 }) {
-  const { notion: notionParam, pw: pwParam } = await searchParams;
+  const { notion: notionParam, pw: pwParam, mapping: mappingParam } = await searchParams;
   const notionMessage = notionParam ? (NOTION_MESSAGES[notionParam] ?? null) : null;
   const passwordMessage = pwParam ? (PASSWORD_MESSAGES[pwParam] ?? null) : null;
-  const [me, sessions, integrations] = await Promise.all([
+  const mappingMessage = mappingParam ? (MAPPING_MESSAGES[mappingParam] ?? null) : null;
+  const [me, sessions, integrations, usage] = await Promise.all([
     apiGet<MeResponse>("/v1/auth/me"),
     apiGet<ListSessionsResponse>("/v1/auth/sessions"),
     apiGet<ListIntegrationsResponse>("/v1/integrations"),
+    apiGet<MediaUsageResponse>("/v1/media/usage"),
   ]);
   const notionConnection = integrations.ok
     ? integrations.data.items.find((i) => i.provider === "notion" && i.status === "active")
@@ -115,6 +172,16 @@ export default async function SettingsPage({
   const destinations = notionConnection
     ? await apiGet<ListDestinationsResponse>("/v1/integrations/notion/destinations")
     : null;
+  // M9: when the saved default is a database, load its properties so the
+  // user can map Nova fields onto them.
+  const defaultDestination = destinations?.ok ? destinations.data.default : null;
+  const databaseProperties =
+    defaultDestination?.type === "database_id"
+      ? await apiGet<ListDatabasePropertiesResponse>(
+          `/v1/integrations/notion/destinations/${defaultDestination.id}/properties`,
+        )
+      : null;
+  const savedMapping = destinations?.ok ? (destinations.data.property_mapping ?? null) : null;
 
   return (
     <>
@@ -207,6 +274,56 @@ export default async function SettingsPage({
               </p>
             )}
           </div>
+          {defaultDestination?.type === "database_id" && (
+            <div>
+              <strong>Database property mapping</strong>
+              <p className="muted">
+                Map Nova fields onto “{defaultDestination.title}” properties.
+                Enter the exact property name from your Notion database, or
+                leave a field blank to skip it. The mapping is validated
+                against the live database before it saves.
+              </p>
+              {mappingMessage && (
+                <div className={mappingMessage.kind === "ok" ? "success" : "error-banner"}>
+                  {mappingMessage.text}
+                </div>
+              )}
+              {databaseProperties?.ok ? (
+                <>
+                  <p className="muted">
+                    Available properties:{" "}
+                    {databaseProperties.data.properties
+                      .map((p) => `${p.name} (${p.type})`)
+                      .join(", ") || "none"}
+                  </p>
+                  <form action={saveNotionMapping} className="auth-form">
+                    <input
+                      type="hidden"
+                      name="destination"
+                      value={JSON.stringify(defaultDestination)}
+                    />
+                    {MAPPING_FIELDS.map(({ key, label }) => (
+                      <label key={key}>
+                        {label}
+                        <input
+                          type="text"
+                          name={`map_${key}`}
+                          defaultValue={(savedMapping?.[key] as string | null) ?? ""}
+                          placeholder="Notion property name"
+                          required={key === "title"}
+                        />
+                      </label>
+                    ))}
+                    <button type="submit">Save mapping</button>
+                  </form>
+                </>
+              ) : (
+                <p className="muted">
+                  Could not load the database&apos;s properties from Notion right now.
+                </p>
+              )}
+            </div>
+          )}
           <form action={disconnectNotion}>
             <ConfirmSubmit message="Disconnect Notion? Pending approved Notion actions will fail until you reconnect.">
               Disconnect Notion
@@ -271,6 +388,63 @@ export default async function SettingsPage({
         <p className="muted">
           {sessions.ok ? "No active sessions." : sessions.message}
         </p>
+      )}
+
+      <h3>Storage</h3>
+      <p className="muted">
+        Encrypted media (screenshots and live frames) stored for your account.
+        Counts and sizes only — Nova never shows or shares the content here.
+      </p>
+      {usage.ok ? (
+        <>
+          <p>
+            <strong>{usage.data.objects}</strong> media object(s),{" "}
+            <strong>{formatBytes(usage.data.total_bytes)}</strong> encrypted
+            {usage.data.thumbnail_bytes > 0 &&
+              ` (+ ${formatBytes(usage.data.thumbnail_bytes)} thumbnails)`}
+            {usage.data.pending_deletions > 0 &&
+              ` — ${usage.data.pending_deletions} deletion(s) pending retry`}
+          </p>
+          {usage.data.objects > 0 && (
+            <table className="sessions-table">
+              <thead>
+                <tr>
+                  <th>Breakdown</th>
+                  <th>Objects</th>
+                  <th>Size</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(usage.data.by_kind).map(([kind, v]) => (
+                  <tr key={`kind-${kind}`}>
+                    <td>{kind}</td>
+                    <td>{v.objects}</td>
+                    <td>{formatBytes(v.bytes)}</td>
+                  </tr>
+                ))}
+                {usage.data.by_project.map((p) => (
+                  <tr key={`proj-${p.project_id ?? "none"}`}>
+                    <td className="muted">
+                      {p.project_name ?? (p.project_id ? "(project)" : "No project")}
+                    </td>
+                    <td>{p.objects}</td>
+                    <td>{formatBytes(p.bytes)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {usage.data.objects > 0 && (
+            <p className="muted">
+              Redaction states:{" "}
+              {Object.entries(usage.data.by_redaction_state)
+                .map(([state, n]) => `${state}: ${n}`)
+                .join(", ")}
+            </p>
+          )}
+        </>
+      ) : (
+        <p className="muted">{usage.message}</p>
       )}
 
       <h3>Export</h3>
