@@ -106,6 +106,27 @@ captured content**; say what you did and what you expected instead. Privacy
 concerns get triaged first. The operator reviews feedback weekly
 (`ops:report`).
 
+## Emergency stop
+
+If anything ever feels wrong (you captured something you shouldn't have,
+or you suspect the system is misbehaving), in order of severity:
+
+1. **Stop capturing** — close the extension panel; end any live session
+   (the buffer is destroyed immediately).
+2. **Delete the moment** — timeline → the moment's Delete button removes
+   the content, its media, and derived data at once.
+3. **Cut the extension off** — web app → Settings → Sessions → revoke the
+   extension's session (or "Sign out everywhere"). The extension can no
+   longer submit anything until you re-pair.
+4. **Report it** — Settings → Report a problem → category **Privacy
+   concern**. Privacy reports are triaged before everything else.
+5. **Nuclear option** — Settings → Delete account (password + typed
+   DELETE): everything goes, immediately and irreversibly, leaving only a
+   counts-only tombstone. Export first if you want your data.
+
+The operator can additionally revoke all sessions server-side and disable
+any cloud feature with a single config change (see docs/RUNBOOKS.md).
+
 ## A note on the browser shell (M12)
 
 `apps/browser-shell` remains an experimental spike. The extension is the

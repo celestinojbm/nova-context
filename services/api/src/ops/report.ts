@@ -36,6 +36,8 @@ export interface AlphaReport {
     created_at: string;
     excerpt: string;
   }>;
+  /** M14: triage counts across ALL feedback (not just the excerpt list). */
+  feedback_by_category: Record<string, number>;
   warnings: string[];
   generated_at: string;
 }
@@ -87,6 +89,9 @@ export async function runAlphaReport(
     `SELECT id, category, status, created_at, message FROM alpha_feedback
      ORDER BY created_at DESC LIMIT 20`,
   );
+  const feedbackByCategory = await db.query<{ category: string; n: string }>(
+    `SELECT category, count(*) AS n FROM alpha_feedback GROUP BY category`,
+  );
 
   const mediaBytes = Number(media.rows[0]!.bytes);
   const pending = Number(pendingDeletes.rows[0]!.n);
@@ -103,6 +108,15 @@ export async function runAlphaReport(
   }
   const newFeedback = feedback.rows.filter((f) => f.status === "new").length;
   if (newFeedback > 0) warnings.push(`${newFeedback} untriaged feedback item(s)`);
+  // M14: privacy concerns are incidents, not feedback — triage FIRST.
+  const privacyCount = Number(
+    feedbackByCategory.rows.find((r) => r.category === "privacy")?.n ?? 0,
+  );
+  if (privacyCount > 0) {
+    warnings.push(
+      `${privacyCount} PRIVACY concern(s) reported — triage before anything else`,
+    );
+  }
 
   return {
     window_days: days,
@@ -137,6 +151,9 @@ export async function runAlphaReport(
       created_at: f.created_at.toISOString(),
       excerpt: f.message.replace(/\s+/g, " ").slice(0, 160),
     })),
+    feedback_by_category: Object.fromEntries(
+      feedbackByCategory.rows.map((r) => [r.category, Number(r.n)]),
+    ),
     warnings,
     generated_at: new Date().toISOString(),
   };

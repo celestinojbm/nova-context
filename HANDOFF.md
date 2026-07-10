@@ -2,13 +2,14 @@
 
 > Working notes to resume without losing the thread. Not a design doc — the
 > real design lives in `docs/`. This file tracks *where we are* and *what's next*.
-> **Last updated: end of M13 (Private Alpha Deployment + Real-World Usage Loop).**
+> **Last updated: end of M14 (Private Alpha Execution — rehearsed, gated on operator approval).**
 
 ## Where we are
 
-**Milestones M0 → M13 are complete.** M0–M12 are MERGED to `main` (PR #1:
+**Milestones M0 → M14 are complete.** M0–M13 are MERGED to `main` (PR #1:
 docs+M0–M4; PR #2: M5+M6; PR #3: M7; PR #4: M8; PR #5: M9; PR #6: M10;
-PR #7: M11; PR #8: M12). **M13 lives on branch `claude/m13-nova-context`.**
+PR #7: M11; PR #8: M12; PR #9: M13). **M14 lives on branch
+`claude/m14-nova-context`.**
 
 | Milestone | What shipped | Commit |
 |---|---|---|
@@ -26,7 +27,8 @@ PR #7: M11; PR #8: M12). **M13 lives on branch `claude/m13-nova-context`.**
 | M10 | Account Data Lifecycle + Notion Media Consent: full account export (refs/full media, tokens structurally excluded), full account delete (web+password+typed DELETE; blobs first, failures tombstoned, counts-only account_tombstones survives), documented external-deletion semantics, Notion screenshot upload behind explicit per-image consent (preview eligibility, approve media_ids, worker re-verify + File Upload API, adapter access audited), enrichment versioning (immutable versions + select-current) | `65d270a` |
 | M11 | Private Alpha Ops: /readyz + worker heartbeat + authed /status page, ops:maintenance (dry-run default) + ops_maintenance_runs, backup.sh + media:verify, password reset (operator-delivered token, sessions revoked), multi-key read (NOVA_ENCRYPTION_KEYS_PREVIOUS → zero-downtime rotation), shared adapter media gate (@nova/context-engine/media-gate), Notion upload retry dedup + gated live smoke, request-id correlation + structured worker logs + log-hygiene test, enrichment provenance UI, search weight goldens | `29f80ef` |
 | M12 | Nova Browser / Native Context Browser Discovery + Spike: `docs/NOVA_BROWSER.md` (strategy: one client of the platform, not a fork; feasibility matrix extension/Electron/CEF-Tauri/fork/partner; full architecture proposal; threat model; extension-vs-shell decision table; recommendation: continue at spike scale), minimal Electron shell `apps/browser-shell` (sandboxed page view + Nova side panel, pairing auth, explicit-click capture → existing moments API, strict redaction default ON, no local captured content), shell unit tests + API integration suite proving shell captures ride the existing redaction/media/isolation/log-hygiene rails | `782ae2a` |
-| M13 | Private Alpha Deployment + Usage Loop: ops:preflight (boot rules + live DB/Redis/store/key probes, fails on open-signup/partial-Notion/pending-migrations; prod refuses redaction-off without NOVA_ALLOW_UNSAFE_REDACTION=yes), ops:smoke (scripted post-deploy walk of the whole surface via HTTP, synthetic content, self-deleting account, ok/degraded/fail), ops:report (usage/friction/feedback/warnings aggregates), scripts/restore.sh + verification, alpha_feedback intake (migration 0012, POST /v1/feedback, Settings form, category-only audit/analytics), events task_created/notion_action_executed/feedback_submitted, /status features+warnings blocks, request timeout + media warn threshold, /readyz as Fly deploy gate, docs/RUNBOOKS.md (14 runbooks), docs/ALPHA_GUIDE.md (onboarding + honest privacy limits), security checklist in DEPLOY.md | this branch |
+| M13 | Private Alpha Deployment + Usage Loop: ops:preflight (boot rules + live DB/Redis/store/key probes, fails on open-signup/partial-Notion/pending-migrations; prod refuses redaction-off without NOVA_ALLOW_UNSAFE_REDACTION=yes), ops:smoke (scripted post-deploy walk of the whole surface via HTTP, synthetic content, self-deleting account, ok/degraded/fail), ops:report (usage/friction/feedback/warnings aggregates), scripts/restore.sh + verification, alpha_feedback intake (migration 0012, POST /v1/feedback, Settings form, category-only audit/analytics), events task_created/notion_action_executed/feedback_submitted, /status features+warnings blocks, request timeout + media warn threshold, /readyz as Fly deploy gate, docs/RUNBOOKS.md (14 runbooks), docs/ALPHA_GUIDE.md (onboarding + honest privacy limits), security checklist in DEPLOY.md | `e0d837b` |
+| M14 | Private Alpha Execution: full production-mode dress rehearsal (no cloud creds — honestly documented, not faked): preflight green + 3 fail-closed proofs, real API+worker from dist on fresh migrated DB with REAL Tesseract, SMOKE OK, maintenance+report, full backup→restore→media:verify cycle incl. wrong-key proof (0 verified/3 undecryptable/exit 2); rehearsal caught+fixed a corrupt-image API crash (tesseract.js out-of-band libpng throw — ocr.ts now Jimp-decodes first, jimp → prod deps, regression test) and a smoke enrichment-status misread; ops:report feedback_by_category + PRIVACY-incident warning; docs/ALPHA_RUN.md (blockers, operator sequence, evidence, 7-day loop + decision log, gate decision); ALPHA_GUIDE emergency-stop section. HARD GATE: no real user data without explicit operator approval | this branch |
 
 ## Repo shape (pnpm + Turborepo monorepo)
 
@@ -74,8 +76,8 @@ pnpm --filter @nova/extension build  # load .output/chrome-mv3; connect via Sett
 ```
 
 Tests:
-- `pnpm test` — unit (~138: schema, engines incl. visual redaction + notion mapping, env incl. M13 unsafe-setting refusal, auth helpers, M12 browser-shell capture/auth)
-- `DATABASE_URL=postgres://nova:nova@localhost:5432/nova REDIS_URL=redis://localhost:6379 pnpm test:integration` — 190 API (+1 gated) + 30 worker (+1 gated live Notion smoke) (M0–M13; alpha-feedback, alpha-ops, smoke suites are M13)
+- `pnpm test` — unit (~139: schema, engines, env incl. M13 unsafe-setting refusal, auth helpers, M12 browser-shell, M14 OCR input hardening)
+- `DATABASE_URL=postgres://nova:nova@localhost:5432/nova REDIS_URL=redis://localhost:6379 pnpm test:integration` — 191 API (+1 gated) + 30 worker (+1 gated live Notion smoke) (M0–M14)
 - `pnpm --filter @nova/browser-shell test` — 14 shell units (payload shape vs shared schema, hostile-page sanitize, instruction-as-data, auth client); CI never downloads the Electron binary (`ELECTRON_SKIP_BINARY_DOWNLOAD=1`)
 - `NOVA_OCR_E2E=1 DATABASE_URL=... pnpm --filter @nova/api exec vitest run test/integration/ocr-e2e.test.ts` — real-Tesseract proof (downloads ~2MB language data once)
 - CI (`.github/workflows/ci.yml`) provisions Postgres+Redis and runs build → typecheck → unit → migrate → integration.
@@ -167,22 +169,21 @@ Note: the Docker daemon in this environment sometimes needs `sudo dockerd &` bef
 - **DB migrations are forward-only**; latest `0012_m13_alpha_feedback.sql`.
 - **API integration tests run file-serial** (`services/api/vitest.config.ts`); regression suites log in as the dev user, auth/isolation suites create fresh accounts.
 
-## Recommended next work — M14+ (see docs/NOVA_BROWSER.md §7 for the browser track)
+## Recommended next work — M15+ (see docs/ALPHA_RUN.md for the gate)
 
-**M13 — Private Alpha Deployment + Usage Loop** is DONE (this branch). The
-deploy path is fully scripted-or-checklisted (preflight → deploy → smoke →
-report loop, runbooks, restore, security checklist, onboarding guide);
-what it deliberately does NOT do is a real cloud deploy — no credentials
-exist in this environment, so the deliverable is deploy-ready configs +
-exact operator instructions (DEPLOY.md), not a pretend deployment.
+**M14 — Private Alpha Execution** is DONE (this branch) as a full
+production-mode dress rehearsal with evidence in `docs/ALPHA_RUN.md`. The
+real deploy is blocked ONLY on infrastructure the build env cannot have
+(hosting/DB/Redis/bucket credentials, domains — the §1 blocker table) and
+on the HARD GATE: the operator must explicitly approve before any real
+user data is captured.
 
-1. **M14 — actually run the alpha.** Provision Fly/Neon/Upstash (or
-   equivalents), run `ops:preflight`, deploy, `ops:smoke`, onboard the
-   trusted user with docs/ALPHA_GUIDE.md, then live the weekly loop
-   (`ops:report` + `ops:maintenance` + feedback triage runbook) for a few
-   weeks. The report's friction section decides what to build next —
-   likely candidates: fixes reality finds, real Notion live smoke, email
-   delivery, cron'd maintenance.
+1. **M15 — the live alpha.** Operator provisions the §1 blockers, runs
+   the §2 sequence (preflight → deploy → smoke → STOP → approval →
+   onboard), then lives the 7-day loop with the decision log. The loop's
+   friction data decides what gets built next — likely: reality-found
+   fixes, real Notion live smoke then enabling Notion, enabling cloud
+   features one at a time, email delivery, cron'd maintenance.
 2. **Browser track (unchanged gates, docs/NOVA_BROWSER.md §7)** — desktop
    packaging only IF the spike proves value with a real user; browser-
    native live context only after that.
@@ -194,8 +195,9 @@ exact operator instructions (DEPLOY.md), not a pretend deployment.
 
 - Duplicate-page window exists if the worker dies between the Notion create
   call and the one-statement DB completion (Notion has no idempotency keys).
-- No real cloud deploy has run yet (no credentials in the build env):
-  DEPLOY.md/preflight/smoke are exercised locally + in CI, not against Fly.
+- No real cloud deploy has run yet (no credentials in the build env). M14
+  executed the FULL sequence as a local production-mode rehearsal
+  (docs/ALPHA_RUN.md has the evidence); Fly itself remains unexercised.
 - M13 usage counters are approximations (product events + enrichment
   versions), not provider billing data; cost thresholds are warnings only.
 - Browser shell is a SPIKE: single view, no tabs/packaging/auto-update,
@@ -217,8 +219,8 @@ exact operator instructions (DEPLOY.md), not a pretend deployment.
 
 ## Operational reminders for the next session
 
-- M13 branch: `claude/m13-nova-context` (based on merged main with M0–M12).
-- If the M13 PR gets **merged**, treat follow-up as fresh work: restart from
+- M14 branch: `claude/m14-nova-context` (based on merged main with M0–M13).
+- If the M14 PR gets **merged**, treat follow-up as fresh work: restart from
   the latest main and open a new PR.
 - Commit message trailers in use:
   `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>` and the `Claude-Session:` line.

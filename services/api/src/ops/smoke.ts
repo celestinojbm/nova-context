@@ -292,11 +292,11 @@ export async function runSmoke(
     while (Date.now() < deadline) {
       const m = await api(`/v1/context/moments/${momentId}`, { token: webToken });
       status = m.body?.enrichment_status ?? m.body?.enrichment?.status ?? "unknown";
-      if (status === "done") break;
+      if (status === "completed" || status === "failed") break;
       await new Promise((r) => setTimeout(r, 500));
     }
-    if (status === "done") add("worker_processing", "ok");
-    else if (status === "queued" || status === "pending")
+    if (status === "completed") add("worker_processing", "ok");
+    else if (status === "pending" || status === "processing")
       add("worker_processing", "degraded", "enrichment still queued — worker down or slow");
     else if (status === "skipped")
       add("worker_processing", "degraded", "enrichment skipped (no Redis configured)");

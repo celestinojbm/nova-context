@@ -1,3 +1,4 @@
+import { Jimp, JimpMime } from "jimp";
 import type { OcrEngine, OcrResult, OcrWord } from "@nova/context-engine/visual-redaction";
 
 /**
@@ -44,8 +45,19 @@ export class TesseractOcrEngine implements OcrEngine {
 
   async recognize(image: Buffer): Promise<OcrResult> {
     const run = (async () => {
+      // M14 (found in the alpha rehearsal): tesseract.js's worker thread
+      // rethrows libpng read errors OUT OF BAND (process.nextTick), which
+      // crashes the whole API on a corrupt/hostile image — the promise
+      // rejection alone is not enough. Decode with Jimp first and hand
+      // tesseract a clean re-encoded PNG: undecodable bytes fail HERE as a
+      // normal rejection (→ redaction failure → existing fail-safes), and
+      // tesseract only ever sees pixels Jimp could parse.
+      const decoded = await Jimp.fromBuffer(image).catch((err) => {
+        throw new Error(`image decode failed: ${(err as Error).message.slice(0, 120)}`);
+      });
+      const clean = await decoded.getBuffer(JimpMime.png);
       const worker = await this.worker();
-      const { data } = await worker.recognize(image, {}, { blocks: true });
+      const { data } = await worker.recognize(clean, {}, { blocks: true });
       return { words: extractWords(data as unknown as Record<string, unknown>) };
     })();
     let timer: NodeJS.Timeout | undefined;
