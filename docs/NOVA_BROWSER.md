@@ -304,8 +304,16 @@ behavior tested ✔); no external writes without explicit approval (7).
 **Continue — at spike scale, not product scale.** The evidence says a
 native surface removes the extension's two structural ceilings (screenshot
 acquisition and long-running live context) with full backend
-compatibility and no privacy regression — the M12 shell proves the rails
-hold. But the workflow-friction finding cuts the other way: until Nova
+compatibility, and the M12 shell proves Nova's privacy pipeline holds
+unchanged on this surface (redaction before storage, encrypted media,
+isolation, log hygiene — all tested). That is NOT the same as zero
+privacy risk: a browser surface inherently increases the blast radius —
+Nova ships and must patch its own Chromium-derived runtime, and a surface
+the user browses in *could* see more than an extension ever would, which
+is exactly why the no-silent-capture invariant and the §5 threat model
+are load-bearing rather than nice-to-have. The spike preserves the
+pipeline; it does not shrink the promise a browser makes.
+But the workflow-friction finding cuts the other way: until Nova
 Browser is somewhere people actually browse, the extension reaches users
 where they already are. So: keep the shell as an experimental surface,
 deepen it only where the extension is provably weak (live context), and
