@@ -220,6 +220,7 @@ The fake-provider path is covered in CI. Before first real use:
 |---|---|---|
 | `NOVA_ENCRYPTION_KEY` | API + worker (same value) | 32 bytes hex/base64; loss = media+tokens unrecoverable |
 | `NOVA_ENCRYPTION_KEYS_PREVIOUS` | API + worker, DURING rotation only | remove after `media:verify` passes on the new key |
+| `NOVA_BACKUP_KEY` (M15) | backup/restore host only | 32 bytes; SEPARATE from the data key; seals backups; never in a backup; loss = backups unrecoverable |
 | `NOVA_ALPHA_INVITE_CODE` | API | 8+ chars; share only with the alpha user |
 | `NOTION_CLIENT_SECRET` (+ID, redirect) | API | only if Notion is enabled |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | API (worker for enrichment) | optional; each enables a cloud feature |
@@ -273,9 +274,23 @@ Each item names its enforcement — run the commands before onboarding:
       signup/login/pairing-claim/password-reset only (`auth/plugin.ts`).
 - [ ] Media access user-scoped: `/v1/media/:id` 404s across users
       (`media.test.ts`, `browser-shell.test.ts`).
+- [ ] Visual media fail-safe (M15/Hermes P1): OCR failure stores NO
+      readable media (storage guard, `applied`-only); production forces
+      strict regardless of client flag; direct read + legacy `/v1/export` +
+      account export + adapter gate all refuse unsafe states
+      (`alpha-blockers.test.ts`).
 - [ ] Export never leaks unredacted media: full-mode inlines only
       `applied`/`none` states; others excluded with reason
-      (`account-lifecycle.test.ts`).
+      (`account-lifecycle.test.ts`, `alpha-blockers.test.ts`).
+- [ ] Backups sealed (M15/Hermes P1): AES-256-GCM with a SEPARATE
+      `NOVA_BACKUP_KEY`, manifest hashes, `umask 077`, prod fails without
+      the key; restore is guarded + verifies before touching the DB
+      (`backup/crypto.test.ts`, `backup/manifest.test.ts`).
+- [ ] Rate limiter fails CLOSED (M15/Hermes P2): a Redis outage falls back
+      to an in-memory window, not unlimited attempts; degraded state on
+      `/status` + preflight (`rate-limit.test.ts`).
+- [ ] `/readyz` leaks nothing (M15/Hermes P3): booleans only, no internal
+      error strings/hosts/paths (`routes-ops.test.ts`, `ops.test.ts`).
 - [ ] Account delete locks first: `deleted_at` + all sessions revoked
       before destructive steps; pipeline-down path tombstones blobs.
 - [ ] No secrets/content in logs: pinned by log-hygiene tests (ops,

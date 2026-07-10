@@ -27,24 +27,60 @@ fly deploy  -c infra/deploy/fly.api.toml --image <previous-image-ref>
 Migrations are forward-only: never roll the schema back — ship a correcting
 migration. Blobs/tokens are unaffected by app rollbacks (same key, format).
 
-## Backup
+## Backup (M15: sealed + verified)
 
 ```bash
-DATABASE_URL=... NOVA_MEDIA_FS_ROOT=... scripts/backup.sh <dest-dir>
+NOVA_BACKUP_KEY=<hex32> DATABASE_URL=... NOVA_MEDIA_FS_ROOT=... \
+  scripts/backup.sh <dest-dir>
+# verify (hash-only without the key; +decrypt with it):
+NOVA_BACKUP_KEY=... pnpm --filter @nova/api backup:verify -- \
+  --dir=<dest-dir> --stamp=<stamp>
 ```
-Keys are NOT in the backup — keep `NOVA_ENCRYPTION_KEY` (and any
-`NOVA_ENCRYPTION_KEYS_PREVIOUS` during rotation) in a secret store. s3
-media: use bucket versioning instead of the tar.
+Artifacts are AES-256-GCM sealed (`*.enc`) with `NOVA_BACKUP_KEY` — a
+SEPARATE key from the data key, never written into the backup — plus a
+`manifest-<stamp>.json` (sha256 + sizes, no secrets). `umask 077`: dir
+`700`, files `600`. There is NO plaintext-backup path: without the key the
+script fails. s3 media: rely on bucket versioning + SSE.
 
-## Restore
+## Restore (M15: guarded)
 
 ```bash
-DATABASE_URL=... NOVA_MEDIA_FS_ROOT=... scripts/restore.sh <backup-dir> <stamp>
+NOVA_BACKUP_KEY=<hex32> DATABASE_URL=... NOVA_MEDIA_FS_ROOT=... \
+  NOVA_ENCRYPTION_KEY=<data-key> scripts/restore.sh <backup-dir> <stamp>
 ```
-The script restores Postgres + fs media, then verifies (`db:migrate` no-op,
-`media:verify`). Without the key: metadata only — media and tokens stay
-ciphertext. Redis is not restored (retryable queue work only): re-approve
-in-flight actions; enrichment re-runs append versions.
+Destructive (`pg_restore --clean`). Guardrails: typed `RESTORE` confirm
+(or `NOVA_RESTORE_CONFIRM=RESTORE`); refuses a production-looking target
+without `NOVA_RESTORE_ALLOW_PRODUCTION=yes`; `backup:verify` (manifest +
+decrypt) BEFORE touching the DB; unseal → restore → `db:migrate` no-op +
+`media:verify` + smoke reminder. Without the DATA key: metadata restores;
+media/tokens stay ciphertext. Redis not restored (retryable work only):
+re-approve in-flight actions; enrichment re-runs append versions.
+
+## Backup policy (M15)
+
+- **What:** Postgres (all metadata + encrypted tokens) and fs media
+  (encrypted blobs). Redis is NOT backed up (retryable queue work only).
+- **Retention:** keep ≥14 daily backups for the alpha; prune older with a
+  cron that deletes whole `<stamp>` sets (both `*.enc` + the manifest).
+- **Location:** an access-controlled store SEPARATE from the running
+  hosts (e.g. a private, versioned object bucket). Never on the same
+  volume as the media store.
+- **Deletion:** delete a backup by removing its `*.enc` files AND its
+  manifest together; a sealed artifact is unreadable without the key, so
+  there is no plaintext to shred.
+- **Keys:** `NOVA_BACKUP_KEY` (seals backups) and `NOVA_ENCRYPTION_KEY`
+  (data at rest) live ONLY in your secret manager — never in a backup,
+  never in the repo, never in logs. Losing `NOVA_BACKUP_KEY` makes
+  backups unrecoverable; losing `NOVA_ENCRYPTION_KEY` makes a restore
+  metadata-only.
+- **What cannot be restored without keys:** media blobs and integration
+  tokens (need the data key); nothing at all (need the backup key). A
+  restorer with neither recovers nothing readable — no unredacted content
+  is ever exposed.
+- **Restore drill (quarterly):** `backup.sh` → `backup:verify` →
+  `restore.sh` into a SCRATCH database (`nova_restore`) → `media:verify`
+  → `ops:smoke` against a throwaway instance. Confirm wrong-key
+  `backup:verify` fails (`decrypt:fail`).
 
 ## Rotate the media/token key (zero-downtime)
 

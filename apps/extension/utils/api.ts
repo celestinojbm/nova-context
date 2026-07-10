@@ -34,7 +34,11 @@ const DEFAULTS: ExtensionSettings = {
   deviceToken: "",
   accountEmail: "",
   captureMode: "full",
-  strictRedaction: false,
+  // M15 (Hermes P1): default to STRICT — if server-side visual redaction
+  // fails, the screenshot is dropped rather than stored. A private-alpha
+  // client must never default to unsafe retention. (Production also forces
+  // this server-side regardless of what the client sends.)
+  strictRedaction: true,
 };
 
 export class SessionExpiredError extends Error {

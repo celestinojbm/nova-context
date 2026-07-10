@@ -21,7 +21,9 @@
     "auth:reset-token": "tsx src/db/reset-token.ts",
     "ops:preflight": "tsx src/db/run-preflight.ts",
     "ops:smoke": "tsx src/db/run-smoke.ts",
-    "ops:report": "tsx src/db/run-report.ts"
+    "ops:report": "tsx src/db/run-report.ts",
+    "backup:seal": "tsx src/backup/run-seal.ts",
+    "backup:verify": "tsx src/backup/run-verify.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1084.0",

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type pg from "pg";
 import { z } from "zod";
-import type { ContextMoment } from "@nova/schema";
+import { isSafeMediaRedactionState, type ContextMoment } from "@nova/schema";
 import type { Analytics } from "./analytics.js";
 import { requireAuth } from "./auth/plugin.js";
 import { verifyPassword } from "./auth/passwords.js";
@@ -114,13 +114,14 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDe
         // provably safe ('applied', or 'none' — image never carried
         // maskable text). Anything else exports as metadata with an
         // explicit exclusion reason: unredacted pixels never leave.
-        const SAFE_REDACTION = new Set(["applied", "none"]);
+        // M15 (Hermes P1): exportForMoments now enforces this at the source
+        // too; this stays as belt-and-suspenders using the SAME shared rule.
         const full = await media.exportForMoments(userId, momentIds);
         mediaByMoment = new Map(
           [...full.entries()].map(([momentId, items]) => [
             momentId,
             items.map((item) =>
-              SAFE_REDACTION.has(item.redaction_state)
+              isSafeMediaRedactionState(item.redaction_state)
                 ? item
                 : { ...item, data_url: null, excluded_reason: "redaction_not_applied" },
             ),

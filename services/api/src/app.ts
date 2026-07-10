@@ -311,6 +311,10 @@ export async function buildApp({
     windowMs: 15 * 60 * 1000,
     max: env.NOVA_RATE_LIMIT_MAX,
     prefix: env.NOVA_RATE_LIMIT_PREFIX,
+    // M15 (Hermes P2): a Redis outage falls back to a fail-closed in-memory
+    // window and logs a structured security warning (event name + class
+    // only, never secrets/content).
+    warn: (event, detail) => app.log.warn(detail, event),
   });
   app.addHook("onClose", async () => {
     await rateLimiter.close();
@@ -340,6 +344,7 @@ export async function buildApp({
     actionQueue: actionQueue as never,
     store: mediaStore,
     mediaAvailable: media !== null,
+    rateLimiter,
   });
   registerAccountRoutes(app, {
     db,
@@ -405,9 +410,14 @@ export async function buildApp({
 
     // M7: visual redaction BEFORE storage — screenshots are OCR-box masked
     // (or stripped, per settings) so unredacted pixels never persist.
+    // M15 (Hermes P1): in production, strict is FORCED on regardless of what
+    // the client sent — an old or malicious client cannot request unsafe
+    // retention. On OCR failure the image becomes 'blocked_strict' (dropped)
+    // instead of 'failed' (kept). Belt to the storeMomentImages suspenders.
+    const effectiveStrict = body.strict_image_redaction || env.isProduction;
     const imageOutcome = await redactPayloadImages(body.payload, {
       ocr: ocrEngine,
-      strict: body.strict_image_redaction,
+      strict: effectiveStrict,
       storageEnabled: screenshotStorageOn,
     });
     body.payload = imageOutcome.payload;

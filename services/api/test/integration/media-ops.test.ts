@@ -254,20 +254,15 @@ describe.skipIf(!databaseUrl)("M9: media reliability + storage operations", () =
       expect(ok.data.subarray(1, 4).toString("latin1")).toBe("PNG"); // decrypted
     }
 
-    // Non-strict OCR failure → media stored with state 'failed' → REFUSED.
-    ocr.mode = "fail";
-    const failedRes = await user.inject({
-      method: "POST",
-      url: "/v1/context/moments",
-      payload: {
-        source_mode: "instant_capture",
-        source_meta: { url: "https://ops.example.com/f", title: "F" },
-        payload: { screenshot_data_url: await whitePng() },
-        extracted_text: "adapter guard test",
-        intent_text: null,
-      },
-    });
-    const failedMediaId = failedRes.json().media[0].id;
+    // M15 (Hermes P1): capture no longer STORES unsafe media at all, so to
+    // exercise the adapter guard against an unsafe row we flip a genuinely
+    // 'applied' blob to 'failed' — the blob still decrypts, so ONLY the
+    // redaction-state gate can refuse it.
+    const toFlip = await capture(user);
+    const failedMediaId = toFlip.media[0]!.id;
+    await db.query("UPDATE moment_media SET redaction_state = 'failed' WHERE id = $1", [
+      failedMediaId,
+    ]);
     const refused = await media.getForAdapter(user.userId, failedMediaId);
     expect(refused.ok).toBe(false);
     if (!refused.ok) expect(refused.reason).toBe("redaction_not_applied");

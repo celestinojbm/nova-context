@@ -4,6 +4,7 @@ import type { Redis } from "ioredis";
 import type pg from "pg";
 import { pendingMigrations } from "./db/migrate.js";
 import type { ObjectStore } from "./media/object-store.js";
+import type { RateLimiter } from "./auth/rate-limit.js";
 import type { Env } from "./env.js";
 
 /**
@@ -30,6 +31,8 @@ export interface OpsDeps {
   actionQueue: Queue | null;
   store: ObjectStore;
   mediaAvailable: boolean;
+  /** M15 (Hermes P2): surface the rate-limiter backend + degraded state. */
+  rateLimiter?: RateLimiter;
 }
 
 async function check<T>(fn: () => Promise<T>): Promise<{ ok: boolean; error?: string; value?: T }> {
@@ -83,6 +86,23 @@ export async function readiness(deps: OpsDeps): Promise<{
   }
 
   return { ready: Object.values(checks).every((c) => c.ok), checks };
+}
+
+/**
+ * M15 (Hermes P3): strip a full readiness result to the PUBLIC shape — the
+ * overall boolean plus a per-component boolean, and NOTHING else. Error
+ * strings and free-text detail (which can carry hostnames/paths/ports) are
+ * dropped; only stable booleans survive into the /readyz response body.
+ */
+export function toPublicReadiness(result: {
+  ready: boolean;
+  checks: Record<string, { ok: boolean }>;
+}): { ready: boolean; checks: Record<string, { ok: boolean }> } {
+  const publicChecks: Record<string, { ok: boolean }> = {};
+  for (const [name, check] of Object.entries(result.checks)) {
+    publicChecks[name] = { ok: check.ok };
+  }
+  return { ready: result.ready, checks: publicChecks };
 }
 
 export async function opsStatus(deps: OpsDeps): Promise<Record<string, unknown>> {
@@ -169,9 +189,17 @@ export async function opsStatus(deps: OpsDeps): Promise<Record<string, unknown>>
     // instead (enrichment_versions by provider — see ops:report).
   };
 
+  // M15 (Hermes P2): rate-limiter backend + degraded state.
+  const rateLimit = deps.rateLimiter?.status() ?? null;
+
   // M13 guardrails: conditions worth acting on, as flags, not pages.
   const warnings: string[] = [];
   if (!worker.ok) warnings.push("worker heartbeat missing/stale");
+  if (rateLimit?.degraded) {
+    warnings.push(
+      "rate limiter DEGRADED — Redis unreachable, using per-instance in-memory fallback (fail-closed)",
+    );
+  }
   if (totals.ok) {
     const t = totals.value!;
     const warnBytes = deps.env.NOVA_MEDIA_WARN_MB * 1024 * 1024;
@@ -195,6 +223,7 @@ export async function opsStatus(deps: OpsDeps): Promise<Record<string, unknown>>
     queues,
     totals: totals.ok ? totals.value : { error: totals.error },
     features,
+    rate_limit: rateLimit,
     warnings,
     last_maintenance: lastMaintenance.ok ? lastMaintenance.value : null,
     version: deps.env.NOVA_GIT_SHA ?? null,
@@ -203,11 +232,21 @@ export async function opsStatus(deps: OpsDeps): Promise<Record<string, unknown>>
 }
 
 export function registerOpsRoutes(app: FastifyInstance, deps: OpsDeps): void {
+  // M15 (Hermes P3): /readyz is PUBLIC (no session) — it must never leak
+  // internal error strings (DB/Redis/object-store messages can carry
+  // hostnames, paths, ports). It returns ONLY the overall boolean plus a
+  // per-component boolean. The full internal detail (error class, "N
+  // pending", etc.) goes to the structured log with the request_id so an
+  // operator can correlate — but it never enters the response body.
   app.get("/readyz", async (req, reply) => {
     const result = await readiness(deps);
-    return reply.code(result.ready ? 200 : 503).send(result);
+    if (!result.ready) {
+      req.log.warn({ checks: result.checks }, "readiness_not_ready");
+    }
+    return reply.code(result.ready ? 200 : 503).send(toPublicReadiness(result));
   });
 
   // Under /v1 → the fail-closed auth middleware applies: session required.
+  // The authed status keeps full internal detail (error classes, warnings).
   app.get("/v1/ops/status", async () => opsStatus(deps));
 }

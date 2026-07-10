@@ -178,26 +178,29 @@ describe.skipIf(!databaseUrl)("M7: visual redaction", () => {
     expect(audit.rows[0].detail.strict_blocked).toBe(true);
   });
 
-  it("non-strict: OCR failure keeps the image and reports 'failed' honestly", async () => {
+  it("M15 (Hermes P1): even EXPLICIT non-strict never stores an unredactable image", async () => {
     ocr.mode = "fail";
     const res = await user.inject({
       method: "POST",
       url: "/v1/context/moments",
-      payload: captureBody(await whitePng()),
+      // The client explicitly asks for non-strict — the storage guard still
+      // refuses to persist a blob whose visual redaction did not succeed.
+      payload: captureBody(await whitePng(), { strict_image_redaction: false }),
     });
     const body = res.json();
+    // Report stays honest ('failed'), but NO readable media exists anywhere.
     expect(body.image_redaction.state).toBe("failed");
-    // M8: the (unmasked, non-strict) image is still kept — encrypted in the
-    // media pipeline with its honest redaction state, never in the payload.
-    expect(body.media).toHaveLength(1);
-    expect(body.media[0].redaction_state).toBe("failed");
+    expect(body.media).toHaveLength(0);
     const { rows } = await db.query(
       "SELECT payload FROM context_moments WHERE id = $1",
       [body.id],
     );
     expect(JSON.stringify(rows[0].payload)).not.toContain("data:image");
-    const served = await user.inject({ method: "GET", url: body.media[0].url });
-    expect(served.statusCode).toBe(200);
+    const mediaRows = await db.query(
+      "SELECT count(*)::int AS n FROM moment_media WHERE moment_id = $1",
+      [body.id],
+    );
+    expect(mediaRows.rows[0].n).toBe(0);
   });
 
   it("captures without an image report state 'none' (text-only mode stores no image)", async () => {

@@ -53,7 +53,7 @@ describe.skipIf(!databaseUrl || !redisUrl)("M10: Notion media consent (API)", ()
 
   async function captureWithImage(mode: "clean" | "fail"): Promise<{
     momentId: string;
-    mediaId: string;
+    mediaId: string | null;
     redactionState: string;
   }> {
     ocr.mode = mode;
@@ -74,8 +74,10 @@ describe.skipIf(!databaseUrl || !redisUrl)("M10: Notion media consent (API)", ()
     const body = res.json();
     return {
       momentId: body.id,
-      mediaId: body.media[0].id,
-      redactionState: body.media[0].redaction_state,
+      // M15: on OCR failure no media row exists — read the moment-level
+      // image_redaction state, not media[0].
+      mediaId: body.media[0]?.id ?? null,
+      redactionState: body.image_redaction.state,
     };
   }
 
@@ -128,8 +130,12 @@ describe.skipIf(!databaseUrl || !redisUrl)("M10: Notion media consent (API)", ()
   it("preview lists each media with honest eligibility; nothing included by default", async () => {
     const applied = await captureWithImage("clean");
     expect(applied.redactionState).toBe("applied");
+    // M15 (Hermes P1): OCR failure no longer STORES unredacted media at all —
+    // strict is the effective default, so the image is dropped
+    // ('blocked_strict') and no media row exists to be (in)eligible.
     const failed = await captureWithImage("fail");
-    expect(failed.redactionState).toBe("failed");
+    expect(failed.redactionState).toBe("blocked_strict");
+    expect(failed.mediaId).toBeNull();
 
     const actionId = await proposeAction(applied.momentId);
     const preview = await user.inject({ method: "GET", url: `/v1/actions/${actionId}/preview` });
@@ -144,17 +150,15 @@ describe.skipIf(!databaseUrl || !redisUrl)("M10: Notion media consent (API)", ()
       redaction_state: "applied",
     });
 
-    // The unredacted moment's preview marks its media ineligible.
+    // The moment whose redaction failed carries NO media at all — there is
+    // nothing to include or leak.
     const failedAction = await proposeAction(failed.momentId);
     const failedPreview = await user.inject({
       method: "GET",
       url: `/v1/actions/${failedAction}/preview`,
     });
-    expect(failedPreview.json().media.items[0]).toMatchObject({
-      id: failed.mediaId,
-      eligible: false,
-      redaction_state: "failed",
-    });
+    expect(failedPreview.json().media.count).toBe(0);
+    expect(failedPreview.json().media.items).toEqual([]);
   });
 
   it("approval stores ONLY explicitly ticked media, and audits the count", async () => {
@@ -193,17 +197,23 @@ describe.skipIf(!databaseUrl || !redisUrl)("M10: Notion media consent (API)", ()
 
   it("rejects unredacted media, foreign media, and media from another moment — before any state change", async () => {
     const { momentId } = await captureWithImage("clean");
-    const failed = await captureWithImage("fail");
     const actionId = await proposeAction(momentId);
 
-    // Unredacted (state 'failed') media on ANOTHER moment of the same user.
-    const unredacted = await user.inject({
+    // M15 (Hermes P1): unredacted media is never STORED, so it cannot even be
+    // referenced. A capture whose OCR failed yields no media row at all.
+    const failed = await captureWithImage("fail");
+    expect(failed.mediaId).toBeNull();
+
+    // A second clean moment's media (owned + redacted, but NOT on this
+    // action's moment) must still be rejected.
+    const otherMoment = await captureWithImage("clean");
+    const wrongMoment = await user.inject({
       method: "POST",
       url: `/v1/actions/${actionId}/approve`,
-      payload: { media_ids: [failed.mediaId] },
+      payload: { media_ids: [otherMoment.mediaId] },
     });
-    expect(unredacted.statusCode).toBe(400);
-    expect(unredacted.json().error).toBe("invalid_media");
+    expect(wrongMoment.statusCode).toBe(400);
+    expect(wrongMoment.json().error).toBe("invalid_media");
 
     // Another user's media id.
     const other = await createUser(app, `consent-b-${Date.now()}@test.local`);
