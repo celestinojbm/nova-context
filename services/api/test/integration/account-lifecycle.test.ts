@@ -297,6 +297,62 @@ describe.skipIf(!databaseUrl)("M10: account data lifecycle", () => {
     expect(drained.rows).toHaveLength(0);
   });
 
+  it("media pipeline UNAVAILABLE at deletion: every blob key is tombstoned, none leak", async () => {
+    // Account and media are created through the normal (keyed) app…
+    const user = await createUser(app, `nopipeline-${Date.now()}@test.local`);
+    const { storageKey } = await seedAccount(user);
+
+    // …but the deletion arrives at an instance with NO encryption key
+    // (media pipeline down). Blob deletion can't run without the service,
+    // so every key must land in media_delete_queue instead of leaking.
+    const keylessApp = await buildApp({
+      env: loadEnv({ DATABASE_URL: databaseUrl, NOVA_MEDIA_FS_ROOT: fsRoot }),
+      ocr: null,
+      objectStore: store,
+    });
+    await keylessApp.ready();
+    try {
+      const login = await keylessApp.inject({
+        method: "POST",
+        url: "/v1/auth/login",
+        payload: { email: user.email, password: PASSWORD },
+      });
+      expect(login.statusCode).toBe(200);
+      const res = await keylessApp.inject({
+        method: "POST",
+        url: "/v1/auth/account/delete",
+        headers: { authorization: `Bearer ${login.json().token}` },
+        payload: { password: PASSWORD, confirm: "DELETE" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().media.deleted).toBe(0);
+      expect(res.json().media.queued).toBe(2); // full + thumb
+    } finally {
+      await keylessApp.close();
+    }
+
+    // Account gone; the keys are tracked with the explicit no-pipeline
+    // reason; the (encrypted) blob still exists awaiting cleanup.
+    const gone = await db.query(`SELECT 1 FROM users WHERE id = $1`, [user.userId]);
+    expect(gone.rows).toHaveLength(0);
+    const queued = await db.query(
+      `SELECT storage_key, reason FROM media_delete_queue WHERE user_id = $1`,
+      [user.userId],
+    );
+    expect(queued.rows).toHaveLength(2);
+    expect(queued.rows.every((r) => r.reason === "account_delete_no_pipeline")).toBe(true);
+    expect(queued.rows.map((r) => r.storage_key)).toContain(storageKey);
+    await access(join(fsRoot, storageKey));
+
+    // Cleanup (which needs no key) finishes the job.
+    const report = await runMediaCleanup(db, store, {
+      deleteOrphans: true,
+      minAgeMinutes: 9999,
+    });
+    expect(report.queueDeleted).toBeGreaterThanOrEqual(2);
+    await expect(access(join(fsRoot, storageKey))).rejects.toThrow();
+  });
+
   it("lifecycle endpoints are strictly self-scoped: A's actions never touch B", async () => {
     const alice = await createUser(app, `iso-a-${Date.now()}@test.local`);
     const bob = await createUser(app, `iso-b-${Date.now()}@test.local`);
