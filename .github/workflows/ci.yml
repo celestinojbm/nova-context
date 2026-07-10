@@ -34,6 +34,9 @@ jobs:
     env:
       DATABASE_URL: postgres://nova:nova@localhost:5432/nova
       REDIS_URL: redis://localhost:6379
+      # M12: the browser-shell spike's tests are pure Node — CI never runs
+      # the Electron binary, so skip the ~100MB download.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'"
+  />
+  <title>Nova</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font: 13px/1.5 system-ui, sans-serif;
+      margin: 0;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    section { border: 1px solid color-mix(in srgb, currentColor 25%, transparent); border-radius: 8px; padding: 10px 12px; }
+    h1 { font-size: 15px; margin: 0; }
+    h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 8px; opacity: 0.7; }
+    label { display: block; margin: 6px 0 2px; font-weight: 600; }
+    input[type="text"], input[type="password"], textarea {
+      width: 100%; box-sizing: border-box; padding: 6px 8px;
+      border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+      border-radius: 6px; background: transparent; color: inherit; font: inherit;
+    }
+    textarea { resize: vertical; min-height: 56px; }
+    button { padding: 6px 14px; border-radius: 6px; border: 1px solid color-mix(in srgb, currentColor 30%, transparent); background: transparent; color: inherit; cursor: pointer; font: inherit; margin-top: 8px; }
+    button.primary { font-weight: 700; }
+    .row { display: flex; gap: 8px; align-items: center; }
+    .row input[type="text"] { flex: 1; }
+    .muted { opacity: 0.7; }
+    .note { font-size: 12px; opacity: 0.75; margin: 6px 0 0; }
+    #result, #conn-status { white-space: pre-wrap; word-break: break-word; margin-top: 8px; font-family: ui-monospace, monospace; font-size: 12px; }
+    .ok { color: #2e7d32; } .err { color: #c62828; }
+    .check { display: flex; gap: 6px; align-items: center; margin-top: 6px; font-weight: 400; }
+  </style>
+</head>
+<body>
+  <h1>Nova Shell <span class="muted">— M12 spike</span></h1>
+
+  <section id="connect">
+    <h2>Connection</h2>
+    <div id="conn-status" class="muted">Checking…</div>
+    <div id="pair-form">
+      <label for="api-url">API URL</label>
+      <input id="api-url" type="text" value="http://localhost:3001" />
+      <label for="pair-code">Pairing code (web app → Settings → Browser extension)</label>
+      <input id="pair-code" type="password" autocomplete="off" />
+      <button id="pair-btn" class="primary">Pair</button>
+    </div>
+    <button id="disconnect-btn" hidden>Disconnect</button>
+  </section>
+
+  <section>
+    <h2>Navigate</h2>
+    <div class="row">
+      <input id="nav-url" type="text" placeholder="https://…" />
+      <button id="nav-btn">Go</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Capture</h2>
+    <p class="note">
+      Nothing is captured until you click Capture. The page is sent to your
+      Nova API, where redaction runs before anything is stored.
+    </p>
+    <label for="intent">Instruction (optional)</label>
+    <textarea id="intent" placeholder="Why does this page matter?"></textarea>
+    <label class="check">
+      <input id="text-only" type="checkbox" /> Text only (never grab pixels)
+    </label>
+    <label class="check">
+      <input id="strict" type="checkbox" checked />
+      Strict redaction (drop image if redaction fails)
+    </label>
+    <button id="capture-btn" class="primary">Capture this page</button>
+    <div id="result"></div>
+  </section>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    async function refresh() {
+      const s = await window.nova.status();
+      $("conn-status").textContent = s.connected
+        ? `Connected as ${s.email} (${s.apiUrl})`
+        : "Not connected — pair with your Nova account.";
+      $("conn-status").className = s.connected ? "ok" : "err";
+      $("pair-form").hidden = s.connected;
+      $("disconnect-btn").hidden = !s.connected;
+      $("text-only").checked = s.captureMode === "text_only";
+      $("strict").checked = s.strictRedaction;
+      if (!$("nav-url").value && s.currentUrl) $("nav-url").value = s.currentUrl;
+    }
+
+    $("pair-btn").addEventListener("click", async () => {
+      const r = await window.nova.pair($("api-url").value.trim(), $("pair-code").value);
+      $("conn-status").textContent = r.ok ? `Paired as ${r.email}` : r.error;
+      $("conn-status").className = r.ok ? "ok" : "err";
+      $("pair-code").value = "";
+      if (r.ok) refresh();
+    });
+
+    $("disconnect-btn").addEventListener("click", async () => {
+      await window.nova.disconnect();
+      refresh();
+    });
+
+    $("nav-btn").addEventListener("click", async () => {
+      const r = await window.nova.navigate($("nav-url").value.trim());
+      if (r.ok) $("nav-url").value = r.url;
+      else $("result").textContent = r.error;
+    });
+    $("nav-url").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") $("nav-btn").click();
+    });
+
+    const applyOptions = () =>
+      window.nova.setOptions({
+        captureMode: $("text-only").checked ? "text_only" : "full",
+        strictRedaction: $("strict").checked,
+      });
+    $("text-only").addEventListener("change", applyOptions);
+    $("strict").addEventListener("change", applyOptions);
+
+    $("capture-btn").addEventListener("click", async () => {
+      $("capture-btn").disabled = true;
+      $("result").textContent = "Capturing…";
+      $("result").className = "";
+      try {
+        const r = await window.nova.capture($("intent").value, null);
+        if (r.ok) {
+          $("result").className = "ok";
+          $("result").textContent =
+            `Saved moment ${r.momentId}\n` +
+            `media: ${r.mediaCount} · redaction: ${r.redaction ?? "n/a"} · enrichment: ${r.enrichment}`;
+          $("intent").value = "";
+        } else {
+          $("result").className = "err";
+          $("result").textContent = r.error;
+          refresh();
+        }
+      } finally {
+        $("capture-btn").disabled = false;
+      }
+    });
+
+    refresh();
+  </script>
+</body>
+</html>
