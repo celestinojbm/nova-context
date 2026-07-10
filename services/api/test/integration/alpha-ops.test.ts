@@ -173,6 +173,7 @@ describe.skipIf(!databaseUrl)("M13: preflight / report / status guardrails", () 
       const fb = report.feedback.find((f) => f.excerpt.includes("seeded report feedback"));
       expect(fb).toBeDefined();
       expect(fb!.category).toBe("search_failure");
+      expect(report.feedback_by_category["search_failure"]).toBeGreaterThanOrEqual(1);
       expect(report.warnings.some((w) => w.includes("untriaged feedback"))).toBe(true);
 
       // Report text carries no captured content: the seeded moment's page
@@ -185,6 +186,17 @@ describe.skipIf(!databaseUrl)("M13: preflight / report / status guardrails", () 
     it("warns when media storage exceeds the configured threshold", async () => {
       const report = await runAlphaReport(db, { days: 1, mediaWarnMb: 0 });
       expect(report.warnings.some((w) => w.includes("threshold"))).toBe(true);
+    });
+
+    it("escalates privacy-category feedback as an incident warning", async () => {
+      await user.inject({
+        method: "POST",
+        url: "/v1/feedback",
+        payload: { category: "privacy", message: "seeded privacy concern for the report test" },
+      });
+      const report = await runAlphaReport(db, { days: 1 });
+      expect(report.feedback_by_category["privacy"]).toBeGreaterThanOrEqual(1);
+      expect(report.warnings.some((w) => w.includes("PRIVACY"))).toBe(true);
     });
   });
 
