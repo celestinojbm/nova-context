@@ -1,5 +1,6 @@
 import {
   ImageRedactionError,
+  isImageDataUrl,
   redactImageDataUrl,
   type OcrEngine,
 } from "@nova/context-engine/visual-redaction";
@@ -31,10 +32,6 @@ export interface PayloadImageOutcome<T> {
   report: Required<ImageRedactionReport>;
   /** M8: non-sensitive OCR text from the images, for search indexing. */
   ocrText: string | null;
-}
-
-function isImageDataUrl(value: unknown): value is string {
-  return typeof value === "string" && value.startsWith("data:image/");
 }
 
 function stripImages<T>(value: T): { value: T; stripped: number } {
@@ -141,7 +138,7 @@ export function extractPayloadImages<T>(payload: T): {
     if (isImageDataUrl(v)) {
       images.push({
         dataUrl: v,
-        kind: keyHint === "screenshot_data_url" ? "screenshot" : "frame",
+        kind: keyHint?.toLowerCase() === "screenshot_data_url" ? "screenshot" : "frame",
       });
       return undefined;
     }

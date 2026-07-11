@@ -73,6 +73,21 @@ describe.skipIf(!databaseUrl)("M11: ops surface", () => {
     expect(body.checks.media_store.ok).toBe(true); // write/read/delete probe
   });
 
+  it("/readyz (public) exposes ONLY booleans — no internal error/detail leak (M15 P3)", async () => {
+    const res = await app.inject({ method: "GET", url: "/readyz" });
+    const body = res.json();
+    // Every component is a bare {ok:boolean} — no 'error', no 'detail'.
+    for (const check of Object.values(body.checks) as Record<string, unknown>[]) {
+      expect(Object.keys(check)).toEqual(["ok"]);
+    }
+    const raw = JSON.stringify(body);
+    expect(raw).not.toContain("error");
+    expect(raw).not.toContain("detail");
+    expect(raw).not.toContain(fsRoot); // no paths
+    expect(raw).not.toContain("5432"); // no ports/hosts
+    expect(raw).not.toContain("6379");
+  });
+
   it("/v1/ops/status requires auth and returns counts only", async () => {
     const anon = await app.inject({ method: "GET", url: "/v1/ops/status" });
     expect(anon.statusCode).toBe(401);
@@ -89,6 +104,10 @@ describe.skipIf(!databaseUrl)("M11: ops surface", () => {
       expect(body.queues.enrichment).toBeTruthy();
       expect(body.queues.actions).toBeTruthy();
     }
+    // M15 (Hermes P2): rate-limiter backend + degraded state are surfaced.
+    expect(body.rate_limit).toBeTruthy();
+    expect(["redis", "memory"]).toContain(body.rate_limit.backend);
+    expect(body.rate_limit.degraded).toBe(false); // healthy Redis in this suite
     // Counts and booleans only: no storage keys, no content markers.
     const raw = JSON.stringify(body);
     expect(raw).not.toContain("data:image");

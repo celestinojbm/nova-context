@@ -1,7 +1,7 @@
 import { readMediaForAdapter } from "@nova/context-engine/media-gate";
 import { decryptBytesWithAny, encryptBytes } from "@nova/context-engine/secret-box";
 import { parseDataUrl } from "@nova/context-engine/visual-redaction";
-import type { MomentMediaRef } from "@nova/schema";
+import { isSafeMediaRedactionState, type MomentMediaRef } from "@nova/schema";
 import { Jimp, JimpMime } from "jimp";
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
@@ -66,13 +66,25 @@ export class MediaService {
     return this.keys[0]!;
   }
 
-  /** Encrypt + store images for a just-created moment; returns refs. */
+  /** Encrypt + store images for a just-created moment; returns refs.
+   *
+   * M15 (Hermes P1) defence-in-depth: a blob is persisted ONLY when its
+   * visual-redaction state is provably safe. On any unsafe state ('failed',
+   * 'skipped', 'blocked_strict', unknown, …) NOTHING is stored — the moment
+   * stands imageless rather than persist readable pixels. The capture path
+   * already strips images for 'blocked_strict'/'storage_disabled'/
+   * 'media_unavailable' and forces strict in production; this guard makes it
+   * structurally impossible to write an unsafe blob even if that regresses. */
   async storeMomentImages(
     userId: string,
     momentId: string,
     images: IncomingImage[],
     redactionState: string,
   ): Promise<MomentMediaRef[]> {
+    if (!isSafeMediaRedactionState(redactionState)) {
+      // Unsafe redaction state ⇒ never store readable pixels.
+      return [];
+    }
     const refs: MomentMediaRef[] = [];
     for (const image of images) {
       const { mime, buffer } = parseDataUrl(image.dataUrl);
@@ -140,6 +152,10 @@ export class MediaService {
     );
     const row = rows[0];
     if (!row) return null;
+    // M15 (Hermes P1): the direct read must never return pixels for media in
+    // an unsafe redaction state. Any legacy/edge row that predates the store
+    // guard is treated as not-found rather than served unredacted.
+    if (!isSafeMediaRedactionState(row.redaction_state)) return null;
     const useThumb = variant === "thumb" && row.thumb_key;
     const blob = await this.store.get(useThumb ? row.thumb_key! : row.storage_key);
     if (!blob) return null;
@@ -327,12 +343,24 @@ export class MediaService {
     };
   }
 
-  /** Export: redacted media as data URLs (the user's data, out in full). */
+  /** Export: redacted media as data URLs (the user's data, out in full).
+   *
+   * M15 (Hermes P1): pixels are inlined ONLY for provably safe redaction
+   * states. Unsafe rows are still LISTED (so the export is honest about what
+   * exists) but carry data_url=null + excluded_reason — the legacy
+   * /v1/export and the account export both consume this, so neither can leak
+   * unredacted pixels. This is the source-level guarantee; the account
+   * export keeps its own belt-and-suspenders filter too. */
   async exportForMoments(
     userId: string,
     momentIds: string[],
-  ): Promise<Map<string, Array<MomentMediaRef & { data_url: string | null }>>> {
-    const out = new Map<string, Array<MomentMediaRef & { data_url: string | null }>>();
+  ): Promise<
+    Map<string, Array<MomentMediaRef & { data_url: string | null; excluded_reason?: string }>>
+  > {
+    const out = new Map<
+      string,
+      Array<MomentMediaRef & { data_url: string | null; excluded_reason?: string }>
+    >();
     if (!momentIds.length) return out;
     const { rows } = await this.db.query<MediaRow>(
       `SELECT id, moment_id, kind, content_type, bytes, width, height,
@@ -342,11 +370,16 @@ export class MediaService {
       [userId, momentIds],
     );
     for (const row of rows) {
+      const list = out.get(row.moment_id) ?? [];
+      if (!isSafeMediaRedactionState(row.redaction_state)) {
+        list.push({ ...toRef(row), data_url: null, excluded_reason: "redaction_not_applied" });
+        out.set(row.moment_id, list);
+        continue;
+      }
       const blob = await this.store.get(row.storage_key);
       const dataUrl = blob
         ? `data:${row.content_type};base64,${decryptBytesWithAny(this.keys, blob).toString("base64")}`
         : null;
-      const list = out.get(row.moment_id) ?? [];
       list.push({ ...toRef(row), data_url: dataUrl });
       out.set(row.moment_id, list);
     }

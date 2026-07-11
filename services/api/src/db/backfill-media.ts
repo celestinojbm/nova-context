@@ -1,11 +1,13 @@
 import { parseEncryptionKey } from "@nova/context-engine/secret-box";
 import {
+  isImageDataUrl,
   redactImageDataUrl,
   type OcrEngine,
 } from "@nova/context-engine/visual-redaction";
 import pg from "pg";
 import { loadEnv } from "../env.js";
 import { extractPayloadImages } from "../image-redaction.js";
+import { sanitizeLegacyInlineMedia } from "../legacy-media.js";
 import { MediaService } from "../media/media-service.js";
 import { storeFromEnv } from "../media/object-store.js";
 import { TesseractOcrEngine } from "../ocr.js";
@@ -21,12 +23,15 @@ import { TesseractOcrEngine } from "../ocr.js";
  *     capture — moved as-is.
  *   - anything else (pre-M7 '{}', 'skipped', 'failed'): NOT provably
  *     redacted — re-run visual redaction now; only masked output is
- *     stored. If OCR is unavailable or fails, the moment is SKIPPED and
- *     left exactly as it was (inline, no data loss, no unredacted media
- *     in object storage). Re-run after fixing OCR to pick strays up.
+ *     stored. If OCR is unavailable or fails, the moment is QUARANTINED
+ *     (M15B / Hermes D01): the unverified inline pixels are stripped from
+ *     the stored payload and the row is marked 'quarantined_legacy', so
+ *     unredacted media never persists or leaks. The moment (text/metadata)
+ *     survives; only the unverifiable image is removed.
  *
- * Deliberately manual: an operator watches the counts. Nothing destructive
- * happens on failure paths.
+ * Deliberately manual: an operator watches the counts. Quarantine removes
+ * only unverified inline pixels; every outward API/export path also strips
+ * legacy inline media fail-closed (services/api/src/legacy-media.ts).
  */
 const env = loadEnv();
 if (!env.NOVA_ENCRYPTION_KEY) {
@@ -43,19 +48,48 @@ const ocr: OcrEngine | null =
 const pool = new pg.Pool({ connectionString: env.DATABASE_URL, max: 3 });
 const media = new MediaService(pool, store, [key]);
 
+/**
+ * M15B (Hermes D01): quarantine a row whose inline media cannot be safely
+ * migrated (OCR unavailable or redaction failed). We strip the unverified
+ * inline `data:image` from the STORED payload — it never passed a redaction
+ * gate, so it must not persist — mark the row 'quarantined_legacy', and
+ * audit it. The moment itself (text, metadata) survives; only the
+ * unverifiable pixels are removed. Idempotent: a sanitized row no longer
+ * matches the inline-media scan on re-run.
+ */
+async function quarantine(row: { id: string; user_id: string; payload: Record<string, unknown> }): Promise<void> {
+  const cleaned = sanitizeLegacyInlineMedia(row.payload) as Record<string, unknown>;
+  await pool.query(
+    `UPDATE context_moments
+       SET payload = $1,
+           image_redaction = jsonb_set(coalesce(image_redaction, '{}'), '{state}', to_jsonb('quarantined_legacy'::text))
+     WHERE id = $2`,
+    [JSON.stringify(cleaned), row.id],
+  );
+  await pool.query(
+    `INSERT INTO audit_log (user_id, event_type, subject_kind, subject_id, detail)
+     VALUES ($1, 'media.backfill_quarantine', 'moment', $2, $3)`,
+    [row.user_id, row.id, JSON.stringify({ reason: "legacy_inline_media_not_verified" })],
+  );
+}
+
 const { rows } = await pool.query<{
   id: string;
   user_id: string;
   payload: Record<string, unknown>;
   image_redaction: { state?: string } | null;
 }>(
+  // M15C (Hermes M15B-R01): ILIKE, not LIKE — a mixed-case `DATA:image` /
+  // `Data:Image` inline payload must be caught by the candidate scan too, or
+  // the backfill would silently skip (and leave) it. Structured per-row
+  // detection below (isImageDataUrl) is likewise case-insensitive.
   `SELECT id, user_id, payload, image_redaction FROM context_moments
-   WHERE payload::text LIKE '%data:image%' ORDER BY captured_at ASC`,
+   WHERE payload::text ILIKE '%data:image%' ORDER BY captured_at ASC`,
 );
 console.log(`Found ${rows.length} moment(s) with inline media.`);
 
 let migrated = 0;
-let skipped = 0;
+let quarantined = 0;
 for (const row of rows) {
   const state = row.image_redaction?.state;
   let payload = row.payload;
@@ -63,15 +97,17 @@ for (const row of rows) {
   let ocrText: string | null = null;
 
   if (state !== "applied") {
-    // Not provably redacted — re-redact now or skip.
+    // Not provably redacted — re-redact now, or QUARANTINE (strip the
+    // unverified inline pixels) so they never persist or leak.
     if (!ocr) {
-      skipped += 1;
+      await quarantine(row);
+      quarantined += 1;
       continue;
     }
     try {
       const texts: string[] = [];
       const walk = async (v: unknown): Promise<unknown> => {
-        if (typeof v === "string" && v.startsWith("data:image/")) {
+        if (isImageDataUrl(v)) {
           const result = await redactImageDataUrl(ocr, v);
           if (result.safeText) texts.push(result.safeText);
           return result.dataUrl;
@@ -90,15 +126,16 @@ for (const row of rows) {
       finalState = "applied";
       ocrText = texts.length ? texts.join("\n").slice(0, 50_000) : null;
     } catch (err) {
-      console.warn(`  skip ${row.id}: redaction failed (${(err as Error).message})`);
-      skipped += 1;
+      console.warn(`  quarantine ${row.id}: redaction failed (${(err as Error).message})`);
+      await quarantine(row);
+      quarantined += 1;
       continue;
     }
   }
 
   const extraction = extractPayloadImages(payload);
   if (!extraction.images.length) {
-    skipped += 1;
+    // Nothing extractable (already clean) — leave as-is.
     continue;
   }
   await media.storeMomentImages(row.user_id, row.id, extraction.images, finalState);
@@ -118,6 +155,8 @@ for (const row of rows) {
   migrated += 1;
 }
 
-console.log(`Backfill complete: ${migrated} migrated, ${skipped} skipped (left untouched).`);
+console.log(
+  `Backfill complete: ${migrated} migrated, ${quarantined} quarantined (unverified inline media stripped).`,
+);
 if (ocr instanceof TesseractOcrEngine) await ocr.close();
 await pool.end();

@@ -171,6 +171,21 @@ export async function runPreflight(
     `web_ttl=${env.NOVA_SESSION_TTL_HOURS}h extension_ttl=${env.NOVA_EXTENSION_SESSION_TTL_HOURS}h`,
   );
 
+  // 11. Rate-limit backend (M15 / Hermes P2). Redis-backed shares the window
+  // across instances; a Redis outage now falls back to a FAIL-CLOSED
+  // in-memory window (not fail-open) per instance. Without Redis at all, the
+  // limiter is single-instance only — a warning worth an operator's eye, and
+  // a reason to keep gateway/WAF rate limiting in front for the alpha.
+  if (env.REDIS_URL) {
+    add("rate_limit", "ok", "redis-backed (shared window; fail-closed in-memory fallback on outage)");
+  } else {
+    add(
+      "rate_limit",
+      "warn",
+      "in-memory only (single instance) — add gateway/WAF rate limiting or set REDIS_URL",
+    );
+  }
+
   return {
     ok: !checks.some((c) => c.status === "fail"),
     production: env.isProduction,

@@ -1,6 +1,11 @@
 import { Jimp, JimpMime } from "jimp";
 import { findSensitiveRanges, type RedactionType } from "./redaction.js";
 
+// Canonical, case-insensitive inline-image detection (M15C / Hermes
+// M15B-R01). Re-exported here so the API's Node-only image helpers keep
+// importing detection from `@nova/context-engine/visual-redaction`.
+export { IMAGE_DATA_URL_RE, isImageDataUrl, isDataUrl } from "./data-url.js";
+
 /**
  * Visual Redaction v1 (M7): OCR-box masking for screenshots and live-session
  * frames. An OCR engine (pluggable; Tesseract in production, fakes in tests)

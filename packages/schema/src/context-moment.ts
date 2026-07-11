@@ -73,8 +73,11 @@ export const createContextMomentRequestSchema = z
     intent_text: z.string().max(10_000).nullable().optional(),
     project_id: z.string().uuid().nullable().optional(),
     // M7: user preference — if image redaction fails, drop the image rather
-    // than store it unredacted. Enforced server-side.
-    strict_image_redaction: z.boolean().default(false),
+    // than store it unredacted. Enforced server-side. M15 (Hermes P1): the
+    // DEFAULT is now `true` (fail-safe) so a client that omits the flag can
+    // never accidentally request unsafe retention; production additionally
+    // forces this on regardless of what the client sends.
+    strict_image_redaction: z.boolean().default(true),
   })
   .strict();
 // Input type (defaults still optional) — clients build this shape.
@@ -104,6 +107,35 @@ export const imageRedactionReportSchema = z.object({
   tally: z.record(z.number().int()).default({}),
 });
 export type ImageRedactionReport = z.infer<typeof imageRedactionReportSchema>;
+
+/**
+ * M15 (Hermes P1): THE single source of truth for which visual-redaction
+ * states are safe to STORE, READ back, or EXPORT as pixels.
+ *
+ * Safe:
+ *   - 'applied'  — visual redaction provably ran and masked the image.
+ *   - 'none'     — the image genuinely carried no maskable visual content
+ *                  (in practice a media row never gets 'none' — no image is
+ *                  extracted for it — but reads/exports accept it as a
+ *                  no-op-safe value for parity with the adapter gate).
+ *
+ * Every other state is UNSAFE and pixels must never leave storage:
+ *   'failed' (OCR failed), 'skipped' (redaction disabled), 'blocked_strict',
+ *   'storage_disabled', 'media_unavailable', unknown, or null.
+ *
+ * This is enforced in three independent places (defence in depth):
+ *   1. MediaService.storeMomentImages — refuses to persist a non-safe blob;
+ *   2. MediaService.getMedia          — the direct /v1/media/:id read;
+ *   3. MediaService.exportForMoments  — legacy + account export data URLs;
+ * plus the adapter gate (@nova/context-engine/media-gate) which already
+ * enforced 'applied'-only. Capture additionally forces strict redaction in
+ * production so failures become 'blocked_strict' before any of this.
+ */
+export const SAFE_MEDIA_REDACTION_STATES = ["applied", "none"] as const;
+
+export function isSafeMediaRedactionState(state: string | null | undefined): boolean {
+  return state === "applied" || state === "none";
+}
 
 /** M8: reference to media stored in the pipeline (moment_media + encrypted
  * object storage). URLs are authenticated API routes, never public. */

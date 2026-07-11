@@ -27,24 +27,94 @@ fly deploy  -c infra/deploy/fly.api.toml --image <previous-image-ref>
 Migrations are forward-only: never roll the schema back — ship a correcting
 migration. Blobs/tokens are unaffected by app rollbacks (same key, format).
 
-## Backup
+## Backup (M15/M15B: sealed + authenticated + verified)
 
 ```bash
-DATABASE_URL=... NOVA_MEDIA_FS_ROOT=... scripts/backup.sh <dest-dir>
+NOVA_BACKUP_KEY=<hex32> DATABASE_URL=... NOVA_MEDIA_FS_ROOT=... \
+  scripts/backup.sh <dest-dir>
+# verify (hash-only without the key; +MAC +decrypt with it):
+NOVA_BACKUP_KEY=... pnpm --filter @nova/api backup:verify -- \
+  --dir=<dest-dir> --stamp=<stamp>
 ```
-Keys are NOT in the backup — keep `NOVA_ENCRYPTION_KEY` (and any
-`NOVA_ENCRYPTION_KEYS_PREVIOUS` during rotation) in a secret store. s3
-media: use bucket versioning instead of the tar.
+Artifacts are AES-256-GCM sealed (`*.enc`) with `NOVA_BACKUP_KEY` — a
+SEPARATE key from the data key, never written into the backup — plus a
+`manifest-<stamp>.json`. `umask 077`: dir `700`, files `600`. There is NO
+plaintext-backup path: without the key the script fails. s3 media: rely on
+bucket versioning + SSE.
 
-## Restore
+**M15B (Hermes D02) — no plaintext survives a failure:** plaintext dump/tar
+are written ONLY into a private `0700` `mktemp` workspace, sealed from there,
+and only the `.enc` + manifest are moved into `<dest-dir>` after sealing
+succeeds. A `trap … EXIT INT TERM` wipes the workspace on every exit path, so
+an interrupted or failed run (e.g. a bad key) leaves the final dir
+plaintext-free. **M15C (Hermes M15B-R02):** the underlying `backup:seal` step
+now *requires* a separate plaintext `--work` and sealed `--out` dir and
+rejects the old in-place `--dir` alias / `--work===--out` — plaintext and
+sealed artifacts can never share a directory. `backup.sh` already passes
+separate dirs; do not invoke `backup:seal` directly with one dir.
+
+> **OPERATOR RULE (Hermes conditional pass, accepted P2 residual):** run
+> operator backups ONLY via `scripts/backup.sh` — **never invoke
+> `backup:seal` directly.** The direct CLI's `--work`/`--out` check is
+> *lexical* (`path.resolve`), so a symlink between the two could still alias
+> them into one directory and seal in place. `backup.sh` uses a private
+> `mktemp` `--work` + a separate `--out`, so the aliasing path is never
+> exercised. Future hardening (not required for the M15 merge): compare
+> physical dirs via `realpath()` / reject symlinked `--work`/`--out`.
+
+**M15B (Hermes D04) — the manifest is authenticated, not just hashed:** it
+carries an HMAC-SHA256 `mac` (keyed with `NOVA_BACKUP_KEY`) over a canonical
+body, plus per-artifact size + sha256 and a required `postgres` artifact.
+`backup:verify` checks the MAC (catches a tampered size/timestamp/role or a
+dropped artifact) before the per-artifact hash + decrypt. No secrets or key
+material are stored in the manifest.
+
+## Restore (M15/M15B: guarded)
 
 ```bash
-DATABASE_URL=... NOVA_MEDIA_FS_ROOT=... scripts/restore.sh <backup-dir> <stamp>
+NOVA_BACKUP_KEY=<hex32> DATABASE_URL=... NOVA_MEDIA_FS_ROOT=... \
+  NOVA_ENCRYPTION_KEY=<data-key> scripts/restore.sh <backup-dir> <stamp>
 ```
-The script restores Postgres + fs media, then verifies (`db:migrate` no-op,
-`media:verify`). Without the key: metadata only — media and tokens stay
-ciphertext. Redis is not restored (retryable queue work only): re-approve
-in-flight actions; enrichment re-runs append versions.
+Destructive (`pg_restore --clean`). Guardrails: typed `RESTORE` confirm
+(or `NOVA_RESTORE_CONFIRM=RESTORE`); `backup:verify` (manifest MAC + hash +
+decrypt) BEFORE touching the DB; unseal → restore → `db:migrate` no-op +
+`media:verify` + smoke reminder. Without the DATA key: metadata restores;
+media/tokens stay ciphertext. Redis not restored (retryable work only):
+re-approve in-flight actions; enrichment re-runs append versions.
+
+**M15B (Hermes D03) — target guard by host + DSN redaction:** the
+`DATABASE_URL` is NEVER printed; the script shows only a credential-redacted
+`scheme://***@host:port/db`. A target counts as local scratch ONLY when the
+host is loopback (`localhost`/`127.0.0.1`/`::1`) AND `NODE_ENV!=production` —
+the database *name* is irrelevant, so a **remote** db named `nova_alpha` is
+NOT local and requires `NOVA_RESTORE_ALLOW_PRODUCTION=yes`. Any non-local
+target is refused without that override.
+
+## Backup policy (M15)
+
+- **What:** Postgres (all metadata + encrypted tokens) and fs media
+  (encrypted blobs). Redis is NOT backed up (retryable queue work only).
+- **Retention:** keep ≥14 daily backups for the alpha; prune older with a
+  cron that deletes whole `<stamp>` sets (both `*.enc` + the manifest).
+- **Location:** an access-controlled store SEPARATE from the running
+  hosts (e.g. a private, versioned object bucket). Never on the same
+  volume as the media store.
+- **Deletion:** delete a backup by removing its `*.enc` files AND its
+  manifest together; a sealed artifact is unreadable without the key, so
+  there is no plaintext to shred.
+- **Keys:** `NOVA_BACKUP_KEY` (seals backups) and `NOVA_ENCRYPTION_KEY`
+  (data at rest) live ONLY in your secret manager — never in a backup,
+  never in the repo, never in logs. Losing `NOVA_BACKUP_KEY` makes
+  backups unrecoverable; losing `NOVA_ENCRYPTION_KEY` makes a restore
+  metadata-only.
+- **What cannot be restored without keys:** media blobs and integration
+  tokens (need the data key); nothing at all (need the backup key). A
+  restorer with neither recovers nothing readable — no unredacted content
+  is ever exposed.
+- **Restore drill (quarterly):** `backup.sh` → `backup:verify` →
+  `restore.sh` into a SCRATCH database (`nova_restore`) → `media:verify`
+  → `ops:smoke` against a throwaway instance. Confirm wrong-key
+  `backup:verify` fails (`decrypt:fail`).
 
 ## Rotate the media/token key (zero-downtime)
 

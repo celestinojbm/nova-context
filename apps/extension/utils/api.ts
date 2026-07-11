@@ -29,13 +29,19 @@ export interface ExtensionSettings {
   strictRedaction: boolean;
 }
 
-const DEFAULTS: ExtensionSettings = {
+// M15 (Hermes P1): default to STRICT — if server-side visual redaction
+// fails, the screenshot is dropped rather than stored. A private-alpha
+// client must never default to unsafe retention. (Production also forces
+// this server-side regardless of what the client sends — see M15B.)
+// Exported so a unit test can assert the fresh-install default is safe.
+export const DEFAULT_EXTENSION_SETTINGS: ExtensionSettings = {
   apiUrl: "http://localhost:3001",
   deviceToken: "",
   accountEmail: "",
   captureMode: "full",
-  strictRedaction: false,
+  strictRedaction: true,
 };
+const DEFAULTS = DEFAULT_EXTENSION_SETTINGS;
 
 export class SessionExpiredError extends Error {
   constructor() {

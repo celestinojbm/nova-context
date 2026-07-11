@@ -18,6 +18,10 @@
       "types": "./dist/visual-redaction.d.ts",
       "import": "./dist/visual-redaction.js"
     },
+    "./data-url": {
+      "types": "./dist/data-url.d.ts",
+      "import": "./dist/data-url.js"
+    },
     "./object-store": {
       "types": "./dist/object-store.d.ts",
       "import": "./dist/object-store.js"

@@ -8,6 +8,8 @@
  * ML detector pass is future work).
  */
 
+import { isDataUrl } from "./data-url.js";
+
 export type RedactionType =
   | "email"
   | "phone"
@@ -135,10 +137,8 @@ export function redactDeep<T>(value: T, tally?: Map<RedactionType, number>): T {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
       // Data URLs (screenshots) are binary payloads, not text to scan.
-      out[k] =
-        typeof v === "string" && v.startsWith("data:")
-          ? v
-          : redactDeep(v, tally);
+      // Case-insensitive (M15C): `DATA:...` is still a data URI.
+      out[k] = isDataUrl(v) ? v : redactDeep(v, tally);
     }
     return out as T;
   }

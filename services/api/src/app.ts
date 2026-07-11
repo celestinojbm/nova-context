@@ -31,6 +31,7 @@ import { createActionQueue, createEnrichmentQueue, type EnrichmentJob } from "./
 import { registerAuth, requireAuth } from "./auth/plugin.js";
 import { createRateLimiter } from "./auth/rate-limit.js";
 import { extractPayloadImages, redactPayloadImages } from "./image-redaction.js";
+import { sanitizeLegacyInlineMedia } from "./legacy-media.js";
 import { MediaService } from "./media/media-service.js";
 import { storeFromEnv, type ObjectStore } from "./media/object-store.js";
 import { registerAccountRoutes } from "./routes-account.js";
@@ -73,7 +74,11 @@ function rowToMoment(row: MomentRow): ContextMoment {
     project_id: row.project_id,
     source_mode: row.source_mode,
     source_meta: row.source_meta,
-    payload: row.payload,
+    // M15B (Hermes D01): strip any LEGACY inline media that never passed the
+    // media redaction gates. This is THE chokepoint — every payload-returning
+    // path (single/list/search/project/legacy export/account export) maps
+    // rows through here, so none of them can leak inline `data:image` bytes.
+    payload: sanitizeLegacyInlineMedia(row.payload) as ContextMoment["payload"],
     extracted_text: row.extracted_text,
     intent_text: row.intent_text,
     summary: row.summary,
@@ -311,6 +316,10 @@ export async function buildApp({
     windowMs: 15 * 60 * 1000,
     max: env.NOVA_RATE_LIMIT_MAX,
     prefix: env.NOVA_RATE_LIMIT_PREFIX,
+    // M15 (Hermes P2): a Redis outage falls back to a fail-closed in-memory
+    // window and logs a structured security warning (event name + class
+    // only, never secrets/content).
+    warn: (event, detail) => app.log.warn(detail, event),
   });
   app.addHook("onClose", async () => {
     await rateLimiter.close();
@@ -340,6 +349,7 @@ export async function buildApp({
     actionQueue: actionQueue as never,
     store: mediaStore,
     mediaAvailable: media !== null,
+    rateLimiter,
   });
   registerAccountRoutes(app, {
     db,
@@ -405,9 +415,14 @@ export async function buildApp({
 
     // M7: visual redaction BEFORE storage — screenshots are OCR-box masked
     // (or stripped, per settings) so unredacted pixels never persist.
+    // M15 (Hermes P1): in production, strict is FORCED on regardless of what
+    // the client sent — an old or malicious client cannot request unsafe
+    // retention. On OCR failure the image becomes 'blocked_strict' (dropped)
+    // instead of 'failed' (kept). Belt to the storeMomentImages suspenders.
+    const effectiveStrict = body.strict_image_redaction || env.isProduction;
     const imageOutcome = await redactPayloadImages(body.payload, {
       ocr: ocrEngine,
-      strict: body.strict_image_redaction,
+      strict: effectiveStrict,
       storageEnabled: screenshotStorageOn,
     });
     body.payload = imageOutcome.payload;
