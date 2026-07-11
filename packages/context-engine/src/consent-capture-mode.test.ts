@@ -65,6 +65,32 @@ describe("capture modes (visual-redaction safeguards)", () => {
     expect(applyCaptureMode(payload, "blurred").screenshot_data_url).toBeTruthy();
   });
 
+  // M16 (Hermes M15C accepted-P3): text_only must recurse into ARRAYS and
+  // catch mixed-case inline images too — not just top-level/object fields.
+  it("text_only strips inline images inside arrays (incl. mixed case)", () => {
+    const withArrays = {
+      live_session: {
+        frames: [
+          "DATA:image/jpeg;base64,AAAA",
+          "keep-this-text",
+          "data:image/png;base64,BBBB",
+        ],
+        qa: [{ question: "q", frame: "Data:Image/png;base64,CCCC" }],
+      },
+      tags: ["a", "b"],
+    };
+    const out = applyCaptureMode(withArrays, "text_only");
+    const s = JSON.stringify(out);
+    expect(s).not.toMatch(/data:image/i); // no case variant survives
+    expect(s).toContain("keep-this-text"); // non-image array items survive
+    expect(s).toContain("\"a\""); // unrelated arrays untouched
+    const frames = (out.live_session as { frames: unknown[] }).frames;
+    expect(frames).toEqual(["keep-this-text"]);
+    const qa = (out.live_session as { qa: Array<Record<string, unknown>> }).qa;
+    expect(qa[0].frame).toBeUndefined();
+    expect(qa[0].question).toBe("q");
+  });
+
   it("frames are disallowed in live sessions under text_only", () => {
     expect(framesAllowed("text_only")).toBe(false);
     expect(framesAllowed("full")).toBe(true);

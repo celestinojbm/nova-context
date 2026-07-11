@@ -1,4 +1,4 @@
-import { stat, unlink } from "node:fs/promises";
+import { mkdir, realpath, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { encryptFile, parseBackupKey } from "./crypto.js";
 import { buildManifest, writeManifest, type ManifestArtifact } from "./manifest.js";
@@ -20,11 +20,17 @@ import { buildManifest, writeManifest, type ManifestArtifact } from "./manifest.
  * which defeats the D02 guarantee if a caller invoked this tool directly.
  * That unsafe mode is now rejected.
  *
+ * M16 (Hermes M15C accepted-P2 hardening): the distinctness check now compares
+ * the **physical** directories via `realpath()` (symlinks resolved), not a
+ * lexical `resolve()`. A prior lexical check could be defeated by making
+ * `--out` a symlink to `--work` (different spellings, same directory), sealing
+ * in place. Physical comparison catches that. `scripts/backup.sh` remains the
+ * only documented operator path (it passes a private mktemp `--work` and a
+ * SEPARATE `--out` nested under it, which realpath-resolves distinctly).
+ *
  *   backup:seal -- --work=<plaintext-dir> --out=<sealed-dir> --stamp=<stamp>
  *                  [--created-at=<iso>]
  */
-import { resolve } from "node:path";
-
 const arg = (n: string) =>
   process.argv.find((a) => a.startsWith(`--${n}=`))?.split("=").slice(1).join("=");
 
@@ -42,10 +48,22 @@ async function main(): Promise<void> {
   if (!work || !out || !stamp) {
     throw new Error("usage: backup:seal -- --work=<dir> --out=<dir> --stamp=<stamp>");
   }
-  if (resolve(work) === resolve(out)) {
+  // Physical-path distinctness (symlinks resolved). `--work` must already
+  // exist (it holds the plaintext); create `--out` first so realpath resolves.
+  await mkdir(out, { recursive: true, mode: 0o700 });
+  let workReal: string;
+  let outReal: string;
+  try {
+    workReal = await realpath(work);
+  } catch {
+    throw new Error(`backup:seal: --work dir does not exist: ${work}`);
+  }
+  outReal = await realpath(out);
+  if (workReal === outReal) {
     throw new Error(
-      "backup:seal refuses --work === --out: plaintext and sealed artifacts " +
-        "must never share a directory (Hermes M15B-R02). Use a separate --out dir.",
+      "backup:seal refuses --work === --out (physical path, symlinks resolved): " +
+        "plaintext and sealed artifacts must never share a directory " +
+        "(Hermes M15B-R02 / M16). Use a separate --out dir.",
     );
   }
   let key: Buffer;
