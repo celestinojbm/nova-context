@@ -8,6 +8,7 @@
     "dev": "wxt",
     "build": "wxt build",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "zip": "wxt zip"
   },
   "dependencies": {
@@ -19,6 +20,7 @@
   "devDependencies": {
     "@types/chrome": "^0.2.2",
     "@types/react": "^19.0.0",
+    "vitest": "^2.1.0",
     "@types/react-dom": "^19.0.0",
     "@wxt-dev/module-react": "^1.1.0",
     "typescript": "^5.6.0",

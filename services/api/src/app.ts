@@ -31,6 +31,7 @@ import { createActionQueue, createEnrichmentQueue, type EnrichmentJob } from "./
 import { registerAuth, requireAuth } from "./auth/plugin.js";
 import { createRateLimiter } from "./auth/rate-limit.js";
 import { extractPayloadImages, redactPayloadImages } from "./image-redaction.js";
+import { sanitizeLegacyInlineMedia } from "./legacy-media.js";
 import { MediaService } from "./media/media-service.js";
 import { storeFromEnv, type ObjectStore } from "./media/object-store.js";
 import { registerAccountRoutes } from "./routes-account.js";
@@ -73,7 +74,11 @@ function rowToMoment(row: MomentRow): ContextMoment {
     project_id: row.project_id,
     source_mode: row.source_mode,
     source_meta: row.source_meta,
-    payload: row.payload,
+    // M15B (Hermes D01): strip any LEGACY inline media that never passed the
+    // media redaction gates. This is THE chokepoint — every payload-returning
+    // path (single/list/search/project/legacy export/account export) maps
+    // rows through here, so none of them can leak inline `data:image` bytes.
+    payload: sanitizeLegacyInlineMedia(row.payload) as ContextMoment["payload"],
     extracted_text: row.extracted_text,
     intent_text: row.intent_text,
     summary: row.summary,

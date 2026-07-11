@@ -4,22 +4,29 @@ import { encryptFile, parseBackupKey } from "./crypto.js";
 import { buildManifest, writeManifest, type ManifestArtifact } from "./manifest.js";
 
 /**
- * M15 operator step (invoked by scripts/backup.sh): seal freshly-created
- * plaintext backup artifacts with AES-256-GCM (NOVA_BACKUP_KEY), delete the
- * plaintext, and write a signed manifest. Fails closed if the key is absent
- * — there is NO plaintext-backup path. Prints no secrets.
+ * M15 operator step (invoked by scripts/backup.sh): seal plaintext backup
+ * artifacts with AES-256-GCM (NOVA_BACKUP_KEY) and write a signed manifest.
+ * Fails closed if the key is absent — there is NO plaintext-backup path.
+ * Prints no secrets.
  *
- *   backup:seal -- --dir=<backup-dir> --stamp=<stamp> [--created-at=<iso>]
+ * M15B (Hermes D02): plaintext lives ONLY in a private temp `--work` dir; the
+ * sealed `.enc` + manifest are written to `--out`. The caller (backup.sh)
+ * publishes `--out` only after this succeeds, and a shell trap wipes
+ * `--work` on any failure — so the final backup dir never holds plaintext.
+ *
+ *   backup:seal -- --work=<plaintext-dir> --out=<sealed-dir> --stamp=<stamp>
+ *                  [--created-at=<iso>]
  */
 const arg = (n: string) =>
   process.argv.find((a) => a.startsWith(`--${n}=`))?.split("=").slice(1).join("=");
 
 async function main(): Promise<void> {
-  const dir = arg("dir");
+  const work = arg("work") ?? arg("dir");
+  const out = arg("out") ?? work;
   const stamp = arg("stamp");
   const createdAt = arg("created-at") ?? new Date().toISOString();
-  if (!dir || !stamp) {
-    throw new Error("usage: backup:seal -- --dir=<dir> --stamp=<stamp>");
+  if (!work || !out || !stamp) {
+    throw new Error("usage: backup:seal -- --work=<dir> --out=<dir> --stamp=<stamp>");
   }
   let key: Buffer;
   try {
@@ -37,22 +44,24 @@ async function main(): Promise<void> {
   ];
   const sealed: Array<{ name: string; role: ManifestArtifact["role"] }> = [];
   for (const c of candidates) {
-    const plainPath = join(dir, c.plain);
+    const plainPath = join(work, c.plain);
     try {
       await stat(plainPath);
     } catch {
       continue; // artifact not produced (e.g. s3 media) — skip
     }
     const encName = `${c.plain}.enc`;
-    await encryptFile(plainPath, join(dir, encName), key);
-    await unlink(plainPath); // no plaintext artifact survives
+    // Encrypt from the private work dir INTO the sealed out dir. The plaintext
+    // in work is wiped by the caller's trap; nothing plaintext reaches out.
+    await encryptFile(plainPath, join(out, encName), key);
+    await unlink(plainPath).catch(() => undefined);
     sealed.push({ name: encName, role: c.role });
     console.log(`  sealed ${c.plain} → ${encName}`);
   }
-  if (!sealed.length) throw new Error(`no backup artifacts found in ${dir} for stamp ${stamp}`);
+  if (!sealed.length) throw new Error(`no backup artifacts found for stamp ${stamp}`);
 
-  const manifest = await buildManifest(dir, stamp, createdAt, sealed);
-  const manifestFile = await writeManifest(dir, manifest);
+  const manifest = await buildManifest(out, stamp, createdAt, sealed, key);
+  const manifestFile = await writeManifest(out, manifest);
   console.log(`  wrote ${manifestFile.split("/").pop()} (${sealed.length} artifact(s), sha256 recorded)`);
 }
 

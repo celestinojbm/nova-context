@@ -15,8 +15,10 @@ import { migrate } from "../../src/db/migrate.js";
  * pre-M8 code left them, and asserts the safety policy:
  *   - state='applied' rows (masked at capture) migrate into encrypted
  *     object storage and lose their inline base64;
- *   - rows that are NOT provably redacted are skipped UNTOUCHED when
- *     OCR is off — unredacted pixels never reach object storage;
+ *   - rows that are NOT provably redacted are QUARANTINED when OCR is off
+ *     (M15B / Hermes D01): the unverified inline pixels are stripped from
+ *     the stored payload — they never reach object storage AND never remain
+ *     inline where an outward path could return them;
  *   - re-running is a no-op (idempotent).
  */
 const databaseUrl = process.env.DATABASE_URL;
@@ -83,7 +85,7 @@ describe.skipIf(!databaseUrl)("M8: legacy media backfill", () => {
     await db?.end();
   });
 
-  it("migrates applied rows, skips unprovable rows untouched, and is idempotent", async () => {
+  it("migrates applied rows, quarantines unprovable inline media, and is idempotent", async () => {
     const out = runBackfill();
     expect(out).toContain("migrated");
 
@@ -113,21 +115,31 @@ describe.skipIf(!databaseUrl)("M8: legacy media backfill", () => {
     expect(audit.rows).toHaveLength(1);
     expect(JSON.stringify(audit.rows[0].detail)).not.toContain("data:image");
 
-    // Legacy row: untouched — inline payload intact, nothing in object storage.
+    // Legacy row (OCR off, not provably redacted): QUARANTINED — the inline
+    // pixels are stripped from the DB payload (never stored, never leakable),
+    // the row is marked, nothing lands in object storage.
     const legacyRow = await db.query(
       `SELECT payload, image_redaction FROM context_moments WHERE id = $1`,
       [legacyId],
     );
-    expect(legacyRow.rows[0].payload.screenshot_data_url).toBe(inlinePng);
-    expect(legacyRow.rows[0].image_redaction).toEqual({});
+    expect(legacyRow.rows[0].payload.screenshot_data_url).toBeUndefined();
+    expect(JSON.stringify(legacyRow.rows[0].payload)).not.toContain("data:image");
+    expect(legacyRow.rows[0].payload.legacy_media_excluded).toBe(true);
+    expect(legacyRow.rows[0].image_redaction.state).toBe("quarantined_legacy");
     const legacyMedia = await db.query(
       `SELECT 1 FROM moment_media WHERE moment_id = $1`,
       [legacyId],
     );
     expect(legacyMedia.rows).toHaveLength(0);
+    const quarantineAudit = await db.query(
+      `SELECT detail FROM audit_log WHERE subject_id = $1 AND event_type = 'media.backfill_quarantine'`,
+      [legacyId],
+    );
+    expect(quarantineAudit.rows).toHaveLength(1);
+    expect(JSON.stringify(quarantineAudit.rows[0].detail)).not.toContain("data:image");
 
-    // Second run: the migrated row no longer matches, the legacy row skips
-    // again — no duplicate media rows, no new audit entries.
+    // Second run: the migrated row no longer matches; the quarantined row no
+    // longer has inline media to scan — idempotent (no dup media/audit).
     runBackfill();
     const mediaAgain = await db.query(
       `SELECT 1 FROM moment_media WHERE moment_id = $1`,
@@ -143,6 +155,6 @@ describe.skipIf(!databaseUrl)("M8: legacy media backfill", () => {
       `SELECT payload FROM context_moments WHERE id = $1`,
       [legacyId],
     );
-    expect(legacyAgain.rows[0].payload.screenshot_data_url).toBe(inlinePng);
+    expect(JSON.stringify(legacyAgain.rows[0].payload)).not.toContain("data:image");
   });
 });

@@ -23,7 +23,8 @@
     "ops:smoke": "tsx src/db/run-smoke.ts",
     "ops:report": "tsx src/db/run-report.ts",
     "backup:seal": "tsx src/backup/run-seal.ts",
-    "backup:verify": "tsx src/backup/run-verify.ts"
+    "backup:verify": "tsx src/backup/run-verify.ts",
+    "backup:restore-guard": "tsx src/backup/run-restore-guard.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1084.0",

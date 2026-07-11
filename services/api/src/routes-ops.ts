@@ -105,7 +105,17 @@ export function toPublicReadiness(result: {
   return { ready: result.ready, checks: publicChecks };
 }
 
-export async function opsStatus(deps: OpsDeps): Promise<Record<string, unknown>> {
+/** M15B (Hermes D05): a logger the status handler injects so raw internal
+ * error strings go to structured logs (with the request id) and NEVER into
+ * the authenticated response body. */
+export interface OpsStatusLogger {
+  warn(obj: Record<string, unknown>, msg: string): void;
+}
+
+export async function opsStatus(
+  deps: OpsDeps,
+  logger?: OpsStatusLogger,
+): Promise<Record<string, unknown>> {
   const { db, redis, enrichmentQueue, actionQueue } = deps;
   const ready = await readiness(deps);
 
@@ -140,7 +150,9 @@ export async function opsStatus(deps: OpsDeps): Promise<Record<string, unknown>>
     const counts = await check(() =>
       queue.getJobCounts("waiting", "active", "delayed", "failed", "completed"),
     );
-    queues[name] = counts.ok ? counts.value : { error: counts.error };
+    // M15B (D05): never surface the raw queue error string (it can carry a
+    // Redis host/port) — a generic marker in the body, detail to the log.
+    queues[name] = counts.ok ? counts.value : { error: "unavailable" };
   }
 
   const totals = await check(async () => {
@@ -216,12 +228,28 @@ export async function opsStatus(deps: OpsDeps): Promise<Record<string, unknown>>
     }
   }
 
+  // M15B (Hermes D05): sanitize the authenticated status too. Raw dependency
+  // error strings (from readiness checks, queues, totals) can carry
+  // hostnames/paths/ports/bucket names — they go to the structured log with
+  // the request id, and the response body carries only booleans + safe
+  // static detail strings.
+  const rawErrors: Record<string, string> = {};
+  const publicChecks: Record<string, { ok: boolean; detail?: string }> = {};
+  for (const [name, c] of Object.entries(ready.checks)) {
+    if (c.error) rawErrors[`check.${name}`] = c.error;
+    publicChecks[name] = { ok: c.ok, ...(c.detail ? { detail: c.detail } : {}) };
+  }
+  if (!totals.ok && totals.error) rawErrors["totals"] = totals.error;
+  if (Object.keys(rawErrors).length && logger) {
+    logger.warn({ dependency_errors: rawErrors }, "ops_status_dependency_errors");
+  }
+
   return {
     ready: ready.ready,
-    checks: ready.checks,
+    checks: publicChecks,
     worker,
     queues,
-    totals: totals.ok ? totals.value : { error: totals.error },
+    totals: totals.ok ? totals.value : { error: "unavailable" },
     features,
     rate_limit: rateLimit,
     warnings,
@@ -247,6 +275,9 @@ export function registerOpsRoutes(app: FastifyInstance, deps: OpsDeps): void {
   });
 
   // Under /v1 → the fail-closed auth middleware applies: session required.
-  // The authed status keeps full internal detail (error classes, warnings).
-  app.get("/v1/ops/status", async () => opsStatus(deps));
+  // M15B (D05): even here the body carries no raw dependency error strings —
+  // those go to the request-scoped log; the response has booleans + warnings.
+  app.get("/v1/ops/status", async (req) =>
+    opsStatus(deps, { warn: (obj, msg) => req.log.warn(obj, msg) }),
+  );
 }

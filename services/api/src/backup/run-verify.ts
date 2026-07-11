@@ -30,10 +30,19 @@ async function main(): Promise<void> {
   }
 
   const result = await verifyBackup(dir, stamp, key);
-  console.log(`nova backup:verify — ${dir} @ ${stamp}${key ? "" : " (hash-only; no key)"}`);
+  console.log(`nova backup:verify — ${dir} @ ${stamp}${key ? "" : " (hash-only; no key → MAC unverified)"}`);
+  console.log(
+    `  manifest — shape:${result.manifest.shape} mac:${result.manifest.mac}` +
+      (result.manifest.detail ? ` (${result.manifest.detail})` : ""),
+  );
   for (const c of result.checks) {
-    const parts = [`hash:${c.hash}`, ...(c.decrypt ? [`decrypt:${c.decrypt}`] : [])];
-    console.log(`  ${result.ok && c.hash === "ok" ? "✓" : "✗"} ${c.artifact} — ${parts.join(" ")}`);
+    const parts = [
+      `hash:${c.hash}`,
+      `size:${c.size}`,
+      ...(c.decrypt ? [`decrypt:${c.decrypt}`] : []),
+    ];
+    const good = c.hash === "ok" && c.size === "ok" && c.decrypt !== "fail";
+    console.log(`  ${good ? "✓" : "✗"} ${c.artifact} — ${parts.join(" ")}`);
   }
   console.log(result.ok ? "BACKUP OK" : "BACKUP VERIFY FAILED");
   process.exit(result.ok ? 0 : 1);

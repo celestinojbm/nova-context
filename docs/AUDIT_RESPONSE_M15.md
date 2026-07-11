@@ -8,11 +8,207 @@ Every finding below was treated as valid. Each was reproduced against the
 baseline code, fixed, and covered by a regression test. Nothing here argues
 the auditor was wrong.
 
-Status after M15: **all P1/P2/P3 findings remediated with tests; CI green.**
-A Hermes delta audit is recommended before the alpha starts, and the M14
-hard gate stands — **no real user data until explicit operator approval.**
+Status after M15: all original P1/P2/P3 findings remediated with tests.
+A Hermes **delta audit then reviewed PR #11 at head `8e820be` and returned
+FAIL — do not merge, alpha remains blocked**, raising six further findings
+(M15-D01…D06). Those were remediated in **M15B** (see the delta section
+below). The M14 hard gate stands — **no real user data until explicit
+operator approval** — and **alpha remains blocked pending a Hermes re-audit
+of the M15B changes. This response does NOT claim PASS.**
+
+> Reading order: the **M15B delta** section (immediately below) is the
+> current state. The original M15 P1/P2/P3 write-up follows it for history.
 
 ---
+
+# M15B — Delta Audit Remediation (Hermes delta response)
+
+The Hermes **delta audit** reviewed PR #11 / M15 at head **`8e820be`** and
+returned **verdict: FAIL — do not merge PR #11. Alpha remains blocked.** Six
+findings were raised. Every one was treated as valid, reproduced against
+`8e820be`, fixed on the same branch (`claude/m15-nova-context`), and covered
+by a regression test. **No test asserts that unsafe data remains externally
+visible.**
+
+Alpha remains blocked until Hermes re-audits these changes.
+
+## M15-D01 (P1) — Legacy inline media evades the new media/export gates
+
+**Confirmed at `8e820be`.** The M15 read/export gates key off the
+per-artifact `image_redaction.state`, but **pre-M8 rows** stored the
+screenshot *inline in `context_moments.payload`* (`screenshot_data_url`,
+`data:image/...`) with no separate media row and no state to gate on. Those
+payloads were serialized verbatim by `rowToMoment`, so a legacy inline image
+could still be returned by every payload-returning path (single, list,
+timeline, project, search, legacy `/v1/export`, account export) and the
+backfill left the unsafe payload in place.
+
+**Fixed — outward sanitizer (fail-closed) + backfill quarantine:**
+
+1. **Outward read sanitizer** (`services/api/src/legacy-media.ts`,
+   `sanitizeLegacyInlineMedia`). A single fail-closed function recursively
+   strips any `screenshot_data_url` key and any `data:image/...` string from
+   a payload and, when it removes anything, stamps
+   `{legacy_media_detected:true, legacy_media_excluded:true,
+   excluded_reason:"legacy_inline_media_not_verified"}`. Clean payloads pass
+   through untouched. It is wired into **`rowToMoment`** — the single
+   chokepoint every payload-returning path funnels through — so single, list,
+   timeline, project, search, legacy `/v1/export`, and account export are all
+   sanitized at the source, whatever is on disk.
+2. **Backfill quarantine** (`services/api/src/db/backfill-media.ts`). Rows
+   whose inline media cannot be proven safe (no OCR text, or redaction
+   failed) are now **quarantined**: the inline payload is stripped in the
+   database, `image_redaction.state` is set to `quarantined_legacy`, and a
+   `media.backfill_quarantine` audit row is written. Defense in depth — even
+   a path that somehow bypassed the reader now finds nothing unsafe in the row.
+
+**Tests:**
+- `src/legacy-media.test.ts` (unit): strips `screenshot_data_url` + flags;
+  handles nested/arrayed `data:image`; leaves clean payloads untouched;
+  tolerates null/primitive.
+- `test/integration/m15b-legacy-media.test.ts`: inserts a pre-M8 row with an
+  inline `screenshot_data_url` and asserts single GET, list, legacy
+  `/v1/export`, account export, and search **never** return `data:image`.
+- `test/integration/backfill-media.test.ts`: the unprovable legacy row is
+  quarantined (`screenshot_data_url` gone, `legacy_media_excluded:true`,
+  `state==='quarantined_legacy'`, quarantine audit present) and the backfill
+  is idempotent.
+
+## M15-D02 (P1) — Backup could leave plaintext if sealing failed
+
+**Confirmed at `8e820be`.** `backup.sh` wrote the plaintext pg_dump/tar into
+the final backup dir and sealed *in place*; if `backup:seal` threw (bad key,
+crash, interrupt) the plaintext dump/tarball was left behind, and there was
+no cleanup trap.
+
+**Fixed.** `scripts/backup.sh` now writes all plaintext ONLY into a private
+`0700` `mktemp -d` **workspace**, seals from there into a staging dir, and
+**`mv`s only the `.enc` + manifest into the final dir after sealing
+succeeds**. A `trap cleanup EXIT INT TERM` wipes the workspace on every exit
+path, and `umask 077` is retained. If sealing fails the script exits before
+the publish step, so the final dir never contains plaintext — and the
+workspace is wiped regardless. `backup:seal` (`src/backup/run-seal.ts`) takes
+`--work`/`--out`, encrypts from work into out, and unlinks each plaintext
+after sealing.
+
+**Tests** (`test/integration/m15b-backup-cli.test.ts`, real scripts via
+`execFileSync`):
+- success → final dir holds only `*.enc` + `manifest-*` (no `*.dump`/`*.tar.gz`);
+- **sealing failure** (structurally invalid key) → final dir has **no
+  plaintext and no `.enc`** — nothing published, workspace trapped;
+- missing `NOVA_BACKUP_KEY` → fails and writes nothing.
+
+## M15-D03 (P1) — `restore.sh` echoed the DSN and trusted `nova_alpha`
+
+**Confirmed at `8e820be`.** `restore.sh` printed the full `DATABASE_URL`
+(embedded user/password) and treated any database named `nova_alpha` as a
+safe non-production target via a string allowlist — so a **remote** DSN whose
+db was named `nova_alpha` would restore with no override.
+
+**Fixed.** A pure, unit-tested classifier
+(`src/backup/target.ts`) drives the shell:
+- `redactDatabaseUrl` → `scheme://***@host:port/db`, never the credentials;
+- `classifyRestoreTarget` treats a target as local **only** when the host is
+  loopback (`localhost`/`127.0.0.1`/`::1`) **and** `NODE_ENV!==production`.
+  The database *name* is irrelevant — a remote `nova_alpha` is not local.
+
+`scripts/restore.sh` calls the `backup:restore-guard` CLI
+(`src/backup/run-restore-guard.ts`), prints **only** the redacted target,
+and — for any non-local target (exit 3) — refuses unless
+`NOVA_RESTORE_ALLOW_PRODUCTION=yes`. The typed `RESTORE` confirmation now
+references "the target shown above", never the raw DSN.
+
+**Tests:**
+- `src/backup/target.test.ts` (unit): redaction removes user/pass; remote
+  `nova_alpha`, production loopback, and any remote host all require the
+  override.
+- `test/integration/m15b-backup-cli.test.ts`: a remote
+  `postgres://admin:sup3rs3cret@db.remote.example.com/nova_alpha` is refused,
+  the secret never appears in output, `***@db.remote.example.com` does, and
+  the override is named; a local DSN never prints its password either.
+
+## M15-D04 (P2) — Manifest was not fully authenticated
+
+**Confirmed at `8e820be`.** The manifest recorded sha256 hashes but was
+otherwise unauthenticated: an attacker who could rewrite the manifest could
+alter sizes, timestamps, or the artifact/role set, or drop the postgres
+artifact, and hash-only verification would not necessarily catch it.
+
+**Fixed** (`src/backup/manifest.ts`). The manifest now carries an
+**HMAC-SHA256 `mac`** over a canonical (sorted-key) JSON body keyed with
+`NOVA_BACKUP_KEY`, plus **shape validation**: allowed roles
+(`postgres`/`media`), a **required `postgres` artifact**, and per-artifact
+**size + sha256**. `verifyBackup` checks the MAC first (constant-time), then
+shape, then per-artifact size, hash, and decryptability. Tampering with any
+covered field (size, timestamp, role set) breaks the MAC; a wrong key fails
+both MAC and decrypt.
+
+**Tests** (`src/backup/manifest.test.ts`): good backup passes MAC + shape +
+size + hash + decrypt; the MAC catches a tampered size, a tampered
+timestamp, and an added role; a manifest missing the postgres artifact is
+rejected; a ciphertext tamper is caught by the hash even without the key; a
+wrong key fails MAC and decrypt; the manifest carries no key material.
+
+## M15-D05 (P3) — `/v1/ops/status` returned raw dependency error strings
+
+**Confirmed at `8e820be`.** The authenticated `/v1/ops/status` route
+surfaced raw dependency error messages (which can carry hostnames, ports,
+paths, bucket names) directly in the response body.
+
+**Fixed** (`src/routes-ops.ts`). `opsStatus` now maps a failing dependency to
+a stable `{error:"unavailable"}` (or `{ok, detail}` for healthy checks with
+no raw string) in the response, and routes the raw error text to the
+**request-scoped structured log** via an injected logger
+(`req.log.warn(..., "ops_status_dependency_errors")`) tagged with the request
+id. Raw detail reaches operators through logs, never the API response.
+
+**Tests** (`src/routes-ops.test.ts`): with a db/redis/store that throw
+messages stuffed with `ECONNREFUSED`, hosts, ports, a bucket name, and a
+filesystem path, the serialized status body contains **none** of them, while
+the captured log **does** — proving the split.
+
+## M15-D06 (P3) — Coverage gaps
+
+**Fixed** by the tests added above plus:
+- `apps/extension/utils/api.test.ts`: a fresh install defaults to
+  `strictRedaction:true` (`DEFAULT_EXTENSION_SETTINGS`), and the extension now
+  ships a `vitest` `test` script so this runs in CI. (Production also forces
+  strict server-side regardless of the client flag — see the M15 P1 section.)
+- Backup/restore CLI coverage (`test/integration/m15b-backup-cli.test.ts`):
+  missing backup key, sealing-failure cleanup, DSN redaction, restore
+  confirmation, and the unsafe-target guard — all exercised against the real
+  `scripts/backup.sh` / `scripts/restore.sh`.
+
+## M15B verification run
+
+- `pnpm --filter @nova/api build` + typecheck — clean.
+- API unit — **46 passed** (incl. `legacy-media`, `target`, `manifest`
+  MAC/shape/tamper, `routes-ops` sanitizer).
+- `@nova/schema` 7, `@nova/context-engine` 65, `@nova/extension` 1 — green.
+- Integration (Postgres + Redis): `m15b-legacy-media` (5), `backfill-media`
+  (1), `m15b-backup-cli` (5) — green; full M0–M14 + alpha-blockers suites
+  re-run green.
+
+## M15B remaining risks / notes
+
+- The outward D01 sanitizer is the guaranteed gate; backfill quarantine is
+  the DB-cleanup complement. Both ship, but the reader is the invariant — no
+  payload path bypasses `rowToMoment`.
+- All the accepted risks from the original M15 write-up (per-instance
+  rate-limit fallback, s3 backups rely on operator bucket controls, Redis not
+  backed up) still stand.
+
+## M15B alpha status
+
+**Alpha remains blocked.** The six delta findings are fixed and tested and CI
+is green, but per the user's instruction this is **not** a PASS: the branch
+now awaits a **Hermes re-audit** of the M15B changes. PR #11 is **not**
+merged, no live alpha runs, and no real user data is captured until Hermes
+re-audits and the operator explicitly approves.
+
+---
+
+# M15 — original P1/P2/P3 findings (history)
 
 ## P1 — Visual media retained/exportable when OCR fails
 
