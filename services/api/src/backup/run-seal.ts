@@ -14,19 +14,39 @@ import { buildManifest, writeManifest, type ManifestArtifact } from "./manifest.
  * publishes `--out` only after this succeeds, and a shell trap wipes
  * `--work` on any failure — so the final backup dir never holds plaintext.
  *
+ * M15C (Hermes M15B-R02): `--work` and `--out` are BOTH required and MUST be
+ * distinct directories. The old `--dir` alias (and the `out = work` default)
+ * allowed sealing in place — plaintext and ciphertext in the same directory —
+ * which defeats the D02 guarantee if a caller invoked this tool directly.
+ * That unsafe mode is now rejected.
+ *
  *   backup:seal -- --work=<plaintext-dir> --out=<sealed-dir> --stamp=<stamp>
  *                  [--created-at=<iso>]
  */
+import { resolve } from "node:path";
+
 const arg = (n: string) =>
   process.argv.find((a) => a.startsWith(`--${n}=`))?.split("=").slice(1).join("=");
 
 async function main(): Promise<void> {
-  const work = arg("work") ?? arg("dir");
-  const out = arg("out") ?? work;
+  const work = arg("work");
+  const out = arg("out");
   const stamp = arg("stamp");
   const createdAt = arg("created-at") ?? new Date().toISOString();
+  if (arg("dir") !== undefined) {
+    throw new Error(
+      "backup:seal no longer accepts --dir (unsafe in-place sealing). " +
+        "Pass a private plaintext --work dir and a SEPARATE sealed --out dir.",
+    );
+  }
   if (!work || !out || !stamp) {
     throw new Error("usage: backup:seal -- --work=<dir> --out=<dir> --stamp=<stamp>");
+  }
+  if (resolve(work) === resolve(out)) {
+    throw new Error(
+      "backup:seal refuses --work === --out: plaintext and sealed artifacts " +
+        "must never share a directory (Hermes M15B-R02). Use a separate --out dir.",
+    );
   }
   let key: Buffer;
   try {

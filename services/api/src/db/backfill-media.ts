@@ -1,5 +1,6 @@
 import { parseEncryptionKey } from "@nova/context-engine/secret-box";
 import {
+  isImageDataUrl,
   redactImageDataUrl,
   type OcrEngine,
 } from "@nova/context-engine/visual-redaction";
@@ -78,8 +79,12 @@ const { rows } = await pool.query<{
   payload: Record<string, unknown>;
   image_redaction: { state?: string } | null;
 }>(
+  // M15C (Hermes M15B-R01): ILIKE, not LIKE — a mixed-case `DATA:image` /
+  // `Data:Image` inline payload must be caught by the candidate scan too, or
+  // the backfill would silently skip (and leave) it. Structured per-row
+  // detection below (isImageDataUrl) is likewise case-insensitive.
   `SELECT id, user_id, payload, image_redaction FROM context_moments
-   WHERE payload::text LIKE '%data:image%' ORDER BY captured_at ASC`,
+   WHERE payload::text ILIKE '%data:image%' ORDER BY captured_at ASC`,
 );
 console.log(`Found ${rows.length} moment(s) with inline media.`);
 
@@ -102,7 +107,7 @@ for (const row of rows) {
     try {
       const texts: string[] = [];
       const walk = async (v: unknown): Promise<unknown> => {
-        if (typeof v === "string" && v.startsWith("data:image/")) {
+        if (isImageDataUrl(v)) {
           const result = await redactImageDataUrl(ocr, v);
           if (result.safeText) texts.push(result.safeText);
           return result.dataUrl;

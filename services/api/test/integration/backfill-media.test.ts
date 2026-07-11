@@ -31,6 +31,7 @@ describe.skipIf(!databaseUrl)("M8: legacy media backfill", () => {
   let userId: string;
   let appliedId: string;
   let legacyId: string;
+  let mixedId: string;
   let inlinePng: string;
   const fsRoot = join(tmpdir(), `nova-backfill-test-${Date.now()}`);
 
@@ -79,6 +80,17 @@ describe.skipIf(!databaseUrl)("M8: legacy media backfill", () => {
       [userId, JSON.stringify({ screenshot_data_url: inlinePng })],
     );
     legacyId = legacy.rows[0].id;
+
+    // M15C (Hermes M15B-R01): a legacy row whose inline media is MIXED-CASE
+    // (uppercase scheme) and nested. The candidate scan (ILIKE) and per-row
+    // detection must catch it and quarantine it just like the lowercase row.
+    const mixedInline = inlinePng.replace(/^data:image/, "DATA:IMAGE");
+    const mixed = await db.query<{ id: string }>(
+      `INSERT INTO context_moments (user_id, source_mode, payload, extracted_text, image_redaction)
+       VALUES ($1, 'instant_capture', $2, 'mixed case legacy', '{}') RETURNING id`,
+      [userId, JSON.stringify({ deep: { thumb: mixedInline }, note: "keep" })],
+    );
+    mixedId = mixed.rows[0].id;
   });
 
   afterAll(async () => {
@@ -156,5 +168,24 @@ describe.skipIf(!databaseUrl)("M8: legacy media backfill", () => {
       [legacyId],
     );
     expect(JSON.stringify(legacyAgain.rows[0].payload)).not.toContain("data:image");
+
+    // Mixed-case legacy row: caught by the ILIKE scan + case-insensitive
+    // detection, quarantined exactly like the lowercase row — no case variant
+    // of the inline media remains, and it never reached object storage.
+    const mixedRow = await db.query(
+      `SELECT payload, image_redaction FROM context_moments WHERE id = $1`,
+      [mixedId],
+    );
+    expect(JSON.stringify(mixedRow.rows[0].payload)).not.toMatch(/data:image/i);
+    expect(mixedRow.rows[0].payload.legacy_media_excluded).toBe(true);
+    expect((mixedRow.rows[0].payload.deep as { thumb?: unknown }).thumb).toBeUndefined();
+    expect(mixedRow.rows[0].image_redaction.state).toBe("quarantined_legacy");
+    const mixedMedia = await db.query(`SELECT 1 FROM moment_media WHERE moment_id = $1`, [mixedId]);
+    expect(mixedMedia.rows).toHaveLength(0);
+    const mixedAudit = await db.query(
+      `SELECT 1 FROM audit_log WHERE subject_id = $1 AND event_type = 'media.backfill_quarantine'`,
+      [mixedId],
+    );
+    expect(mixedAudit.rows).toHaveLength(1);
   });
 });

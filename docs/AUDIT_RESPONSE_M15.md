@@ -10,14 +10,132 @@ the auditor was wrong.
 
 Status after M15: all original P1/P2/P3 findings remediated with tests.
 A Hermes **delta audit then reviewed PR #11 at head `8e820be` and returned
-FAIL — do not merge, alpha remains blocked**, raising six further findings
-(M15-D01…D06). Those were remediated in **M15B** (see the delta section
-below). The M14 hard gate stands — **no real user data until explicit
-operator approval** — and **alpha remains blocked pending a Hermes re-audit
-of the M15B changes. This response does NOT claim PASS.**
+FAIL**, raising six findings (M15-D01…D06), remediated in **M15B**. A
+**second** Hermes delta audit reviewed M15B at head **`68e4753`** and again
+returned **FAIL — do not merge yet**: D02–D05 closed, D06 partial but
+non-blocking, no new P0/P1 — but one residual **P1 blocker, M15B-R01**
+(case-sensitive inline-media detector). That was remediated in **M15C** (see
+the section immediately below). The M14 hard gate stands — **no real user
+data until explicit operator approval** — and **alpha remains blocked pending
+another Hermes re-audit of the M15C changes. This response does NOT claim
+PASS.**
 
-> Reading order: the **M15B delta** section (immediately below) is the
-> current state. The original M15 P1/P2/P3 write-up follows it for history.
+> Reading order: the **M15C delta** section (immediately below) is the
+> current state, then **M15B**, then the original **M15** write-up (history).
+
+---
+
+# M15C — Legacy Inline Media Normalization Fix (Hermes 2nd delta response)
+
+The **second** Hermes delta audit reviewed M15B at head **`68e4753`** and
+returned **verdict: FAIL — do not merge PR #11 yet.** It confirmed
+M15-D02/D03/D04/D05 closed and D06 partial-but-non-blocking, with no new P0
+and no new unrelated P1 — leaving one residual blocker, fixed here on the
+same branch (`claude/m15-nova-context`). Alpha remains blocked until Hermes
+re-audits.
+
+## M15B-R01 (P1) — Legacy inline-media detection was case-sensitive
+
+**Confirmed at `68e4753`.** Every inline-media detection point used a
+case-sensitive `startsWith("data:image/")` (and the backfill candidate scan
+used a case-sensitive SQL `LIKE '%data:image%'`). Because a data URI is
+case-insensitive by spec, a mixed-case legacy payload —
+`DATA:image/svg+xml,…`, `Data:Image/png;base64,…`, `data:IMAGE/…` — bypassed
+the `sanitizeLegacyInlineMedia()` reader gate **and** the backfill, and could
+leak through the API/export.
+
+**Fixed — one canonical, case-insensitive detector, used everywhere.** A new
+dependency-free module `packages/context-engine/src/data-url.ts` exports the
+single source of truth:
+
+- `IMAGE_DATA_URL_RE = /^\s*data:image\//i` and `isImageDataUrl(v)` — matches
+  every case variant (and tolerates leading whitespace);
+- `isDataUrl(v)` (`/^\s*data:/i`) for the "skip binary from text scanning" path.
+
+Every detection point now routes through it (no lowercase `startsWith`
+survives):
+
+- `services/api/src/legacy-media.ts` — the outward reader gate on
+  `rowToMoment`; the `screenshot_data_url` key is also matched
+  case-insensitively (`Screenshot_Data_URL` is dropped too);
+- `services/api/src/db/backfill-media.ts` — the candidate scan is now
+  **`ILIKE '%data:image%'`** and the per-row walk uses `isImageDataUrl`, so
+  mixed-case rows are quarantined identically to lowercase;
+- `services/api/src/image-redaction.ts` — the ingest extraction/strip walk
+  (`extractPayloadImages`, `stripImages`);
+- `packages/context-engine/src/capture-mode.ts` — `text_only` enforcement;
+- `packages/context-engine/src/redaction.ts` — the data-URI skip.
+
+Detection catches `data:image/png;base64,…`, `DATA:image/…`,
+`Data:Image/png;…`, `data:IMAGE/svg+xml,…`, and any mixed-case variant,
+nested in objects or inside arrays.
+
+**Tests (mixed-case fixtures throughout):**
+- `packages/context-engine/src/data-url.test.ts` — the canonical detector
+  matches every case variant and rejects non-image/non-data strings.
+- `services/api/src/legacy-media.test.ts` — `DATA:image`, `Data:Image`,
+  `data:IMAGE/svg+xml`, mixed-case nested/arrayed values, and a mixed-CASE
+  `Screenshot_Data_URL` key are all stripped with the safe metadata
+  (`legacy_media_detected/excluded`, `excluded_reason`).
+- `services/api/test/integration/m15b-legacy-media.test.ts` — a second seeded
+  row with `DATA:image` top-level, a nested `{ screenshot: "Data:Image…" }`,
+  and an array element `data:IMAGE/svg+xml,<svg>` never leaks (asserted with a
+  case-insensitive `/data:image/i` regex **and** `<svg`) through single GET,
+  list, legacy `/v1/export`, account export, or search — while sibling text
+  survives.
+- `services/api/test/integration/backfill-media.test.ts` — a mixed-case
+  (`DATA:IMAGE`) nested legacy row is quarantined (`quarantined_legacy`,
+  audited, nothing in object storage), proving the `ILIKE` scan catches it.
+
+**Expected behavior held:** no response/export contains the original data URI
+in any case; safe metadata remains; backfill quarantines/records mixed-case
+media the same as lowercase.
+
+## M15B-R02 (P2) — `backup:seal` accepted an unsafe in-place mode
+
+**Confirmed at `68e4753`.** `backup:seal` accepted a `--dir` alias (and
+defaulted `out = work`), allowing plaintext and sealed artifacts to share one
+directory — defeating the D02 no-plaintext guarantee for anyone calling the
+tool directly. The wrapper `backup.sh` already passed separate dirs, so this
+was not a live leak, but the unsafe path existed.
+
+**Fixed** (`services/api/src/backup/run-seal.ts`). `--work` and `--out` are
+both required and must be **distinct** (compared via `path.resolve`); the
+`--dir` alias is rejected outright. `scripts/backup.sh` is unchanged and
+still passes a private `--work` and a separate `--out`.
+
+**Tests** (`services/api/test/integration/m15c-seal-guard.test.ts`, real
+CLI): `--dir=…` is rejected; `--work===--out` is rejected.
+
+## M15C P3 / residuals
+
+- **D06 (extension default-strict + restore CLI coverage)** — the M15B
+  coverage stands (extension default-strict unit test; backup/restore CLI
+  tests for missing key, seal-failure cleanup, DSN redaction, unsafe-target
+  guard). Hermes rated D06 partial/non-blocking; no further restore-CLI cases
+  were added in M15C to avoid overbuilding — accepted as a documented
+  residual.
+- No schema change: new-capture validation of the `screenshot_data_url` field
+  (`packages/schema`) stays case-sensitive by design — a mixed-case value in
+  that field is *rejected* at ingest (fail-closed), not stored; the
+  case-insensitive gates above cover every stored/legacy/other-field path.
+
+## M15C verification
+
+- `pnpm build` + `pnpm -r typecheck` — clean (all 9 projects).
+- `@nova/context-engine` 68 (incl. `data-url`), API unit 49 (incl. mixed-case
+  `legacy-media`).
+- Integration (Postgres + Redis): `m15b-legacy-media` (6, mixed-case),
+  `backfill-media` (1, mixed-case quarantine), `m15c-seal-guard` (2),
+  `m15b-backup-cli` (5) green; full API + worker suites re-run green.
+
+## M15C alpha status
+
+**Alpha remains blocked.** M15B-R01 (the residual P1) and R02 (P2) are fixed
+and tested and CI is green, but per instruction this is **not** a PASS: the
+branch awaits another **Hermes delta audit**. PR #11 is **not** merged, no
+live alpha runs, and no real user data is captured until Hermes re-audits and
+the operator explicitly approves.
 
 ---
 

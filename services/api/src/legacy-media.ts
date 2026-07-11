@@ -16,10 +16,18 @@
  * with safe metadata only. It never returns the original base64.
  */
 
-const isImageDataUrl = (v: unknown): v is string =>
-  typeof v === "string" && v.startsWith("data:image/");
+// M15C (Hermes M15B-R01): detection is case-insensitive and canonical.
+// `DATA:image/...`, `Data:Image/...`, `data:IMAGE/svg+xml,...` are all inline
+// images and must be dropped. Uses the single shared detector — never a
+// lowercase `startsWith("data:image/")`.
+import { isImageDataUrl } from "@nova/context-engine/visual-redaction";
 
 export const LEGACY_MEDIA_EXCLUDED_REASON = "legacy_inline_media_not_verified";
+
+/** The legacy inline-image key, matched case-insensitively (defence in
+ * depth — a `Screenshot_Data_URL` variant is dropped just the same). */
+const isLegacyImageKey = (k: string): boolean =>
+  k.toLowerCase() === "screenshot_data_url";
 
 export function sanitizeLegacyInlineMedia(payload: unknown): unknown {
   if (payload === null || typeof payload !== "object") return payload;
@@ -38,7 +46,7 @@ export function sanitizeLegacyInlineMedia(payload: unknown): unknown {
       for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
         // Drop the known legacy inline-image key outright, whatever it holds
         // (defence in depth: even a non-`data:` legacy value is not served).
-        if (k === "screenshot_data_url") {
+        if (isLegacyImageKey(k)) {
           if (val !== undefined && val !== null) found = true;
           continue;
         }

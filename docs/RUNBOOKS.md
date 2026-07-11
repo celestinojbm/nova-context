@@ -47,7 +47,11 @@ are written ONLY into a private `0700` `mktemp` workspace, sealed from there,
 and only the `.enc` + manifest are moved into `<dest-dir>` after sealing
 succeeds. A `trap … EXIT INT TERM` wipes the workspace on every exit path, so
 an interrupted or failed run (e.g. a bad key) leaves the final dir
-plaintext-free.
+plaintext-free. **M15C (Hermes M15B-R02):** the underlying `backup:seal` step
+now *requires* a separate plaintext `--work` and sealed `--out` dir and
+rejects the old in-place `--dir` alias / `--work===--out` — plaintext and
+sealed artifacts can never share a directory. `backup.sh` already passes
+separate dirs; do not invoke `backup:seal` directly with one dir.
 
 **M15B (Hermes D04) — the manifest is authenticated, not just hashed:** it
 carries an HMAC-SHA256 `mac` (keyed with `NOVA_BACKUP_KEY`) over a canonical

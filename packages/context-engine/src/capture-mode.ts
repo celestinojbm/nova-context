@@ -8,6 +8,8 @@
  * and live-session frames.
  */
 
+import { isImageDataUrl } from "./data-url.js";
+
 export type CaptureMode = "full" | "blurred" | "text_only";
 
 export const CAPTURE_MODES: Array<{ value: CaptureMode; label: string }> = [
@@ -26,8 +28,8 @@ export function applyCaptureMode<T extends Record<string, unknown>>(
   if (mode !== "text_only") return payload;
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(payload)) {
-    if (typeof value === "string" && value.startsWith("data:image/")) continue;
-    if (key === "screenshot_data_url") continue;
+    if (isImageDataUrl(value)) continue;
+    if (key.toLowerCase() === "screenshot_data_url") continue;
     out[key] =
       value && typeof value === "object" && !Array.isArray(value)
         ? applyCaptureMode(value as Record<string, unknown>, mode)

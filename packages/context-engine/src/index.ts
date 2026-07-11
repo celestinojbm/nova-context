@@ -4,5 +4,6 @@ export * from "./redaction.js";
 export * from "./live-buffer.js";
 export * from "./consent.js";
 export * from "./capture-mode.js";
+export * from "./data-url.js";
 export * from "./notion-page.js";
 export * from "./notion-mapping.js";
