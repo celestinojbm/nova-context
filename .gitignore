@@ -7,6 +7,10 @@ dist/
 *.tsbuildinfo
 .env
 .env.local
+# Filled-in production env files must NEVER be committed (they carry secrets).
+# The tracked, placeholder-only `.env.production.template` is the exception.
+.env.production
+.env.*.local
 coverage/
 .DS_Store
 *.traineddata
