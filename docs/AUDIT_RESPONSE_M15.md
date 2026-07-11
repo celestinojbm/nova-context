@@ -11,17 +11,51 @@ the auditor was wrong.
 Status after M15: all original P1/P2/P3 findings remediated with tests.
 A Hermes **delta audit then reviewed PR #11 at head `8e820be` and returned
 FAIL**, raising six findings (M15-D01…D06), remediated in **M15B**. A
-**second** Hermes delta audit reviewed M15B at head **`68e4753`** and again
-returned **FAIL — do not merge yet**: D02–D05 closed, D06 partial but
-non-blocking, no new P0/P1 — but one residual **P1 blocker, M15B-R01**
-(case-sensitive inline-media detector). That was remediated in **M15C** (see
-the section immediately below). The M14 hard gate stands — **no real user
-data until explicit operator approval** — and **alpha remains blocked pending
-another Hermes re-audit of the M15C changes. This response does NOT claim
-PASS.**
+**second** delta audit reviewed M15B at head **`68e4753`** and returned
+**FAIL** with one residual **P1 blocker M15B-R01** (case-sensitive
+inline-media detector) + a **P2 M15B-R02**; both were remediated in **M15C**.
+A **third** delta audit reviewed M15C at head **`56c44b9`** and returned
+**CONDITIONAL PASS — PR #11 may merge with explicit acceptance of one P2
+residual** (see "Hermes conditional pass" below).
 
-> Reading order: the **M15C delta** section (immediately below) is the
-> current state, then **M15B**, then the original **M15** write-up (history).
+**PR #11 is cleared to merge under the conditional pass. The M14 hard gate
+still stands: real alpha remains BLOCKED — no real user data until controlled
+deploy/smoke/backup/restore verification is done for real AND the operator
+explicitly approves. Merging M15 does NOT approve the alpha.**
+
+> Reading order: **Hermes conditional pass** (immediately below) is the
+> current state, then **M15C**, **M15B**, then the original **M15** (history).
+
+---
+
+## Hermes conditional pass (3rd delta, head `56c44b9`)
+
+**Verdict: CONDITIONAL PASS.** Hermes confirmed at `56c44b9`:
+- **M15B-R01 (P1) closed** — the mixed-case legacy inline-media bypass is
+  fixed; no remaining mixed-case bypass in legacy/API/export/backfill; the
+  backfill detects mixed case via `ILIKE` + the canonical detector; legacy
+  `/v1/export` and account export are free of mixed-case `data:image` leaks.
+- **D02/D03/D04/D05 remain closed.** No new P0, no new P1.
+- CI for `56c44b9` completed successfully.
+
+**Accepted residual — M15C-R02 / P2 (`backup:seal` symlink aliasing).** The
+direct `backup:seal` CLI compares `--work` vs `--out` with `path.resolve`
+(lexical), which a **symlink** between the two could still defeat, so a
+determined direct caller could seal in place. This does **not** block merge.
+- **Operator rule (mitigation):** run operator backups ONLY via
+  `scripts/backup.sh` — never invoke `backup:seal` directly. `backup.sh`
+  always passes a private `mktemp` `--work` and a separate `--out`, so the
+  aliasing path is never exercised in the supported flow.
+- **Future hardening (not required for merge):** make `backup:seal` compare
+  *physical* directories via `realpath()` (resolving symlinks) or reject
+  symlinked `--work`/`--out`.
+
+**Alpha still blocked.** Real alpha is not approved by this pass — it remains
+gated on real deploy/smoke/backup/restore verification and explicit operator
+approval.
+
+Other accepted residuals (P3, non-blocking): `applyCaptureMode` array
+handling; additional restore-CLI test coverage.
 
 ---
 
@@ -131,11 +165,14 @@ CLI): `--dir=…` is rejected; `--work===--out` is rejected.
 
 ## M15C alpha status
 
-**Alpha remains blocked.** M15B-R01 (the residual P1) and R02 (P2) are fixed
-and tested and CI is green, but per instruction this is **not** a PASS: the
-branch awaits another **Hermes delta audit**. PR #11 is **not** merged, no
-live alpha runs, and no real user data is captured until Hermes re-audits and
-the operator explicitly approves.
+M15B-R01 (the residual P1) and R02 (P2 lexical `--work`/`--out` check) are
+fixed and tested and CI is green. Hermes' 3rd delta audit (head `56c44b9`)
+returned a **CONDITIONAL PASS**: PR #11 may merge with explicit acceptance of
+the remaining P2 (`backup:seal` symlink aliasing — mitigated by the
+operator rule "use `scripts/backup.sh`, never `backup:seal` directly"; see
+"Hermes conditional pass" above). **Merging M15 does NOT approve the real
+alpha** — that stays blocked on real deploy/smoke/backup/restore verification
+and explicit operator approval.
 
 ---
 

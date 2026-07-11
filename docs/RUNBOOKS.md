@@ -53,6 +53,15 @@ rejects the old in-place `--dir` alias / `--work===--out` — plaintext and
 sealed artifacts can never share a directory. `backup.sh` already passes
 separate dirs; do not invoke `backup:seal` directly with one dir.
 
+> **OPERATOR RULE (Hermes conditional pass, accepted P2 residual):** run
+> operator backups ONLY via `scripts/backup.sh` — **never invoke
+> `backup:seal` directly.** The direct CLI's `--work`/`--out` check is
+> *lexical* (`path.resolve`), so a symlink between the two could still alias
+> them into one directory and seal in place. `backup.sh` uses a private
+> `mktemp` `--work` + a separate `--out`, so the aliasing path is never
+> exercised. Future hardening (not required for the M15 merge): compare
+> physical dirs via `realpath()` / reject symlinked `--work`/`--out`.
+
 **M15B (Hermes D04) — the manifest is authenticated, not just hashed:** it
 carries an HMAC-SHA256 `mac` (keyed with `NOVA_BACKUP_KEY`) over a canonical
 body, plus per-artifact size + sha256 and a required `postgres` artifact.
