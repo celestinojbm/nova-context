@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -53,5 +53,18 @@ describe("M15C: backup:seal rejects unsafe in-place mode (R02)", () => {
     const { code, out } = seal([`--work=${dir}`, `--out=${dir}`, "--stamp=20260101T000000Z"]);
     expect(code).not.toBe(0);
     expect(out).toMatch(/work === --out|must never share/i);
+  });
+
+  // M16 (Hermes M15C accepted-P2 hardening): a symlinked --out pointing at
+  // --work is a different spelling of the SAME physical directory; the
+  // realpath() comparison must still reject it (a lexical check would not).
+  it("rejects a symlinked --out that resolves to --work (realpath hardening)", () => {
+    const work = mkdir();
+    const link = join(mkdtempSync(join(tmpdir(), "m15c-seal-")), "out-link");
+    dirs.push(link);
+    symlinkSync(work, link); // link → work (same physical dir)
+    const { code, out } = seal([`--work=${work}`, `--out=${link}`, "--stamp=20260101T000000Z"]);
+    expect(code).not.toBe(0);
+    expect(out).toMatch(/work === --out|must never share|physical path/i);
   });
 });
