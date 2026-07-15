@@ -40,8 +40,37 @@ load/chaos tooling, or anything that duplicates an existing suite.
 |---|---|---|---|
 | `pnpm validate:pr` | PR/merge gate: `build → typecheck → test → db:migrate → test:integration` | local/CI Postgres+Redis only — no cloud creds, ever | **PASS** when repo checks pass |
 | `pnpm validate:predeploy` | production posture + operator prerequisites + `ops:preflight` | `NODE_ENV=production` + operator secrets (names checked, values never printed) | **BLOCKED** (no sanctioned real infra) |
-| `pnpm validate:postdeploy -- --base-url=… [--invite=…]` | `/readyz`, authed `/v1/ops/status` (optional token), synthetic `ops:smoke` | a REAL deployed Nova API + invite for the self-deleting synthetic account | **BLOCKED** (no real deployment) |
-| `pnpm validate:recovery -- --backup-dir=… --stamp=… [--base-url=…]` | `backup:verify` (+ expected wrong-key failure) → guarded scratch restore → migrate no-op → `media:verify` → optional post-restore smoke | sealed backup, `NOVA_BACKUP_KEY`, `NOVA_ENCRYPTION_KEY`, a SCRATCH `DATABASE_URL` | **BLOCKED** (no sanctioned backup/scratch target) |
+| `pnpm validate:postdeploy -- --base-url=… [--invite=…]` | `/readyz`, **mandatory** authed `/v1/ops/status` (`NOVA_VALIDATE_SESSION_TOKEN`), synthetic `ops:smoke` | a REAL deployed Nova API + invite for the self-deleting synthetic account + operator session token | **BLOCKED** (no real deployment) |
+| `pnpm validate:recovery -- --backup-dir=… --stamp=… --restored-base-url=…` | `backup:verify` (+ expected wrong-key failure) → guarded scratch restore → migrate no-op → `media:verify` → **mandatory** post-restore smoke against the restored scratch stack | sealed backup, `NOVA_BACKUP_KEY`, `NOVA_ENCRYPTION_KEY`, a SCRATCH `DATABASE_URL`, the restored stack's loopback URL | **BLOCKED** (no sanctioned backup/scratch target) |
+
+### Gate-integrity guarantees (M17B.1)
+
+- **Pre-deploy safety runs even when infrastructure is incomplete.** Pure
+  configuration checks (config safety, feature posture, prerequisite
+  presence) inspect only the local environment and always execute — an
+  environment with `NOVA_SIGNUP=open`, redaction off, the unsafe override,
+  or identical encryption/backup keys is **FAIL** even when `DATABASE_URL`
+  or other infrastructure values are missing (FAIL > BLOCKED). Only the
+  non-pure `ops:preflight` cascades: it never runs when prerequisites are
+  missing.
+- **Authenticated `/v1/ops/status` is mandatory for a post-deploy PASS.**
+  `NOVA_VALIDATE_SESSION_TOKEN` is a hard prerequisite (missing → BLOCKED),
+  the check is `required`, and it validates three layers: the JSON-object
+  response contract, explicit raw-infrastructure/captured-content patterns
+  (`ECONNREFUSED`, `ENOTFOUND`, `AccessDenied`, `data:image` any case, …),
+  and the sanitizer diff for secret shapes. Failure or leak → FAIL.
+- **Post-restore smoke is mandatory for a recovery PASS.** The
+  `--restored-base-url` (loopback, or explicitly acknowledged via
+  `NOVA_VALIDATE_ALLOW_REMOTE_RESTORED=yes` for an authorized scratch host)
+  is a hard prerequisite — missing → BLOCKED; unreachable restored stack or
+  failing smoke → FAIL. Recovery can never PASS without functionally testing
+  the restored system.
+- **Structured skip provenance.** Skips carry typed fields
+  (`skip_reason: cascade | explicit_optional | not_applicable`,
+  `caused_by_check_id`) — never free-text inference. A REQUIRED check may be
+  skipped only as a `cascade` from an earlier failed/blocked required check
+  that exists in the same report; anything else is BLOCKED. Optional
+  explicit skips stay non-blocking.
 
 The PR sequence's aggregates already include every required suite (unit:
 schema/context-engine/model-router/extension/browser-shell/api/worker;

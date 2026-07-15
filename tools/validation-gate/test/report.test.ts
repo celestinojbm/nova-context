@@ -35,6 +35,8 @@ const report: RunReport = {
       duration_ms: 0,
       summary: "not run: prior required check 'predeploy_prerequisites' blocked",
       evidence: "",
+      skip_reason: "cascade",
+      caused_by_check_id: "predeploy_prerequisites",
     },
     {
       id: "feature_posture",
@@ -105,6 +107,13 @@ describe("report generation (M17B §7)", () => {
     expect(xml).toContain("DEGRADED:");
     // escaping sanity
     expect(xml).not.toContain("& ");
+  });
+
+  it("JSON reports include structured skip provenance (M17B.1 finding 4)", () => {
+    const parsed = JSON.parse(toJson(report)) as RunReport;
+    const skipped = parsed.checks.find((c) => c.id === "preflight");
+    expect(skipped?.skip_reason).toBe("cascade");
+    expect(skipped?.caused_by_check_id).toBe("predeploy_prerequisites");
   });
 
   it("artifact naming is deterministic and path-safe", () => {

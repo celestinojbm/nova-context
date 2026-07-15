@@ -43,13 +43,18 @@ export async function runGate(opts: RunOptions): Promise<RunReport> {
   let cascadeFrom: { id: string; status: "failed" | "blocked" } | null = null;
 
   for (const spec of specs) {
-    if (cascadeFrom) {
+    // M17B.1 finding 2: PURE checks (local config inspection only) always
+    // run so unsafe supplied configuration is reported even when unrelated
+    // prerequisites are missing. Only non-pure checks cascade-skip.
+    if (cascadeFrom && !spec.pure) {
       results.push({
         ...identity(spec),
         status: "skipped",
         duration_ms: 0,
         summary: `not run: prior required check '${cascadeFrom.id}' ${cascadeFrom.status}`,
         evidence: "",
+        skip_reason: "cascade",
+        caused_by_check_id: cascadeFrom.id,
       });
       continue;
     }
@@ -94,6 +99,9 @@ export async function runGate(opts: RunOptions): Promise<RunReport> {
           duration_ms: now() - started,
           summary: sanitize(out.summary),
           evidence: sanitize(out.evidence ?? ""),
+          ...(out.status === "skipped"
+            ? { skip_reason: out.skipReason ?? "not_applicable" }
+            : {}),
         };
         for (const r of out.blockingReasons ?? []) blockingReasons.push(sanitize(r));
         for (const w of out.warnings ?? []) warnings.push(sanitize(w));

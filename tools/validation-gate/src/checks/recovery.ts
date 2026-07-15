@@ -9,6 +9,8 @@ import type { CheckOutcome, RunContext } from "../types.js";
  * M15-D03) is the arbiter, and the raw DATABASE_URL is never printed.
  */
 
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
 export async function recoveryPrerequisites(ctx: RunContext): Promise<CheckOutcome> {
   const reasons: string[] = [];
   if (!ctx.flags["backup-dir"]) reasons.push("missing --backup-dir (no sealed backup to drill against)");
@@ -18,6 +20,33 @@ export async function recoveryPrerequisites(ctx: RunContext): Promise<CheckOutco
   if (!ctx.env.NOVA_ENCRYPTION_KEY) {
     reasons.push("missing env: NOVA_ENCRYPTION_KEY (media:verify after restore needs the data key)");
   }
+  // M17B.1 finding 1: a complete recovery PASS includes post-restore
+  // synthetic smoke against the RESTORED stack, so its URL is a hard
+  // prerequisite — a drill that never exercises the restored system
+  // functionally must be BLOCKED, not PASS.
+  const restored = ctx.flags["restored-base-url"];
+  if (!restored) {
+    reasons.push(
+      "missing --restored-base-url (post-restore synthetic smoke against the restored scratch stack is mandatory for a recovery PASS)",
+    );
+  } else if (!/^https?:\/\//.test(restored)) {
+    return { status: "failed", summary: "--restored-base-url must be an http(s) URL" };
+  } else {
+    // The restored stack should be the local scratch deployment. A
+    // non-loopback URL needs an explicit operator acknowledgment — the gate
+    // must never smoke (or restore toward) something production-shaped.
+    let host = "";
+    try {
+      host = new URL(restored).hostname;
+    } catch {
+      return { status: "failed", summary: "--restored-base-url is not a parseable URL" };
+    }
+    if (!LOOPBACK_HOSTS.has(host) && ctx.env.NOVA_VALIDATE_ALLOW_REMOTE_RESTORED !== "yes") {
+      reasons.push(
+        "restored-base-url is not loopback; set NOVA_VALIDATE_ALLOW_REMOTE_RESTORED=yes ONLY for an explicitly authorized scratch host",
+      );
+    }
+  }
   if (reasons.length) {
     return {
       status: "blocked",
@@ -25,7 +54,10 @@ export async function recoveryPrerequisites(ctx: RunContext): Promise<CheckOutco
       blockingReasons: reasons,
     };
   }
-  return { status: "passed", summary: "backup set, keys, and scratch target configured (values not inspected)" };
+  return {
+    status: "passed",
+    summary: "backup set, keys, scratch target, and restored-stack URL configured (values not inspected)",
+  };
 }
 
 /** The scratch target must classify as LOCAL SCRATCH (loopback + non-prod)

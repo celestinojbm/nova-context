@@ -14,7 +14,12 @@ Usage:
   pnpm validate:pr
   pnpm validate:predeploy
   pnpm validate:postdeploy -- --base-url=https://api.example.com [--invite=<code>]
-  pnpm validate:recovery   -- --backup-dir=/secure/path --stamp=<stamp> [--base-url=<restored-api>]
+                              (NOVA_VALIDATE_SESSION_TOKEN required — the
+                               authenticated /v1/ops/status check is mandatory)
+  pnpm validate:recovery   -- --backup-dir=/secure/path --stamp=<stamp> \
+                              --restored-base-url=http://localhost:<port>
+                              (post-restore smoke against the restored scratch
+                               stack is mandatory for a recovery PASS)
 
 Outcomes:
   PASS              all mandatory checks ran and passed
@@ -29,13 +34,17 @@ Exit codes: PASS/CONDITIONAL_PASS 0 · FAIL 1 · BLOCKED 1 (pr mode) / 2 (other 
 Prerequisites per mode:
   pr          local/CI Postgres + Redis only (no cloud credentials, ever)
   predeploy   NODE_ENV=production + operator secrets present (names checked,
-              values never printed)
-  postdeploy  a REAL deployed Nova API (--base-url) + invite for the
-              SYNTHETIC smoke account. Synthetic data only — the smoke
-              account self-deletes. NO real user data.
+              values never printed). Pure config-safety checks run even when
+              infrastructure values are missing — unsafe supplied config is
+              FAIL, missing infra is BLOCKED (FAIL wins).
+  postdeploy  a REAL deployed Nova API (--base-url), an invite for the
+              SYNTHETIC smoke account, and NOVA_VALIDATE_SESSION_TOKEN (the
+              authenticated /v1/ops/status check is mandatory). Synthetic
+              data only — the smoke account self-deletes. NO real user data.
   recovery    a sealed backup (--backup-dir/--stamp), NOVA_BACKUP_KEY,
-              NOVA_ENCRYPTION_KEY, and a SCRATCH DATABASE_URL (the restore
-              guard refuses non-local targets). Never restores production.
+              NOVA_ENCRYPTION_KEY, a SCRATCH DATABASE_URL (the restore guard
+              refuses non-local targets), and --restored-base-url for the
+              MANDATORY post-restore smoke. Never restores production.
 
 Reports (never contain secrets or captured content):
   artifacts/validation/<run-id>/report.json | report.md | junit.xml

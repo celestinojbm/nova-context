@@ -18,6 +18,14 @@ export async function postdeployPrerequisites(ctx: RunContext): Promise<CheckOut
   if (!ctx.flags.invite && !ctx.env.NOVA_SMOKE_INVITE) {
     reasons.push("missing invite code (--invite or NOVA_SMOKE_INVITE) for the synthetic smoke account");
   }
+  // M17B.1 finding 3: a post-deploy PASS must validate the AUTHENTICATED
+  // /v1/ops/status endpoint, so the operator session credential is a hard
+  // prerequisite — without it the gate is BLOCKED, never a quiet skip.
+  if (!ctx.env.NOVA_VALIDATE_SESSION_TOKEN) {
+    reasons.push(
+      "missing env: NOVA_VALIDATE_SESSION_TOKEN (operator session required for the mandatory authenticated /v1/ops/status check)",
+    );
+  }
   if (reasons.length) {
     return {
       status: "blocked",
@@ -25,7 +33,10 @@ export async function postdeployPrerequisites(ctx: RunContext): Promise<CheckOut
       blockingReasons: reasons,
     };
   }
-  return { status: "passed", summary: "deployment URL + synthetic-account invite available" };
+  return {
+    status: "passed",
+    summary: "deployment URL + synthetic-account invite + operator session available (values not printed)",
+  };
 }
 
 /** Public /readyz: must return HTTP success AND ready:true (booleans-only
@@ -54,18 +65,39 @@ export async function readyz(ctx: RunContext): Promise<CheckOutcome> {
   }
 }
 
-/** Authenticated /v1/ops/status — optional: requires an operator session
- * token (NOVA_VALIDATE_SESSION_TOKEN). Without one it is SKIPPED with a
- * documented safe reason (ops:smoke independently exercises the authed
- * surface with its own synthetic session). */
+/** Raw-infrastructure error strings the sanitized authed status body must
+ * never carry (M15-D05 regression watch). These are stable, well-known
+ * dependency error shapes — not exhaustive, but they catch the class the
+ * sanitizer's secret patterns alone would miss. */
+const RAW_ERROR_PATTERNS: RegExp[] = [
+  /ECONNREFUSED/i,
+  /ENOTFOUND/i,
+  /ETIMEDOUT/i,
+  /EAI_AGAIN/i,
+  /AccessDenied/i,
+  /getaddrinfo/i,
+  /pg_hba|password authentication failed/i,
+  /data:image/i, // captured content must never appear (any case)
+];
+
+/**
+ * Authenticated /v1/ops/status — MANDATORY for a post-deploy PASS
+ * (M17B.1 finding 3). The operator session token is a hard prerequisite
+ * (checked in postdeployPrerequisites — missing token → BLOCKED before this
+ * runs). Failure or leak detection → FAIL.
+ *
+ * Leak detection is layered, not sanitizer-diff-only:
+ *   1. response-schema expectation: the body must parse as a JSON object
+ *      (the status endpoint's stable contract);
+ *   2. explicit raw-infrastructure/captured-content patterns (above);
+ *   3. sanitizer diff (DSNs, keys, tokens, data: URLs).
+ */
 export async function opsStatusAuthed(ctx: RunContext): Promise<CheckOutcome> {
   const token = ctx.env.NOVA_VALIDATE_SESSION_TOKEN;
   if (!token) {
-    return {
-      status: "skipped",
-      summary:
-        "no operator session token supplied (safe: ops:smoke covers the authenticated surface with a synthetic session)",
-    };
+    // Defence in depth: prerequisites already block on a missing token; a
+    // required check must still never self-skip into a PASS.
+    return { status: "failed", summary: "operator session token absent at check time (prerequisite bypass?)" };
   }
   const started = Date.now();
   try {
@@ -76,15 +108,32 @@ export async function opsStatusAuthed(ctx: RunContext): Promise<CheckOutcome> {
     const latency = Date.now() - started;
     if (!res.ok) return { status: "failed", summary: `/v1/ops/status HTTP ${res.status}` };
     const text = await res.text();
-    // Privacy spot-check: the authed status body must not carry raw secrets
-    // or captured content (M15-D05). Sanitizer differences reveal leaks.
-    const leak = sanitize(text) !== text;
-    if (leak) {
+    // 1. Schema expectation: a JSON object per the endpoint contract.
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return { status: "failed", summary: "/v1/ops/status body is not valid JSON (contract violation)" };
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { status: "failed", summary: "/v1/ops/status body is not a JSON object (contract violation)" };
+    }
+    // 2. Known raw-error / captured-content patterns.
+    for (const re of RAW_ERROR_PATTERNS) {
+      if (re.test(text)) {
+        return {
+          status: "failed",
+          summary: `/v1/ops/status body matches a forbidden raw-infrastructure/content pattern (${re.source})`,
+        };
+      }
+    }
+    // 3. Sanitizer diff (secret shapes: DSNs, keys, bearer tokens, data: URLs).
+    if (sanitize(text, { extraSecrets: [token] }) !== text) {
       return { status: "failed", summary: "/v1/ops/status body contains redactable content (possible leak)" };
     }
     return {
       status: "passed",
-      summary: `/v1/ops/status ok in ${latency}ms (no redactable content in body)`,
+      summary: `/v1/ops/status ok in ${latency}ms (JSON contract + no forbidden patterns + no redactable content)`,
       metrics: { ops_status_latency_ms: latency },
     };
   } catch (err) {

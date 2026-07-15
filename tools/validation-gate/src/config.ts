@@ -86,25 +86,21 @@ function prChecks(): CheckSpec[] {
   ];
 }
 
-/** Pre-deploy gate: production posture + operator prerequisites +
- * ops:preflight. Missing infra → BLOCKED; unsafe supplied config → FAIL. */
+/** Pre-deploy gate. Ordering matters (M17B.1 finding 2): PURE checks —
+ * config safety, feature posture, prerequisite presence — inspect only the
+ * local environment and ALWAYS run, so an unsafe supplied configuration is
+ * reported as FAIL even when unrelated infrastructure values are missing
+ * (FAIL > BLOCKED). Only the non-pure ops:preflight cascades — it must not
+ * run when prerequisites are missing. */
 function predeployChecks(): CheckSpec[] {
   return [
-    {
-      id: "predeploy_prerequisites",
-      name: "Operator prerequisites present (names checked, values never printed)",
-      category: "operations",
-      severity: "P0",
-      required: true,
-      timeoutMs: 10_000,
-      fn: predeployPrerequisites,
-    },
     {
       id: "config_safety",
       name: "Production configuration safety (invite-only, redaction on, no unsafe override, keys distinct)",
       category: "security",
       severity: "P0",
       required: true,
+      pure: true,
       timeoutMs: 10_000,
       fn: predeployConfigSafety,
     },
@@ -114,8 +110,19 @@ function predeployChecks(): CheckSpec[] {
       category: "operations",
       severity: "P3",
       required: false,
+      pure: true,
       timeoutMs: 10_000,
       fn: predeployFeaturePosture,
+    },
+    {
+      id: "predeploy_prerequisites",
+      name: "Operator prerequisites present (names checked, values never printed)",
+      category: "operations",
+      severity: "P0",
+      required: true,
+      pure: true,
+      timeoutMs: 10_000,
+      fn: predeployPrerequisites,
     },
     {
       id: "preflight",
@@ -155,11 +162,13 @@ function postdeployChecks(ctx: RunContext): CheckSpec[] {
       fn: readyz,
     },
     {
+      // M17B.1 finding 3: MANDATORY — a post-deploy PASS must validate the
+      // authenticated status endpoint (token is a hard prerequisite above).
       id: "ops_status_authed",
-      name: "Authenticated /v1/ops/status (operator session, leak spot-check)",
+      name: "Authenticated /v1/ops/status (JSON contract + raw-error/leak detection)",
       category: "privacy",
       severity: "P1",
-      required: false,
+      required: true,
       timeoutMs: 30_000,
       fn: opsStatusAuthed,
     },
@@ -180,12 +189,14 @@ function postdeployChecks(ctx: RunContext): CheckSpec[] {
 }
 
 /** Recovery gate: verify (incl. expected wrong-key failure) → guarded
- * scratch restore → migrate no-op → media:verify → optional post-restore
- * smoke. Never restores over production (scratch guard blocks first). */
+ * scratch restore → migrate no-op → media:verify → MANDATORY post-restore
+ * smoke against the restored scratch stack (M17B.1 finding 1: recovery can
+ * never PASS without functionally testing the restored system). Never
+ * restores over production (scratch guard blocks first). */
 function recoveryChecks(ctx: RunContext): CheckSpec[] {
   const dir = ctx.flags["backup-dir"] ?? "";
   const stamp = ctx.flags.stamp ?? "";
-  const base = ctx.flags["base-url"] ?? "";
+  const restoredBase = ctx.flags["restored-base-url"] ?? "";
   return [
     {
       id: "recovery_prerequisites",
@@ -263,25 +274,20 @@ function recoveryChecks(ctx: RunContext): CheckSpec[] {
       command: { cmd: "pnpm", args: ["--filter", "@nova/api", "media:verify"] },
     },
     {
+      // M17B.1 finding 1: REQUIRED, protected (category recovery). The
+      // restored-stack URL is a hard prerequisite (recovery_prerequisites
+      // blocks without it); an unreachable restored stack or failing smoke
+      // is a FAIL — recovery can never PASS without this check running.
       id: "post_restore_smoke",
-      name: "post-restore ops:smoke (only when --base-url points at the restored stack)",
-      category: "functional",
-      severity: "P2",
-      required: false,
+      name: "post-restore ops:smoke against the restored scratch stack (--restored-base-url)",
+      category: "recovery",
+      severity: "P1",
+      required: true,
       timeoutMs: 15 * MIN,
-      ...(base
-        ? {
-            command: {
-              cmd: "pnpm",
-              args: ["--filter", "@nova/api", "ops:smoke", "--", `--base-url=${base}`],
-            },
-          }
-        : {
-            fn: async () => ({
-              status: "skipped" as const,
-              summary: "no --base-url for the restored stack (safe: run separately once it serves traffic)",
-            }),
-          }),
+      command: {
+        cmd: "pnpm",
+        args: ["--filter", "@nova/api", "ops:smoke", "--", `--base-url=${restoredBase}`],
+      },
     },
   ];
 }

@@ -43,6 +43,10 @@ export const PROTECTED_CATEGORIES: ReadonlySet<Category> = new Set([
   "recovery",
 ]);
 
+/** Structured skip provenance (M17B.1 finding 4). Skip legitimacy is typed —
+ * never inferred from free-text summaries. */
+export type SkipReason = "cascade" | "explicit_optional" | "not_applicable";
+
 export interface CheckResult {
   id: string;
   name: string;
@@ -55,6 +59,12 @@ export interface CheckResult {
   summary: string;
   /** Sanitized stdout/stderr excerpt or structured note. Never raw output. */
   evidence: string;
+  /** Set iff status === "skipped". A REQUIRED check may only be skipped as a
+   * `cascade` from an earlier failed/blocked required check. */
+  skip_reason?: SkipReason;
+  /** For cascade skips: the id of the earlier required check that failed or
+   * blocked. Must exist earlier in the same report or the skip is invalid. */
+  caused_by_check_id?: string;
 }
 
 /** Outcome of a check body: everything but identity/timing. */
@@ -62,6 +72,9 @@ export interface CheckOutcome {
   status: CheckStatus;
   summary: string;
   evidence?: string;
+  /** Required when status === "skipped" from a check fn (an optional,
+   * deliberate skip); cascade skips are stamped by the runner itself. */
+  skipReason?: SkipReason;
   /** Names (never values) that block the run, e.g. missing env vars. */
   blockingReasons?: string[];
   /** Non-blocking observations surfaced in the report. */
@@ -88,6 +101,13 @@ export interface CheckSpec {
   severity: Severity;
   required: boolean;
   timeoutMs: number;
+  /** M17B.1 finding 2: a PURE check inspects only local configuration (env,
+   * flags) — no infrastructure, no child processes with side effects. Pure
+   * checks ALWAYS run, even after an earlier required check failed/blocked,
+   * so an unsafe supplied configuration is reported (FAIL) even when
+   * unrelated prerequisites are missing. Cascade-skipping applies only to
+   * non-pure checks. */
+  pure?: boolean;
   /** Either a child-process command… */
   command?: CommandSpec;
   /** …or an in-process function (prerequisite/posture/http checks). */

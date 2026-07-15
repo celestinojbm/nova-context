@@ -28,7 +28,15 @@ export function computeOutcome(checks: CheckResult[]): Outcome {
   let blocked = false;
   let conditional = false;
 
-  for (const c of checks) {
+  // Earlier-position statuses for validating cascade provenance (M17B.1
+  // finding 4): a cascade skip must name a REQUIRED check that appears
+  // EARLIER in this same report with status failed/blocked.
+  const positions = new Map<string, { index: number; check: CheckResult }>();
+  checks.forEach((c, index) => {
+    if (!positions.has(c.id)) positions.set(c.id, { index, check: c });
+  });
+
+  checks.forEach((c, index) => {
     if (c.status === "failed") {
       const protectedCat = PROTECTED_CATEGORIES.has(c.category);
       if (c.severity === "P0" || c.severity === "P1") failed = true;
@@ -40,16 +48,30 @@ export function computeOutcome(checks: CheckResult[]): Outcome {
       if (c.required) blocked = true;
       else conditional = true;
     } else if (c.status === "skipped") {
-      // A documented safe reason lives in the summary; cascade skips (after a
-      // failure/block) and explicit optional skips carry one. A required skip
-      // WITHOUT a reason must not produce PASS.
-      if (c.required && !c.summary.trim()) blocked = true;
-      // Required-with-reason skips are cascades: the causing check already
-      // drove the outcome to FAIL/BLOCKED. Optional skips don't degrade.
+      if (!c.required) {
+        // Optional skips (explicit_optional / not_applicable / cascade) are
+        // non-blocking by definition.
+        return;
+      }
+      // A REQUIRED check may be skipped ONLY as a structured cascade from an
+      // earlier failed/blocked REQUIRED check. Free-text summaries prove
+      // nothing; the typed fields do.
+      const cause =
+        c.skip_reason === "cascade" && c.caused_by_check_id
+          ? positions.get(c.caused_by_check_id)
+          : undefined;
+      const validCascade =
+        !!cause &&
+        cause.index < index &&
+        cause.check.required &&
+        (cause.check.status === "failed" || cause.check.status === "blocked");
+      if (!validCascade) blocked = true;
+      // Valid cascades don't add anything: the causing check already drove
+      // the outcome to FAIL or BLOCKED.
     } else if (c.status === "degraded") {
       conditional = true;
     }
-  }
+  });
 
   if (failed) return "FAIL";
   if (blocked) return "BLOCKED";

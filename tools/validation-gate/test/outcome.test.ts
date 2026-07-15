@@ -64,6 +64,73 @@ describe("outcome semantics (M17B §4–§5)", () => {
   });
 });
 
+describe("structured skip provenance (M17B.1 finding 4)", () => {
+  it("required skipped with an arbitrary non-empty summary (no typed provenance) → BLOCKED", () => {
+    expect(
+      computeOutcome([check({ status: "skipped", summary: "looked fine, skipping" })]),
+    ).toBe("BLOCKED");
+  });
+
+  it("valid cascade after a required FAIL → overall FAIL (cascade adds nothing)", () => {
+    expect(
+      computeOutcome([
+        check({ id: "build", status: "failed" }),
+        check({ id: "unit", status: "skipped", summary: "cascade", skip_reason: "cascade", caused_by_check_id: "build" }),
+      ]),
+    ).toBe("FAIL");
+  });
+
+  it("valid cascade after a required BLOCKED → overall BLOCKED", () => {
+    expect(
+      computeOutcome([
+        check({ id: "prereq", status: "blocked" }),
+        check({ id: "preflight", status: "skipped", summary: "cascade", skip_reason: "cascade", caused_by_check_id: "prereq" }),
+      ]),
+    ).toBe("BLOCKED");
+  });
+
+  it("nonexistent caused_by_check_id → BLOCKED (invalid provenance)", () => {
+    expect(
+      computeOutcome([
+        check({}),
+        check({ id: "x", status: "skipped", summary: "s", skip_reason: "cascade", caused_by_check_id: "ghost" }),
+      ]),
+    ).toBe("BLOCKED");
+  });
+
+  it("cascade naming a LATER or PASSED check is invalid → BLOCKED", () => {
+    // cause appears later in the report
+    expect(
+      computeOutcome([
+        check({ id: "x", status: "skipped", summary: "s", skip_reason: "cascade", caused_by_check_id: "later" }),
+        check({ id: "later", status: "failed" }),
+      ]),
+    ).toBe("FAIL"); // the failure dominates, but the skip alone would block:
+    expect(
+      computeOutcome([
+        check({ id: "x", status: "skipped", summary: "s", skip_reason: "cascade", caused_by_check_id: "later" }),
+        check({ id: "later" }),
+      ]),
+    ).toBe("BLOCKED");
+    // cause exists earlier but PASSED — not a legitimate cascade
+    expect(
+      computeOutcome([
+        check({ id: "ok" }),
+        check({ id: "x", status: "skipped", summary: "s", skip_reason: "cascade", caused_by_check_id: "ok" }),
+      ]),
+    ).toBe("BLOCKED");
+  });
+
+  it("optional explicit skip is allowed and non-blocking", () => {
+    expect(
+      computeOutcome([
+        check({}),
+        check({ id: "opt", status: "skipped", required: false, skip_reason: "explicit_optional", summary: "operator opted out" }),
+      ]),
+    ).toBe("PASS");
+  });
+});
+
 describe("exit codes (M17B §12)", () => {
   it("PR mode: PASS/CONDITIONAL_PASS → 0, FAIL → 1, BLOCKED → 1", () => {
     expect(exitCodeFor("PASS", "pr")).toBe(0);
