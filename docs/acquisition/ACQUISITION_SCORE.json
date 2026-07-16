@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "baseline_git_sha": "74ac864c9122c982a0a4b4e178c243df14b8b978",
+  "baseline_date": "2026-07-16",
+  "disclaimer": "Engineering-evidence readiness score. NOT a financial or market valuation. Manually reviewed; recalculated from repository evidence at the baseline commit, not copied from any prior conversation.",
+  "total_score": 59,
+  "max_score": 100,
+  "overall_confidence": "medium",
+  "score_caps_applied": [
+    {
+      "cap": "total<=70",
+      "triggered_by": "IP ownership not verified (no LICENSE file, no assignment evidence, AI-assisted authorship undocumented)",
+      "binding": false,
+      "note": "Raw total 59 already below the cap; cap documented because it binds any future uplift until ownership is evidenced."
+    },
+    {
+      "cap": "infrastructure_and_operations<=50% of weight (6/12)",
+      "triggered_by": "No successful real deployment (local production-shaped rehearsals only)",
+      "binding": true
+    },
+    {
+      "cap": "product/business limited by absent real-user and demand evidence",
+      "triggered_by": "No users, no waitlist, no LOIs, no revenue; documentation alone cannot justify high scores",
+      "binding": true
+    }
+  ],
+  "dimensions": [
+    {
+      "id": "product_and_differentiation",
+      "weight": 15,
+      "awarded": 7,
+      "status": "partial",
+      "confidence": "medium",
+      "evidence": ["EV-01", "EV-02", "EV-12"],
+      "risks": ["R-04"],
+      "missing": ["real users", "demand evidence", "retention/engagement data"],
+      "next_action": "Minimal demand evidence (waitlist/LOIs) once alpha is approved"
+    },
+    {
+      "id": "code_and_architecture",
+      "weight": 15,
+      "awarded": 11,
+      "status": "verified",
+      "confidence": "high",
+      "evidence": ["EV-03", "EV-04", "EV-05"],
+      "risks": ["R-03", "R-07"],
+      "missing": ["second maintainer familiarity", "performance characterization"],
+      "next_action": "Keep HANDOFF current; document module ownership map"
+    },
+    {
+      "id": "testing_and_reliability",
+      "weight": 15,
+      "awarded": 12,
+      "status": "verified",
+      "confidence": "high",
+      "evidence": ["EV-05", "EV-06", "EV-07"],
+      "risks": ["R-02"],
+      "missing": ["real-infra gates", "performance baselines (Harness v1)"],
+      "next_action": "Run validate:predeploy/postdeploy/recovery on real infrastructure"
+    },
+    {
+      "id": "security_and_privacy",
+      "weight": 15,
+      "awarded": 11,
+      "status": "verified",
+      "confidence": "medium",
+      "evidence": ["EV-08", "EV-09", "EV-06"],
+      "risks": ["R-08"],
+      "missing": ["external pentest of a running deployment", "closure of accepted P2 residual"],
+      "next_action": "Hermes delta re-audit after first real deployment"
+    },
+    {
+      "id": "infrastructure_and_operations",
+      "weight": 12,
+      "awarded": 5,
+      "status": "partial",
+      "confidence": "medium",
+      "evidence": ["EV-10", "EV-11", "EV-07"],
+      "risks": ["R-02", "R-05"],
+      "missing": ["real deployment", "cost baseline", "real backup/restore drill"],
+      "next_action": "Operator provisions infra; execute M17 controlled deploy gates"
+    },
+    {
+      "id": "documentation_and_transferability",
+      "weight": 10,
+      "awarded": 8,
+      "status": "verified",
+      "confidence": "high",
+      "evidence": ["EV-12", "EV-13"],
+      "risks": ["R-03"],
+      "missing": ["operator-independent onboarding trial (someone else runs it)"],
+      "next_action": "Dry-run HANDOFF with a second engineer when available"
+    },
+    {
+      "id": "ip_and_dependencies",
+      "weight": 10,
+      "awarded": 3,
+      "status": "not_verified",
+      "confidence": "low",
+      "evidence": ["EV-14", "EV-15"],
+      "risks": ["R-01", "R-06"],
+      "missing": ["LICENSE/ownership statement", "chain-of-title evidence", "AI-assistance provenance statement", "NOTICE file"],
+      "next_action": "Chain-of-title verification + explicit repo license posture (legal review)"
+    },
+    {
+      "id": "business_and_dd_readiness",
+      "weight": 8,
+      "awarded": 2,
+      "status": "not_verified",
+      "confidence": "low",
+      "evidence": ["EV-16"],
+      "risks": ["R-01", "R-04", "R-09"],
+      "missing": ["entity/ownership evidence", "financial records", "market evidence", "account consolidation"],
+      "next_action": "Operator completes private-evidence checklist in IP_AND_TRANSFERABILITY_CHECKLIST.md"
+    }
+  ]
+}
