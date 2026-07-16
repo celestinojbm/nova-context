@@ -41,7 +41,7 @@ load/chaos tooling, or anything that duplicates an existing suite.
 | `pnpm validate:pr` | PR/merge gate: `build → typecheck → test → db:migrate → test:integration` | local/CI Postgres+Redis only — no cloud creds, ever | **PASS** when repo checks pass |
 | `pnpm validate:predeploy` | production posture + operator prerequisites + `ops:preflight` | `NODE_ENV=production` + operator secrets (names checked, values never printed) | **BLOCKED** (no sanctioned real infra) |
 | `pnpm validate:postdeploy -- --base-url=… [--invite=…]` | `/readyz`, **mandatory** authed `/v1/ops/status` (`NOVA_VALIDATE_SESSION_TOKEN`), synthetic `ops:smoke` | a REAL deployed Nova API + invite for the self-deleting synthetic account + operator session token | **BLOCKED** (no real deployment) |
-| `pnpm validate:recovery -- --backup-dir=… --stamp=… --restored-base-url=…` | `backup:verify` (+ expected wrong-key failure) → guarded scratch restore → migrate no-op → `media:verify` → **mandatory** post-restore smoke against the restored scratch stack | sealed backup, `NOVA_BACKUP_KEY`, `NOVA_ENCRYPTION_KEY`, a SCRATCH `DATABASE_URL`, the restored stack's loopback URL | **BLOCKED** (no sanctioned backup/scratch target) |
+| `pnpm validate:recovery -- --backup-dir=… --stamp=… --restored-base-url=… [--invite=…]` | `backup:verify` (+ expected wrong-key failure) → guarded scratch restore → migrate no-op → `media:verify` → **mandatory** post-restore smoke against the restored scratch stack | sealed backup, `NOVA_BACKUP_KEY`, `NOVA_ENCRYPTION_KEY`, a SCRATCH `DATABASE_URL`, the restored stack's loopback URL, a synthetic invite (`--invite` or `NOVA_SMOKE_INVITE`) | **BLOCKED** (no sanctioned backup/scratch target) |
 
 ### Gate-integrity guarantees (M17B.1)
 
@@ -64,7 +64,11 @@ load/chaos tooling, or anything that duplicates an existing suite.
   `NOVA_VALIDATE_ALLOW_REMOTE_RESTORED=yes` for an authorized scratch host)
   is a hard prerequisite — missing → BLOCKED; unreachable restored stack or
   failing smoke → FAIL. Recovery can never PASS without functionally testing
-  the restored system.
+  the restored system. The smoke's **synthetic invite** (`--invite` or
+  `NOVA_SMOKE_INVITE`) is likewise a hard prerequisite — missing invite is an
+  honest BLOCKED (named, never valued), not a smoke FAIL — and is handed to
+  `ops:smoke` only through the child-process environment, never argv, so it
+  cannot appear in command descriptions, evidence, or reports.
 - **Structured skip provenance.** Skips carry typed fields
   (`skip_reason: cascade | explicit_optional | not_applicable`,
   `caused_by_check_id`) — never free-text inference. A REQUIRED check may be

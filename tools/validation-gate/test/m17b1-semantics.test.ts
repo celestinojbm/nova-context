@@ -220,7 +220,19 @@ describe("finding 1: recovery cannot PASS without post-restore smoke", () => {
     expect(out.blockingReasons?.join(" ")).toContain("loopback");
   });
 
-  it("loopback restored URL + full prerequisites → passed", async () => {
+  it("loopback restored URL + full prerequisites (incl. invite) → passed", async () => {
+    const out = await recoveryPrerequisites(
+      ctx({
+        mode: "recovery",
+        flags: { "backup-dir": "/x", stamp: "s", "restored-base-url": "http://localhost:3001", invite: "fake-invite" },
+        env: fullRecoveryEnv(),
+      }),
+    );
+    expect(out.status).toBe("passed");
+  });
+
+  // Phase A correction: the synthetic invite is a hard prerequisite.
+  it("missing synthetic invite → BLOCKED naming the prerequisite (never its value)", async () => {
     const out = await recoveryPrerequisites(
       ctx({
         mode: "recovery",
@@ -228,11 +240,60 @@ describe("finding 1: recovery cannot PASS without post-restore smoke", () => {
         env: fullRecoveryEnv(),
       }),
     );
-    expect(out.status).toBe("passed");
+    expect(out.status).toBe("blocked");
+    expect(out.blockingReasons?.join(" ")).toContain("--invite or NOVA_SMOKE_INVITE");
+  });
+
+  it("invite via CLI flag OR environment satisfies the prerequisite", async () => {
+    const viaFlag = await recoveryPrerequisites(
+      ctx({
+        mode: "recovery",
+        flags: { "backup-dir": "/x", stamp: "s", "restored-base-url": "http://localhost:3001", invite: "flag-invite-1" },
+        env: fullRecoveryEnv(),
+      }),
+    );
+    expect(viaFlag.status).toBe("passed");
+    const viaEnv = await recoveryPrerequisites(
+      ctx({
+        mode: "recovery",
+        flags: { "backup-dir": "/x", stamp: "s", "restored-base-url": "http://localhost:3001" },
+        env: { ...fullRecoveryEnv(), NOVA_SMOKE_INVITE: "env-invite-1" } as NodeJS.ProcessEnv,
+      }),
+    );
+    expect(viaEnv.status).toBe("passed");
+  });
+
+  it("the smoke child command receives the invite via env only — never argv/description/reports", async () => {
+    const INVITE = "sup3r-s3cret-invite-value";
+    const flags = { "backup-dir": "/x", stamp: "s", "restored-base-url": "http://localhost:3001", invite: INVITE };
+    const c = ctx({ mode: "recovery", flags, env: fullRecoveryEnv() });
+    const spec = checksForMode("recovery", c).find((s) => s.id === "post_restore_smoke")!;
+    // Passed through the child env…
+    expect(spec.command?.env?.NOVA_SMOKE_INVITE).toBe(INVITE);
+    // …but never in argv (command descriptions are built from argv).
+    expect(spec.command?.args.join(" ")).not.toContain(INVITE);
+    // And a real run whose output echoes the invite still can't leak it into
+    // the report: child-env values are sanitized as secrets.
+    const echoing = await runGate({
+      mode: "recovery",
+      ctx: { ...c, runCommand: (await import("../src/checks/command.js")).runCommand },
+      checks: [
+        {
+          ...spec,
+          timeoutMs: 30_000,
+          command: {
+            cmd: process.execPath,
+            args: ["-e", "console.log('invite is ' + process.env.NOVA_SMOKE_INVITE)"],
+            env: { NOVA_SMOKE_INVITE: INVITE },
+          },
+        },
+      ],
+    });
+    expect(JSON.stringify(echoing)).not.toContain(INVITE);
   });
 
   it("post_restore_smoke is REQUIRED/protected in config; smoke failure → FAIL, success → PASS path", async () => {
-    const flags = { "backup-dir": "/x", stamp: "s", "restored-base-url": "http://localhost:3001" };
+    const flags = { "backup-dir": "/x", stamp: "s", "restored-base-url": "http://localhost:3001", invite: "fake-invite" };
     const c = ctx({ mode: "recovery", flags, env: fullRecoveryEnv() });
     const spec = checksForMode("recovery", c).find((s) => s.id === "post_restore_smoke");
     expect(spec?.required).toBe(true);

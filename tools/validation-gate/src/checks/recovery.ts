@@ -20,6 +20,15 @@ export async function recoveryPrerequisites(ctx: RunContext): Promise<CheckOutco
   if (!ctx.env.NOVA_ENCRYPTION_KEY) {
     reasons.push("missing env: NOVA_ENCRYPTION_KEY (media:verify after restore needs the data key)");
   }
+  // Phase A correction: the post-restore synthetic smoke needs an invite to
+  // create its self-deleting synthetic account. Missing invite is an honest
+  // prerequisite BLOCKED (named only, value never printed) — not a smoke
+  // FAIL. Accepted via --invite or NOVA_SMOKE_INVITE.
+  if (!ctx.flags.invite && !ctx.env.NOVA_SMOKE_INVITE) {
+    reasons.push(
+      "missing synthetic invite (--invite or NOVA_SMOKE_INVITE) for the mandatory post-restore smoke account",
+    );
+  }
   // M17B.1 finding 1: a complete recovery PASS includes post-restore
   // synthetic smoke against the RESTORED stack, so its URL is a hard
   // prerequisite — a drill that never exercises the restored system

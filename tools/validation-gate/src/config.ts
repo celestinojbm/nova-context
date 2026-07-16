@@ -197,6 +197,11 @@ function recoveryChecks(ctx: RunContext): CheckSpec[] {
   const dir = ctx.flags["backup-dir"] ?? "";
   const stamp = ctx.flags.stamp ?? "";
   const restoredBase = ctx.flags["restored-base-url"] ?? "";
+  // Phase A: the synthetic invite is a hard prerequisite (recovery_prerequisites
+  // blocks without it) and is passed to ops:smoke EXPLICITLY via the child
+  // env — never as an argv (command descriptions stay invite-free), and the
+  // sanitizer treats child-env values + NOVA_SMOKE_INVITE as secrets.
+  const invite = ctx.flags.invite ?? ctx.env.NOVA_SMOKE_INVITE ?? "";
   return [
     {
       id: "recovery_prerequisites",
@@ -287,6 +292,7 @@ function recoveryChecks(ctx: RunContext): CheckSpec[] {
       command: {
         cmd: "pnpm",
         args: ["--filter", "@nova/api", "ops:smoke", "--", `--base-url=${restoredBase}`],
+        env: invite ? { NOVA_SMOKE_INVITE: invite } : undefined,
       },
     },
   ];

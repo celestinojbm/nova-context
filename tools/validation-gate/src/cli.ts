@@ -17,9 +17,12 @@ Usage:
                               (NOVA_VALIDATE_SESSION_TOKEN required — the
                                authenticated /v1/ops/status check is mandatory)
   pnpm validate:recovery   -- --backup-dir=/secure/path --stamp=<stamp> \
-                              --restored-base-url=http://localhost:<port>
+                              --restored-base-url=http://localhost:<port> \
+                              [--invite=<code>]
                               (post-restore smoke against the restored scratch
-                               stack is mandatory for a recovery PASS)
+                               stack is mandatory for a recovery PASS; its
+                               synthetic invite comes from --invite or
+                               NOVA_SMOKE_INVITE and is never printed)
 
 Outcomes:
   PASS              all mandatory checks ran and passed
@@ -43,8 +46,9 @@ Prerequisites per mode:
               data only — the smoke account self-deletes. NO real user data.
   recovery    a sealed backup (--backup-dir/--stamp), NOVA_BACKUP_KEY,
               NOVA_ENCRYPTION_KEY, a SCRATCH DATABASE_URL (the restore guard
-              refuses non-local targets), and --restored-base-url for the
-              MANDATORY post-restore smoke. Never restores production.
+              refuses non-local targets), --restored-base-url for the
+              MANDATORY post-restore smoke, and a synthetic invite
+              (--invite or NOVA_SMOKE_INVITE). Never restores production.
 
 Reports (never contain secrets or captured content):
   artifacts/validation/<run-id>/report.json | report.md | junit.xml
