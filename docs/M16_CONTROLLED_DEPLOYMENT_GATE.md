@@ -210,6 +210,12 @@ M15 residuals hardened. When the operator supplies the §2 credentials, execute
 (CONDITIONAL)** if only minor P2/P3 remain — at which point a short Hermes
 delta re-audit of the real-infra deploy is recommended before one-user alpha.
 
+**M17B note:** the §3/§4 sequences now have a scripted entry point — the
+Validation Gate (`docs/VALIDATION_GATE.md`): `pnpm validate:predeploy`,
+`pnpm validate:postdeploy -- --base-url=…`, and `pnpm validate:recovery --
+--backup-dir=… --stamp=…` orchestrate these steps with go/no-go reports, and
+honestly return `BLOCKED` until the §2 credentials exist.
+
 **Exact next step:** operator provisions blockers #1–#13 (§2) into the secret
 store, then runs §3 (deploy + preflight + synthetic smoke) and §4 (backup +
 restore drill), and records results back into §9.

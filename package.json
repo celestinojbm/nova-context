@@ -13,7 +13,11 @@
     "dev": "turbo run dev",
     "db:up": "docker compose -f infra/docker-compose.dev.yml up -d",
     "db:down": "docker compose -f infra/docker-compose.dev.yml down",
-    "db:migrate": "pnpm --filter @nova/api db:migrate"
+    "db:migrate": "pnpm --filter @nova/api db:migrate",
+    "validate:pr": "pnpm --filter @nova/validation-gate gate pr",
+    "validate:predeploy": "pnpm --filter @nova/validation-gate gate predeploy",
+    "validate:postdeploy": "pnpm --filter @nova/validation-gate gate postdeploy",
+    "validate:recovery": "pnpm --filter @nova/validation-gate gate recovery"
   },
   "devDependencies": {
     "turbo": "^2.3.0",

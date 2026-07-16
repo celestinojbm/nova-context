@@ -12,6 +12,8 @@ dist/
 .env.production
 .env.*.local
 coverage/
+# Validation-gate reports (M17B) — generated, never committed.
+artifacts/
 .DS_Store
 *.traineddata
 var/

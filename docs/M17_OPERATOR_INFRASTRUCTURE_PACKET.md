@@ -152,6 +152,14 @@ authorizing M17 deploy execution.
 
 ## 7. Validation commands (run against real infra when it exists)
 
+> **M17B:** these steps are also orchestrated by the Validation Gate
+> (`docs/VALIDATION_GATE.md`) with go/no-go reports:
+> `pnpm validate:predeploy` (posture + preflight),
+> `pnpm validate:postdeploy -- --base-url=… [--invite=…]` (readyz + synthetic
+> smoke), `pnpm validate:recovery -- --backup-dir=… --stamp=…`
+> (verify + wrong-key + guarded scratch restore + media:verify). Each mode
+> returns `BLOCKED` (never a fake pass) until its prerequisites exist.
+
 ```bash
 # Preflight (must print PREFLIGHT OK, mode=production)
 fly ssh console -c infra/deploy/fly.api.toml -C "node dist/db/run-preflight.js"

@@ -45,8 +45,24 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      - run: pnpm typecheck
-      - run: pnpm test
-      - run: pnpm --filter @nova/api db:migrate
-      - run: pnpm test:integration
+      # M17B: the Validation Gate v0 orchestrates the established sequence
+      # (build → typecheck → test → db:migrate → test:integration) with
+      # consistent PASS/CONDITIONAL_PASS/FAIL/BLOCKED semantics and reports.
+      # CI invokes the gate INSTEAD of the raw steps — never both.
+      # Exit: PASS/CONDITIONAL_PASS → 0; FAIL → 1; BLOCKED → 1 (a gate that
+      # could not run must not let a PR merge).
+      - run: pnpm validate:pr
+      # Reports (JSON + Markdown + JUnit; sanitized, no secrets/content) are
+      # uploaded even when the gate fails, so the failing checks are visible.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: validation-report
+          path: artifacts/validation/
+          if-no-files-found: ignore
+      - name: Validation outcome
+        if: always()
+        run: |
+          if [ -f artifacts/validation/latest.md ]; then
+            cat artifacts/validation/latest.md >> "$GITHUB_STEP_SUMMARY"
+          fi

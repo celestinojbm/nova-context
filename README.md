@@ -161,6 +161,8 @@ pnpm --filter @nova/extension build   # then load apps/extension/.output/chrome-
 
 Tests: `pnpm test` (unit) and `DATABASE_URL=postgres://nova:nova@localhost:5432/nova pnpm test:integration`. Configuration is documented in each workspace's `.env.example`.
 
+Validation Gate (M17B): `pnpm validate:pr` orchestrates the full sequence (build → typecheck → test → migrate → integration) with go/no-go semantics and JSON/Markdown/JUnit reports under `artifacts/validation/`; CI runs it on every PR. Operator modes `validate:predeploy` / `validate:postdeploy` / `validate:recovery` honestly return `BLOCKED` until real infrastructure exists. See [docs/VALIDATION_GATE.md](docs/VALIDATION_GATE.md).
+
 Where the MVP starts, in one paragraph: a **Chromium browser extension + local companion service + minimal cloud backend**, single user, English-first. Instant Capture in the browser (visible tab + DOM extract + push-to-talk instruction → Context Moment → project link → action, with Notion as the first integration), bounded Live Context on a tab (rolling 60s buffer, questions answered against it, "save this" promotion), and a Next.js web app for the memory timeline and action review. Everything else — mobile, wake word, marketplace, multi-model consensus, enterprise — is explicitly out until the core loop proves itself. Details and the full not-in-MVP list: [MVP Scope](docs/MVP_SCOPE.md).
 
 ## Documentation index
