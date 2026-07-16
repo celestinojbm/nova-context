@@ -14,10 +14,13 @@ require professional review.** No new tooling was added to produce this.
 | BSD-2/BSD-3 | 7 | permissive |
 | ISC | 6 | permissive |
 | 0BSD / Unlicense / BlueOak-1.0.0 / (MIT AND Zlib) | 4 | permissive |
-| **LGPL-3.0-or-later** | **1** | `@img/sharp-libvips-linux-x64` (prebuilt libvips for sharp, transitive via Next.js image pipeline). Dynamically-linked prebuilt; commonly considered acceptable for services, **flag for professional review**; sharp is replaceable if required |
+| **LGPL-3.0-or-later** | **1** | `@img/sharp-libvips-linux-x64` (prebuilt libvips for sharp, transitive via Next.js image pipeline). Dynamically-linked prebuilt binary; **flagged for professional review** — no compatibility or incompatibility conclusion is drawn here. (Technical context only, not a recommendation: sharp has alternatives if a reviewer ever requires replacement) |
 | **CC-BY-4.0** | **1** | `caniuse-lite` (browser-support data via Next/browserslist). Attribution obligation — cover in NOTICE |
 
-No GPL/AGPL packages found in the production tree. Dev-only tooling
+No GPL/AGPL license IDs appeared in the set actually inspected — the 212
+production packages as reported by `pnpm licenses list --prod`; this claim
+does not extend to the dev tree or beyond package-manager metadata. Dev-only
+tooling
 (turbo, vitest, tsx, typescript, WXT, electron) was not exhaustively
 transitively reviewed — **gap: dev-tree transitive review not verified**
 (command used: `pnpm licenses list --prod`; a `--dev` sweep is the follow-up).
@@ -58,6 +61,8 @@ transitively reviewed — **gap: dev-tree transitive review not verified**
   reported by pnpm.
 - **Not verified:** dev-tree transitive licenses; license-text accuracy vs.
   package metadata; obligations analysis (professional review required).
-- **Action items:** NOTICE file (Apache-2.0/CC-BY attribution), professional
-  review of LGPL prebuilt + Redis server terms + model-provider terms at
-  transfer/enablement time.
+- **Action items:** NOTICE file (Apache-2.0/CC-BY attribution hygiene — a
+  separate matter from IP ownership, R-01), professional review of LGPL
+  prebuilt + Redis server terms + model-provider terms at transfer/enablement
+  time. No dependency replacement is recommended; any such decision needs
+  both technical and legal justification first.

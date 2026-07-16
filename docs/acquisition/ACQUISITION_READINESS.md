@@ -17,9 +17,12 @@ lifecycle, three external Hermes security audits ending in a conditional
 pass, and a Validation Gate with honest go/no-go semantics), sealed
 encrypted backup/restore with drills, and extensive operator documentation.
 Its weakest dimensions are exactly the off-repository ones: **IP chain of
-title is not verified** (no LICENSE file, AI-assisted authorship, unsigned
-provenance), there is **no real deployment or cost evidence**, and there is
-**no market/demand evidence**. The score is capped accordingly.
+title is not verified** (owner entity undetermined, no assignment evidence,
+contributor/AI provenance undocumented), the **repository license posture is
+undecided** (a separate question from ownership — no LICENSE or
+proprietary-use statement exists), there is **no real deployment or cost
+evidence**, and there is **no market/demand evidence**. The score is capped
+accordingly.
 
 ## 2. Current verified state
 
@@ -37,7 +40,10 @@ explicit approval.
   (auth, cross-user isolation, security/prompt-injection, visual redaction,
   media safety, export/delete lifecycle, backup/restore guards).
 - Security remediation trail: Hermes audits (M15 → M15B → M15C) ending
-  **CONDITIONAL PASS** with one accepted, documented P2 residual.
+  **CONDITIONAL PASS**; the one P2 residual accepted at that audit
+  (backup:seal symlink aliasing) was subsequently **fully hardened in M16**
+  (`realpath()` physical-directory comparison + regression tests) and is
+  closed unless new evidence reopens it.
 - Encrypted-at-rest media/tokens (AES-256-GCM, key rotation), sealed
   HMAC-authenticated backups, guarded restore, local drills.
 - Validation Gate v0 (+ M17B.1 hardening) with sanitized reports.
@@ -54,8 +60,11 @@ explicit approval.
 
 ## 5. Absent
 
-- Repository **LICENSE file** (unlicensed = default all-rights-reserved,
-  but unstated posture is a diligence question).
+- Repository **LICENSE file / proprietary-use statement** (unlicensed =
+  default all-rights-reserved, but the unstated posture is a diligence
+  question in its own right — R-13). Its absence is **not** evidence about
+  ownership, and no license should be adopted before the owner and intended
+  posture are determined.
 - Real deployment, real backups/restore on real infra, cost baseline,
   performance baselines.
 - Market/demand evidence (users, waitlist, LOIs, revenue).
@@ -77,8 +86,11 @@ explicit approval.
 
 ## 9. Top five acquisition risks (see RISK_REGISTER.md)
 
-1. **R-01 IP chain of title unverified** (AI-assisted authorship + two git
-   identities + no LICENSE/assignments) — blocks acquisition until resolved.
+1. **R-01 IP chain of title unverified** (owner entity undetermined; no
+   assignment evidence; the recorded git identities and AI co-author trailers
+   are provenance signals requiring operator confirmation, not ownership
+   conclusions) — blocks acquisition until resolved. Repository license
+   posture is tracked separately (R-13).
 2. **R-02 No real deployment evidence** — operational claims unproven off
    local rehearsals; blocks any operational representations.
 3. **R-03 Founder/single-operator dependency** — one human operator; bus
@@ -89,9 +101,12 @@ explicit approval.
 
 ## 10. Five highest-impact / lowest-effort actions
 
-1. Verify chain of title: owner decision + signed IP assignment + explicit
-   proprietary LICENSE/ownership statement in-repo (legal review).
-2. Add an AI-assisted development provenance statement + NOTICE file.
+1. Verify chain of title: owner decision + signed IP assignment (legal
+   review). A LICENSE file is NOT part of this — it would not prove
+   ownership.
+2. After the owner is determined: decide and record the repository licensing
+   posture (undecided today; no posture is assumed here) with legal review,
+   plus an AI-assisted development provenance statement + NOTICE file.
 3. Execute the M17 real-deploy gates once credentials exist
    (`validate:predeploy/postdeploy/recovery` on real infra) — converts the
    largest "partial" to "verified".

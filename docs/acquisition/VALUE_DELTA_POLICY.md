@@ -41,6 +41,10 @@ new evidence (the asset didn't change; our knowledge did).
   visibility, transferability planning.
 - **Financial value change:** not determined.
 - **Score increase claimed:** none — creating the score is not an increase.
+- **M17C.1 accuracy corrections (same PR, pre-merge):** stale residual
+  status fixed (backup:seal symlink item closed by M16 hardening) and
+  ownership/licensing conflation separated (R-01 vs. R-13). Score unchanged
+  at 59 — a documentation/evidence correction, not a value change.
 
 The first true Value Delta will compare a later milestone against THIS
 baseline.

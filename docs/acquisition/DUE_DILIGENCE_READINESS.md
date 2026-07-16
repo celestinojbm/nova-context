@@ -21,8 +21,10 @@ actions (Notion) → export/delete lifecycle. No real users yet (by design —
 hard gate).
 
 ## 4. Security/privacy state
-Three external Hermes audits (M15→M15C) ending CONDITIONAL PASS; documented
-accepted P2 residual with operator rule. Fail-closed production posture
+Three external Hermes audits (M15→M15C) ending CONDITIONAL PASS; the P2
+residual accepted at that audit (backup:seal symlink aliasing) was fully
+hardened in M16 (realpath physical-directory check + regression tests) and
+is closed. Fail-closed production posture
 (invite-only, strict redaction, encryption at rest, sealed backups, DSN
 redaction, sanitized ops endpoints, cross-user isolation suites,
 prompt-injection tests, log-hygiene tests). No runtime pentest yet
@@ -36,9 +38,13 @@ postdeploy/recovery`) that honestly BLOCK without real credentials. No cost
 baseline, no performance baselines (Harness v1 deferred).
 
 ## 6. IP state
-**Not verified.** No LICENSE file; AI-assisted authorship recorded in git
-trailers without a provenance statement; owner entity undocumented; no
-assignments evidenced. This is the primary diligence blocker (R-01).
+**Ownership not verified** (R-01, the primary diligence blocker): owner
+entity undocumented; no assignments evidenced; git identities and AI
+co-author trailers are provenance signals awaiting operator confirmation and
+documentation — they do not by themselves prove third-party ownership.
+Separately, the **repository license posture is undecided** (R-13): no
+LICENSE or proprietary-use statement; to be resolved with legal review only
+after the owner is determined. Neither question is evidence for the other.
 
 ## 7. Dependency/license state
 Prod tree enumerated (212 pkgs, permissive-dominant; 1 transitive LGPL
@@ -50,9 +56,10 @@ None (no users, revenue, waitlist, LOIs). Business-model thesis documented
 only. Entity/financial records out of repo scope and unverified.
 
 ## 9. Technical debt
-Documented and bounded: accepted P2 backup:seal symlink residual
-(operator-rule mitigated), per-instance rate-limit fallback, s3-backup
+Documented and bounded: per-instance rate-limit fallback, s3-backup
 reliance on bucket controls, Harness v1 deferred, browser-shell is a spike.
+(The formerly-accepted P2 backup:seal symlink residual was fully hardened
+in M16 and is closed.)
 
 ## 10. Risks
 Critical: R-01 (chain of title). High: R-02 (no real deployment), R-03
@@ -85,7 +92,8 @@ What are the provider-terms constraints on the model features? What is the
 privacy/regulatory posture with real user data?
 
 ## 16. Actions required before opening a data room
-Chain-of-title verification + license posture; one real controlled
+Chain-of-title verification, then a decided/recorded license posture; one
+real controlled
 deployment with all three operator gates passing; account/domain
 consolidation under the owning entity; initial demand evidence; drafted
 privacy policy/ToS; engaged legal/accounting review.

@@ -9,7 +9,7 @@
   "score_caps_applied": [
     {
       "cap": "total<=70",
-      "triggered_by": "IP ownership not verified (no LICENSE file, no assignment evidence, AI-assisted authorship undocumented)",
+      "triggered_by": "IP ownership not verified (owner entity undetermined, no assignment evidence, contributor-identity classification and AI-assistance provenance pending operator confirmation). Repository license posture is a separate, also-open question (R-13) and is not evidence for or against ownership.",
       "binding": false,
       "note": "Raw total 59 already below the cap; cap documented because it binds any future uplift until ownership is evidenced."
     },
@@ -66,7 +66,7 @@
       "confidence": "medium",
       "evidence": ["EV-08", "EV-09", "EV-06"],
       "risks": ["R-08"],
-      "missing": ["external pentest of a running deployment", "closure of accepted P2 residual"],
+      "missing": ["external pentest of a running deployment (no runtime exists yet)"],
       "next_action": "Hermes delta re-audit after first real deployment"
     },
     {
@@ -98,9 +98,9 @@
       "status": "not_verified",
       "confidence": "low",
       "evidence": ["EV-14", "EV-15"],
-      "risks": ["R-01", "R-06"],
-      "missing": ["LICENSE/ownership statement", "chain-of-title evidence", "AI-assistance provenance statement", "NOTICE file"],
-      "next_action": "Chain-of-title verification + explicit repo license posture (legal review)"
+      "risks": ["R-01", "R-06", "R-13"],
+      "missing": ["chain-of-title evidence (ownership)", "decided repository license posture (separate question; resolve after ownership)", "AI-assistance provenance statement", "operator confirmation of git-identity classification", "NOTICE file"],
+      "next_action": "Chain-of-title verification (legal review); license posture decided afterwards"
     },
     {
       "id": "business_and_dd_readiness",
