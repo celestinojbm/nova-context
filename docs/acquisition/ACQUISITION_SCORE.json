@@ -6,10 +6,19 @@
   "total_score": 59,
   "max_score": 100,
   "overall_confidence": "medium",
+  "reassessments": [
+    {
+      "milestone": "M17D",
+      "git_sha": "1597e6ccacff14e2cfff5fa24ca10a032fa2cb91",
+      "date": "2026-07-17",
+      "result": "unchanged at 59/100",
+      "reason": "Operator chain-of-title attestation (EV-17, class operator_attested) narrows uncertainty — intended personal ownership, sole human contributor, AI-tool disclosure, personal account control — but attestation is not verified documentary evidence, so no dimension gains points. IP cap remains; infrastructure remains capped (still no real deployment); product/business remain limited (still no market evidence). Change class: changed risk estimate + evidence clarification, not value creation."
+    }
+  ],
   "score_caps_applied": [
     {
       "cap": "total<=70",
-      "triggered_by": "IP ownership not verified (owner entity undetermined, no assignment evidence, contributor-identity classification and AI-assistance provenance pending operator confirmation). Repository license posture is a separate, also-open question (R-13) and is not evidence for or against ownership.",
+      "triggered_by": "IP ownership not independently verified. M17D: personal ownership is operator_attested (EV-17 — intended founder ownership, sole human contributor, AI provenance disclosed) but the documentary package and professional review do not exist, so the cap stands. Repository license posture is a separate, also-open question (R-13) and is not evidence for or against ownership.",
       "binding": false,
       "note": "Raw total 59 already below the cap; cap documented because it binds any future uplift until ownership is evidenced."
     },
@@ -97,10 +106,10 @@
       "awarded": 3,
       "status": "not_verified",
       "confidence": "low",
-      "evidence": ["EV-14", "EV-15"],
+      "evidence": ["EV-14", "EV-15", "EV-17"],
       "risks": ["R-01", "R-06", "R-13"],
-      "missing": ["chain-of-title evidence (ownership)", "decided repository license posture (separate question; resolve after ownership)", "AI-assistance provenance statement", "operator confirmation of git-identity classification", "NOTICE file"],
-      "next_action": "Chain-of-title verification (legal review); license posture decided afterwards"
+      "missing": ["documentary chain-of-title evidence (personal ownership is operator_attested only — EV-17 earns no points until independently verified)", "professional legal review incl. AI-authorship/provider-terms questions", "decided repository license posture (separate question; resolve after ownership)", "private signed authorship/ownership statement", "NOTICE file"],
+      "next_action": "Private documentary/professional verification of the personal chain of title (closure criteria: CHAIN_OF_TITLE_STATUS.md §15)"
     },
     {
       "id": "business_and_dd_readiness",
@@ -108,9 +117,9 @@
       "awarded": 2,
       "status": "not_verified",
       "confidence": "low",
-      "evidence": ["EV-16"],
+      "evidence": ["EV-16", "EV-17"],
       "risks": ["R-01", "R-04", "R-09"],
-      "missing": ["entity/ownership evidence", "financial records", "market evidence", "account consolidation"],
+      "missing": ["documentary ownership evidence (attestation only so far)", "financial records", "market evidence", "account-ownership proof (transfer plan documented in ACCOUNT_AND_ASSET_TRANSFERABILITY.md; proof pending)"],
       "next_action": "Operator completes private-evidence checklist in IP_AND_TRANSFERABILITY_CHECKLIST.md"
     }
   ]

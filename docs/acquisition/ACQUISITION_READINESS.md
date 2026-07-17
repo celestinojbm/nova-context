@@ -17,9 +17,11 @@ lifecycle, three external Hermes security audits ending in a conditional
 pass, and a Validation Gate with honest go/no-go semantics), sealed
 encrypted backup/restore with drills, and extensive operator documentation.
 Its weakest dimensions are exactly the off-repository ones: **IP chain of
-title is not verified** (owner entity undetermined, no assignment evidence,
-contributor/AI provenance undocumented), the **repository license posture is
-undecided** (a separate question from ownership — no LICENSE or
+title is not independently verified** — as of M17D personal ownership by the
+founder is `operator_attested` (intended owner, sole human contributor, AI
+provenance disclosed; see `CHAIN_OF_TITLE_STATUS.md`) but the documentary
+package and professional review do not exist yet — the **repository license
+posture is undecided** (a separate question from ownership — no LICENSE or
 proprietary-use statement exists), there is **no real deployment or cost
 evidence**, and there is **no market/demand evidence**. The score is capped
 accordingly.
@@ -70,12 +72,16 @@ explicit approval.
 - Market/demand evidence (users, waitlist, LOIs, revenue).
 - NOTICE/attribution file for CC-BY data and bundled components.
 
-## 6. Not verified (off-repository; operator must evidence)
+## 6. Not independently verified (off-repository)
 
-- Legal owner of Nova Context (personal vs. Stravos Enterprises LLC —
-  **not verified**; do not assert either without documents).
-- IP assignments, contributor agreements, entity standing, domain/trademark,
-  provider/billing account ownership, privacy-policy obligations.
+- Legal ownership of Nova Context — intended personal ownership by the
+  founder is now `operator_attested` (M17D, EV-17; Stravos Enterprises LLC
+  is not the intended owner and no Stravos ownership is claimed), but this
+  remains **not independently verified**; do not treat attestation as
+  documentary evidence.
+- Authorship/ownership statement, entity records (context), domain/trademark
+  (none exist yet), provider/billing account ownership proof (attested,
+  unproven), privacy-policy obligations.
 
 ## 7. Not applicable / 8. Premature (current stage)
 
@@ -86,11 +92,11 @@ explicit approval.
 
 ## 9. Top five acquisition risks (see RISK_REGISTER.md)
 
-1. **R-01 IP chain of title unverified** (owner entity undetermined; no
-   assignment evidence; the recorded git identities and AI co-author trailers
-   are provenance signals requiring operator confirmation, not ownership
-   conclusions) — blocks acquisition until resolved. Repository license
-   posture is tracked separately (R-13).
+1. **R-01 — personal ownership operator-attested, documentary chain of
+   title incomplete** (M17D): the attestation lowers the estimated
+   probability of a competing claim but the diligence evidence package does
+   not exist, which alone can block an acquisition — still P0, still open.
+   Repository license posture is tracked separately (R-13).
 2. **R-02 No real deployment evidence** — operational claims unproven off
    local rehearsals; blocks any operational representations.
 3. **R-03 Founder/single-operator dependency** — one human operator; bus
@@ -116,8 +122,10 @@ explicit approval.
 
 ## 11. Single next recommended action
 
-**Chain-of-title / IP ownership verification** (action 1). Everything else
-is capped by it (score cap ≤70; acquisition blocker).
+**Private documentary/professional verification of the personal chain of
+title** (action 1; attestation recorded in M17D, closure criteria in
+`CHAIN_OF_TITLE_STATUS.md` §15). Everything else is capped by it (score cap
+≤70; acquisition blocker).
 
 ## 12. Current stage limitations
 
