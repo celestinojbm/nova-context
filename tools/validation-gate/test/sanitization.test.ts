@@ -60,4 +60,30 @@ describe("output sanitization (M17B §8)", () => {
     const out = sanitize("-----BEGIN RSA PRIVATE KEY-----\nMIIEow…\n-----END RSA PRIVATE KEY-----");
     expect(out).not.toContain("MIIEow");
   });
+
+  it("redacts private-range endpoint IPs (optional port) from infra error strings (M18A.1 review #6)", () => {
+    // A RESOLVED private IP:port leaks the evidence/media store the module
+    // promised never to print — the full-URL literal never substring-matches it.
+    const out = sanitize("EVIDENCE RETENTION FAILED: connect ECONNREFUSED 10.0.3.4:9000");
+    expect(out).not.toContain("10.0.3.4");
+    expect(out).toContain(REDACTED);
+    for (const ip of ["172.16.5.9", "192.168.1.20", "169.254.10.1", "100.64.0.7"]) {
+      expect(sanitize(`dial ${ip}:443 failed`)).not.toContain(ip);
+    }
+    // Loopback is NOT sensitive and stays; a 3-part semver is never a dotted quad.
+    expect(sanitize("listening on 127.0.0.1:3000")).toContain("127.0.0.1");
+    expect(sanitize("tsx 4.23.0 ready")).toContain("4.23.0");
+  });
+
+  it("redacts caller-supplied extraSecrets below the 6-char auto-detect floor (M18A.1 review #7)", () => {
+    // A short S3 bucket (3-5 chars) declared as an extraSecret MUST be redacted;
+    // the >=6 floor only applies to auto-detected env values, not caller secrets.
+    const out = sanitize("NoSuchBucket: the specified bucket does not exist: logs", {
+      extraSecrets: ["logs"],
+    });
+    expect(out).not.toContain("logs");
+    expect(out).toContain(REDACTED);
+    // A 1-2 char value is still left alone (redacting it would shred output).
+    expect(sanitize("go to the ab section", { extraSecrets: ["ab"] })).toContain("ab");
+  });
 });

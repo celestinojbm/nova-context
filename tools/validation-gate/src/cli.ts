@@ -134,10 +134,15 @@ async function main(): Promise<void> {
       uploadedAt: report.finished_at,
       files: [{ path: jsonPath }, { path: mdPath }, { path: junitPath }],
       // Scrub the run's minted synthetic secrets AND the evidence
-      // endpoint/bucket from any (already sanitized) upload error.
+      // endpoint/bucket from any (already sanitized) upload error. The endpoint
+      // is registered as the full URL AND its bare host / host:port variants
+      // (M18A.1 review): an S3/DNS/socket error renders the host WITHOUT the
+      // scheme (e.g. "getaddrinfo ENOTFOUND minio.internal") so the full-URL
+      // literal alone would not match. A private resolved IP:port is caught by
+      // the sanitizer's private-IP pattern.
       extraSecrets: [
         ...ctx.runtime.extraSecrets,
-        process.env.NOVA_VALIDATE_EVIDENCE_S3_ENDPOINT,
+        ...endpointSecretVariants(process.env.NOVA_VALIDATE_EVIDENCE_S3_ENDPOINT),
         process.env.NOVA_VALIDATE_EVIDENCE_S3_BUCKET,
       ].filter((v): v is string => !!v),
       backupKey: parseBackupKeyLoose(process.env.NOVA_BACKUP_KEY),
@@ -190,6 +195,28 @@ function parseBackupKeyLoose(value: string | undefined): Buffer | undefined {
     ? Buffer.from(trimmed, "hex")
     : Buffer.from(trimmed, "base64");
   return key.length === 32 ? key : undefined;
+}
+
+/** Every literal spelling of an endpoint that an S3/DNS/socket error might
+ * echo: the full URL, the bare host, and host:port. Registering all three as
+ * sanitizer extra-secrets means a "getaddrinfo ENOTFOUND <host>" or a
+ * "<host>:<port>" error cannot leak the private evidence endpoint (M18A.1
+ * review). Returns [] for an unset endpoint. */
+function endpointSecretVariants(endpoint: string | undefined): string[] {
+  if (!endpoint) return [];
+  const out = new Set<string>([endpoint]);
+  try {
+    const u = new URL(endpoint);
+    if (u.hostname) out.add(u.hostname);
+    if (u.host) out.add(u.host); // host[:port]
+  } catch {
+    const bare = endpoint.replace(/^[a-z0-9+.-]+:\/\//i, "").replace(/\/.*$/, "");
+    if (bare) {
+      out.add(bare);
+      out.add(bare.split(":")[0] ?? bare);
+    }
+  }
+  return [...out];
 }
 
 main().catch((err) => {

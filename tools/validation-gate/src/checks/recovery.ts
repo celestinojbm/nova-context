@@ -121,9 +121,17 @@ export function isS3Media(env: NodeJS.ProcessEnv): boolean {
  * media into the CONFIGURED (scratch) store (NOVA_MEDIA_S3_*) from the backup
  * store (NOVA_BACKUP_S3_*). Both must exist, and — critically — the scratch
  * media destination must be a DIFFERENT physical store from the backup store,
- * so a restore can never overwrite the backup it reads from. (Separation from
- * the ORIGINAL PRIMARY is enforced inside media:restore-s3 via the inventory's
- * source_fingerprint, which is unknown until the inventory is read.)
+ * so a restore can never overwrite the backup it reads from.
+ *
+ * Separation from the ORIGINAL PRIMARY is a defense-in-depth RUNTIME guard
+ * inside media:restore-s3 (it refuses when the destination fingerprint matches
+ * the inventory's source_fingerprint, which is unknown until the inventory is
+ * read) — NOT a by-construction gate check. Two hardenings make that guard
+ * trustworthy from the gate (M18A.1 review):
+ *   - endpoint aliasing can no longer evade the fingerprint match: AWS-endpoint
+ *     spellings all canonicalize to one token (canonicalizeEndpoint);
+ *   - the restore-over-primary escape hatch (NOVA_MEDIA_RESTORE_ALLOW_PRIMARY)
+ *     is REFUSED here — a drill must always target scratch, never primary.
  * Missing/aliased config is a safe-prerequisite BLOCKED — before any mutation.
  */
 export async function s3RecoveryPrerequisites(ctx: RunContext): Promise<CheckOutcome> {
@@ -137,6 +145,16 @@ export async function s3RecoveryPrerequisites(ctx: RunContext): Promise<CheckOut
   const reasons: string[] = [];
   if (!ctx.env.NOVA_BACKUP_S3_BUCKET) reasons.push("missing env: NOVA_BACKUP_S3_BUCKET (media backup store to restore FROM)");
   if (!ctx.env.NOVA_MEDIA_S3_BUCKET) reasons.push("missing env: NOVA_MEDIA_S3_BUCKET (scratch media destination to restore INTO)");
+  // A recovery DRILL must ALWAYS restore into scratch, NEVER over the original
+  // primary. NOVA_MEDIA_RESTORE_ALLOW_PRIMARY=yes disables media:restore-s3's
+  // restore-over-primary refusal; it exists ONLY for a deliberate manual
+  // disaster recovery, never for the automated gate. If set, BLOCK before any
+  // mutation rather than run a drill that could overwrite live primary media.
+  if ((ctx.env.NOVA_MEDIA_RESTORE_ALLOW_PRIMARY ?? "").toLowerCase() === "yes") {
+    reasons.push(
+      "NOVA_MEDIA_RESTORE_ALLOW_PRIMARY=yes disables the restore-over-primary guard — a recovery drill must never enable it (unset it; it is only for manual disaster recovery)",
+    );
+  }
   if (
     ctx.env.NOVA_BACKUP_S3_BUCKET &&
     ctx.env.NOVA_MEDIA_S3_BUCKET

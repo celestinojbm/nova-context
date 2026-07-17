@@ -128,7 +128,9 @@ describe("M18A.1 finding 6: validation evidence retention", () => {
       gitSha: "abc1234",
       uploadedAt: UPLOADED_AT,
       files: writeReports(),
-      extraSecrets: [token, password, invite],
+      // cli.ts registers the endpoint + bucket too (M18A.1 review #6): the
+      // private evidence endpoint/bucket must be redacted, not just credentials.
+      extraSecrets: [token, password, invite, endpoint, bucket],
       env: {
         NOVA_VALIDATE_EVIDENCE_S3_ACCESS_KEY_ID: accessKey,
         NOVA_VALIDATE_EVIDENCE_S3_SECRET_ACCESS_KEY: secretKey,
@@ -136,10 +138,43 @@ describe("M18A.1 finding 6: validation evidence retention", () => {
     });
     expect(res.ok).toBe(false);
     const out = res.error ?? "";
-    for (const secret of [token, password, invite, accessKey, secretKey]) {
+    for (const secret of [token, password, invite, accessKey, secretKey, endpoint, bucket]) {
       expect(out).not.toContain(secret);
     }
     expect(out).not.toContain("data:image/png;base64,AAAA");
     expect(res.uploaded).not.toContain("meta.json"); // no commit marker on failure
+  });
+
+  it("bare endpoint host / private resolved IP in an upload error are redacted (M18A.1 review #6)", async () => {
+    // DNS/socket failures render the bare HOST or the resolved private IP:port,
+    // NEITHER of which the full-URL literal substring-matches. cli.ts registers
+    // the host + host:port variants; the sanitizer's private-IP pattern covers
+    // the resolved-IP case.
+    const host = "minio.internal";
+    const bucket = "logs"; // 4-char bucket (also exercises review #7)
+    const store: EvidencePutStore = {
+      async put() {
+        throw new Error(
+          `getaddrinfo ENOTFOUND ${host}; retry connect ECONNREFUSED 10.8.0.5:9000; bucket=${bucket}`,
+        );
+      },
+    };
+    const res = await retainEvidence({
+      store,
+      mode: "postdeploy",
+      runId: "run-5",
+      outcome: "FAIL",
+      gitSha: "abc1234",
+      uploadedAt: UPLOADED_AT,
+      files: writeReports(),
+      // The variants cli.ts derives from https://minio.internal:9000.
+      extraSecrets: ["https://minio.internal:9000", host, `${host}:9000`, bucket],
+    });
+    expect(res.ok).toBe(false);
+    const out = res.error ?? "";
+    expect(out).not.toContain(host); // bare host was leaking; now redacted
+    expect(out).not.toContain("10.8.0.5"); // private IP redacted by pattern
+    expect(out).not.toContain(bucket); // short bucket redacted (review #7)
+    expect(res.uploaded).not.toContain("meta.json");
   });
 });

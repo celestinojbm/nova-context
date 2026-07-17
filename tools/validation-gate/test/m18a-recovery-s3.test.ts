@@ -131,6 +131,14 @@ describe("M18A.1 finding 2: S3 media recovery gate", () => {
     expect(report.blocking_reasons.join(" ")).toContain("SAME store");
   });
 
+  it("NOVA_MEDIA_RESTORE_ALLOW_PRIMARY=yes → BLOCKED before any mutation (a drill must never overwrite primary) (M18A.1 review #4)", async () => {
+    const { report, ran } = await recovery(S3_ENV({ NOVA_MEDIA_RESTORE_ALLOW_PRIMARY: "yes" }));
+    expect(report.outcome).toBe("BLOCKED");
+    expect(report.checks.find((c) => c.id === "s3_recovery_prerequisites")!.status).toBe("blocked");
+    expect(report.blocking_reasons.join(" ")).toContain("NOVA_MEDIA_RESTORE_ALLOW_PRIMARY");
+    expect(ran).toHaveLength(0); // nothing mutating ran
+  });
+
   it("wrong media backup key that UNEXPECTEDLY succeeds → FAIL", async () => {
     // Force the expected-failure media wrong-key check to exit 0 (success).
     const { report } = await recovery(S3_ENV(), (_cmd, spec) =>

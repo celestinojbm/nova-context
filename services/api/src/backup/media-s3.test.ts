@@ -303,4 +303,55 @@ describe("object-store identity canonicalization (M18A.1 finding 7)", () => {
     expect(fingerprint("s3|http://minio|a")).not.toBe(fingerprint("s3|http://minio|b"));
     expect(canonicalizeIdentity("s3|https://x:443/|bkt")).toBe("s3|https://x|bkt");
   });
+
+  it("collapses EVERY AWS S3 endpoint spelling to the 'aws' token (M18A.1 review #5)", () => {
+    // Path-style, regional, dash-region, dualstack, fips, virtual-hosted, China —
+    // all address the same bucket on AWS, so all canonicalize to "aws" (== unset).
+    for (const ep of [
+      "https://s3.amazonaws.com",
+      "https://s3.us-east-1.amazonaws.com",
+      "https://s3-us-west-2.amazonaws.com",
+      "https://s3.dualstack.eu-west-1.amazonaws.com",
+      "https://s3-fips.us-gov-west-1.amazonaws.com",
+      "https://prod-media.s3.amazonaws.com",
+      "https://prod-media.s3.us-east-1.amazonaws.com",
+      "https://s3.cn-north-1.amazonaws.com.cn",
+    ]) {
+      expect(canonicalizeEndpoint(ep)).toBe("aws");
+    }
+    // A NON-AWS S3-compatible endpoint keeps its normalized URL — there the
+    // endpoint genuinely distinguishes stores (bucket names are per-account).
+    expect(canonicalizeEndpoint("https://abc123.r2.cloudflarestorage.com")).toBe(
+      "https://abc123.r2.cloudflarestorage.com",
+    );
+    expect(canonicalizeEndpoint("http://minio:9000")).toBe("http://minio:9000");
+    // A non-S3 amazonaws host (no s3 label) is NOT treated as AWS S3.
+    expect(canonicalizeEndpoint("https://ec2.us-east-1.amazonaws.com")).toBe(
+      "https://ec2.us-east-1.amazonaws.com",
+    );
+  });
+
+  it("AWS endpoint respelling cannot evade the aliasing / restore-over-primary guard (M18A.1 review #5)", () => {
+    // The exploit: unset endpoint (→ 'aws') vs an explicit regional / virtual-
+    // hosted spelling of the SAME bucket used to fingerprint DIFFERENTLY, so a
+    // backup could land in — or a restore overwrite — the live primary. Now they
+    // share one fingerprint, so assertDistinctTargets and the primary-refusal fire.
+    expect(fingerprint("s3|aws|prod-media")).toBe(
+      fingerprint("s3|https://s3.us-east-1.amazonaws.com|prod-media"),
+    );
+    expect(fingerprint("s3|aws|prod-media")).toBe(
+      fingerprint("s3|https://prod-media.s3.amazonaws.com|prod-media"),
+    );
+    // The concrete backup-aliasing exploit is now refused.
+    expect(() =>
+      assertDistinctTargets(
+        target("s3|aws|prod-media"),
+        target("s3|https://s3.us-east-1.amazonaws.com|prod-media"),
+        "t",
+      ),
+    ).toThrow(/aliasing refused/);
+    // Different bucket, and a different provider with the same name, stay distinct.
+    expect(fingerprint("s3|aws|prod-media")).not.toBe(fingerprint("s3|aws|other-media"));
+    expect(fingerprint("s3|aws|b")).not.toBe(fingerprint("s3|https://minio:9000|b"));
+  });
 });
