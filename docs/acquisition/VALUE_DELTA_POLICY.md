@@ -48,3 +48,22 @@ new evidence (the asset didn't change; our knowledge did).
 
 The first true Value Delta will compare a later milestone against THIS
 baseline.
+
+## M17D Value Delta (brief) — chain-of-title attestation & transferability plan
+
+- **Primary effect:** evidence clarification (operator attestation, EV-17);
+  transferability planning improved (`ACCOUNT_AND_ASSET_TRANSFERABILITY.md`).
+  No product capability added; no production evidence added; no legal
+  verification added; no financial value determined; no score increase
+  (59/100 unchanged — attestation narrows uncertainty but is not verified
+  documentary evidence).
+- **Value added:** intended owner clarified (founder personally); sole-human
+  contribution clarified; AI provenance clarified (Claude/Claude Code,
+  ChatGPT, Hermes, Codex; normally human-reviewed); account ownership
+  clarified (personally held, attested); future asset-sale preference
+  clarified (personal asset sale, not an LLC sale); transfer workflow
+  documented.
+- **Remaining risk:** chain of title remains undocumented independently;
+  personal accounts create future migration work; account transferability is
+  provider-dependent (assume buyer-recreates); no domain/brand ownership
+  evidence (none exists); no real deployment.

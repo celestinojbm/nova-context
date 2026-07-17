@@ -4,6 +4,11 @@ Maps acquisition dimensions to EXISTING repository evidence. References,
 never duplicates. Freshness = as of the baseline commit; confidence reflects
 how directly the artifact proves the claim. No private URLs or local paths.
 
+Evidence classes (M17D, defined in `README.md`): `repository_verified` ·
+`operator_attested` · `private_document_verified` · `professional_reviewed`
+· `not_verified`. EV-01…EV-16 are repository_verified artifacts (what each
+*proves* is still bounded by its row); EV-17 is operator_attested.
+
 | ID | Category | Location (repo path / PR) | Proves | Does NOT prove | Freshness | Confidence | Owner |
 |---|---|---|---|---|---|---|---|
 | EV-01 | product | `docs/PRODUCT_VISION.md`, `docs/MVP_SCOPE.md`, `docs/THE_CONTEXT_MANIFESTO.md` | articulated differentiation + scoped MVP | demand, users, willingness to pay | baseline | high (as docs) | operator |
@@ -22,6 +27,7 @@ how directly the artifact proves the claim. No private URLs or local paths.
 | EV-14 | ip | `git shortlog -sne`: two recorded identities (operator account + AI-assistant co-authorship trailers) | the authorship record *as recorded in git* — a provenance signal only | chain of title or assignments; whether the identities represent distinct legal contributors (requires operator confirmation: same person via multiple accounts / AI co-author / third party / unknown); license posture (separate question — NO LICENSE file exists, R-13) | baseline | low | operator + legal |
 | EV-15 | dependencies | `pnpm-lock.yaml`, `DEPENDENCY_AND_LICENSE_INVENTORY.md` (212 prod pkgs; 1 transitive LGPL, 1 CC-BY data) | permissive-dominant dependency posture | full transitive legal review | baseline | medium | operator |
 | EV-16 | business | `docs/BUSINESS_MODEL.md`, `docs/WHY_NOW.md` | articulated model/thesis | entity, ownership, financials, market traction | baseline | low (docs only) | operator |
+| EV-17 | ip / transferability | **Operator Chain-of-Title Attestation, July 2026** — recorded in `CHAIN_OF_TITLE_STATUS.md` (class: `operator_attested`; no private documents attached) | supports (as attestation only): intended personal ownership by the founder; sole-human-contributor statement; personal device/account use (no Stravos accounts); AI-tool disclosure (Claude/Claude Code, ChatGPT, Hermes, Codex; outputs normally human-reviewed); no known external-code copying; no known prior obligations; personal provider-account control and billing; intended personal asset sale | legal ownership; absence of unknown claims; AI-output copyrightability; provider-account assignability; trademark availability; documentary chain of title | July 2026 (re-attest on material change) | low-medium (self-reported, internally consistent with repo history) | operator (+ legal for verification) |
 
 **Freshness rule:** entries are point-in-time at the baseline SHA. A future
 Value Delta must re-stamp any entry it relies on.

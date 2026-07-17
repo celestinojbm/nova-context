@@ -36,6 +36,26 @@ proof; customer data; legal opinions; credentials and recovery codes. See
   absent / not verified / not applicable / premature) and never upgraded
   because a document merely says something exists.
 
+## Evidence classes (M17D)
+
+Where provenance matters (chain of title, accounts, attestations), facts
+carry one of these classes:
+
+- **`repository_verified`** — directly visible in the repository, git
+  history, CI, code, tests, or committed documentation.
+- **`operator_attested`** — a factual statement supplied by the operator but
+  not independently verified through documents or external records.
+- **`private_document_verified`** — a private record has been reviewed by an
+  authorized person, WITHOUT committing the record. (Not used until such a
+  review actually happens.)
+- **`professional_reviewed`** — reviewed by the appropriate legal,
+  accounting, security, or other professional. (Not used until such a review
+  actually happens.)
+- **`not_verified`** — no sufficient evidence currently available.
+
+**Operator attestation never equals legal verification**, and the repository
+must never imply that it does.
+
 ## Review cadence (see `VALUE_DELTA_POLICY.md`)
 
 Ordinary PR → nothing. Materially relevant PR → brief note in the PR

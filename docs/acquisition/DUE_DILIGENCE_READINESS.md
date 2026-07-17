@@ -38,13 +38,18 @@ postdeploy/recovery`) that honestly BLOCK without real credentials. No cost
 baseline, no performance baselines (Harness v1 deferred).
 
 ## 6. IP state
-**Ownership not verified** (R-01, the primary diligence blocker): owner
-entity undocumented; no assignments evidenced; git identities and AI
-co-author trailers are provenance signals awaiting operator confirmation and
-documentation — they do not by themselves prove third-party ownership.
+**Ownership not independently verified** (R-01, the primary diligence
+blocker), but narrowed at M17D: the operator attests intended personal
+ownership by the founder, sole human contributorship, personal
+device/account development (no Stravos accounts), no relevant prior
+obligations, and AI-tool provenance (Claude/Claude Code, ChatGPT, Hermes,
+Codex; outputs normally human-reviewed) — all `operator_attested` (EV-17,
+`CHAIN_OF_TITLE_STATUS.md`), not documentary evidence. Stravos ownership is
+not claimed. The documentary package and professional review remain absent.
 Separately, the **repository license posture is undecided** (R-13): no
 LICENSE or proprietary-use statement; to be resolved with legal review only
-after the owner is determined. Neither question is evidence for the other.
+after ownership is documentarily clarified. Neither question is evidence for
+the other.
 
 ## 7. Dependency/license state
 Prod tree enumerated (212 pkgs, permissive-dominant; 1 transitive LGPL
@@ -76,13 +81,16 @@ Solo-operated; synthetic-only validation; no scale/perf characterization;
 single-region assumptions; English-first OCR/redaction.
 
 ## 13. Available evidence
-See `EVIDENCE_INDEX.md` (EV-01…EV-16): code, tests, audits, gates, docs,
-runbooks, PR history — all at the baseline SHA.
+See `EVIDENCE_INDEX.md` (EV-01…EV-17): code, tests, audits, gates, docs,
+runbooks, PR history at the baseline SHA — plus the M17D operator
+chain-of-title attestation (EV-17, `operator_attested`) and the
+account/asset transfer plan (`ACCOUNT_AND_ASSET_TRANSFERABILITY.md`).
 
 ## 14. Missing evidence
-Ownership/assignments; real-deploy gate reports; cost/perf baselines;
-demand artifacts; entity/financial records; provider-account inventory;
-privacy policy/ToS.
+Documentary ownership verification (attestation exists; documents/review do
+not); real-deploy gate reports; cost/perf baselines; demand artifacts;
+entity/financial records; provider account-ownership proof (inventory now
+documented); privacy policy/ToS.
 
 ## 15. Questions a likely buyer would ask
 Who owns the code (incl. AI-assisted portions)? Can accounts/domains/keys
