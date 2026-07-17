@@ -1,6 +1,14 @@
 import { randomBytes } from "node:crypto";
-import { canonicalizeEndpoint, fingerprintIdentity, s3Identity } from "@nova/context-engine/object-store";
 import type { CheckOutcome, RunContext } from "../types.js";
+
+// NOTE: object-store identity helpers are imported LAZILY inside
+// s3RecoveryPrerequisites (see below), never at module top level. The gate CLI
+// builds the repo as its FIRST check (`pnpm build`), so `@nova/context-engine`'s
+// compiled `dist/object-store.js` does not exist when the CLI first loads in a
+// clean checkout. A static import here would crash the CLI at startup — before
+// the build check runs — in EVERY mode (config.ts loads every check module),
+// not just recovery. A dynamic import defers the resolution to the point the
+// check actually executes, matching the pattern in cli.ts.
 
 /**
  * Recovery-drill checks (M17B §3D). Prepared in M17B; a real drill runs only
@@ -133,6 +141,11 @@ export async function s3RecoveryPrerequisites(ctx: RunContext): Promise<CheckOut
     ctx.env.NOVA_BACKUP_S3_BUCKET &&
     ctx.env.NOVA_MEDIA_S3_BUCKET
   ) {
+    // Lazy import: the compiled dist is present by the time this check runs
+    // (build ran first), but must not be required at CLI load time.
+    const { canonicalizeEndpoint, fingerprintIdentity, s3Identity } = await import(
+      "@nova/context-engine/object-store"
+    );
     const scratch = fingerprintIdentity(
       s3Identity(canonicalizeEndpoint(ctx.env.NOVA_MEDIA_S3_ENDPOINT), ctx.env.NOVA_MEDIA_S3_BUCKET),
     );
