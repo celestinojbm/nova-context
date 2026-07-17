@@ -36,8 +36,9 @@ founder/operator, not independently verified:
   existence of Stravos during development does not prove Stravos ownership.
 - **No other human** wrote code, designed assets, contributed substantial
   documentation, or made substantial creative/architectural contributions.
-  No contributor or contractor assignment is applicable on the facts
-  currently supplied.
+  On the facts currently supplied, no contributor or contractor assignment
+  appears to be needed — whether that holds is a question for professional
+  legal review, not a conclusion of this document.
 - AI tools used: **Claude / Claude Code, ChatGPT, Hermes, Codex**. AI output
   was normally reviewed or directed by the operator before incorporation.
 - **No code was manually copied** from external websites, repositories,
@@ -55,8 +56,11 @@ founder/operator, not independently verified:
 
 ## 4. Repository-verified facts
 
-- Git history contains exactly two recorded identities: the operator account
-  and AI-assistant co-author trailers (EV-14).
+- The audited git history contains the recorded author/co-author labels
+  identified at the baseline: an operator-account label and AI-assistant
+  co-author trailers (EV-14). The operator attests there were no other human
+  contributors; final legal-identity classification of the recorded labels
+  remains pending professional review (R-01).
 - Commit trailers and session links evidence Claude/Claude Code as tooling;
   the other attested tools (ChatGPT, Hermes, Codex) are referenced in
   documentation (Hermes audit records) but are not independently evidenced
@@ -99,9 +103,11 @@ terms as of the development period.
 Intended owner: **the founder personally** (operator_attested). Stravos
 Enterprises LLC: existed during development, was not used for development
 accounts, is **not claimed to own any Nova asset**, and is not the intended
-owner at this time. No operator→Stravos assignment is required under the
-stated strategy; revisit only if the strategy changes. Personal ownership is
-**not legally proven** by this document.
+owner at this time. **No operator→Stravos assignment is currently planned**,
+because the operator's stated strategy is personal ownership of Nova —
+whether any confirmation, waiver, no-claim acknowledgment, assignment, or
+other instrument is advisable remains a question for professional legal
+review (§14). Personal ownership is **not legally proven** by this document.
 
 ## 9. Repository/account ownership
 

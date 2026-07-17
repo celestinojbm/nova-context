@@ -39,9 +39,9 @@ Stravos Enterprises LLC).
 |---|---|---|---|---|
 | Legal owner of Nova Context | founder personally (intended) | **operator_attested; documentary verification pending** | corporate records vault | legal |
 | Private signed authorship/ownership statement (founder) | founder personally | not verified (does not exist yet; do not commit it) | corporate records vault | legal |
-| IP assignment operator → Stravos | n/a under stated personal-ownership strategy | not applicable (do NOT create; revisit only if strategy changes) | corporate records vault | legal |
+| IP assignment / confirmation / waiver / no-claim instrument involving Stravos | founder + Stravos | **not currently planned** (stated strategy is personal ownership; none drafted here) — whether any such instrument is advisable is a question for professional legal review | corporate records vault | legal |
 | Confirmation Stravos claims no Nova ownership (if legal review recommends) | founder + Stravos | not verified | corporate records vault | legal |
-| Contributor/contractor assignments (none known; policy needed before any) | founder personally | not applicable today (sole human contributor operator_attested) / policy absent | corporate records vault | legal |
+| Contributor/contractor assignments (none known; policy needed before any) | founder personally | none appear needed on the attested facts (sole human contributor operator_attested) — advisability confirmed only at professional review; policy absent | corporate records vault | legal |
 | Employment/contractor agreements affecting Nova | founder personally | operator_attested: none relevant; verification pending | corporate records vault | legal |
 | Company formation + good standing (Stravos — context only; existed during development, not intended owner) | Stravos Enterprises LLC | operator_attested existence; records not verified | corporate records vault | legal + accounting |
 | Domain ownership (product domains) | founder personally (future) | operator_attested: **no Nova domain purchased** | registrar account records | operator |
