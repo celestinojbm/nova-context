@@ -108,10 +108,30 @@ export interface CheckSpec {
    * unrelated prerequisites are missing. Cascade-skipping applies only to
    * non-pure checks. */
   pure?: boolean;
+  /** M18A: an alwaysRun check executes even after an earlier required check
+   * failed/blocked (like `pure`, but for cleanup with side effects — e.g.
+   * revoking the in-gate synthetic session). Cleanup must never be
+   * cascade-skipped once resources exist. */
+  alwaysRun?: boolean;
   /** Either a child-process command… */
   command?: CommandSpec;
   /** …or an in-process function (prerequisite/posture/http checks). */
   fn?: (ctx: RunContext) => Promise<CheckOutcome>;
+}
+
+/** M18A: mutable per-run state for the in-gate synthetic session (approach
+ * B). Values live ONLY in process memory; `extraSecrets` feeds the sanitizer
+ * so a minted token/password can never reach a report even by accident. */
+export interface GateRuntime {
+  extraSecrets: string[];
+  session?: {
+    token: string;
+    email: string;
+    password: string;
+    /** true = the gate created this account and must delete it. */
+    bootstrapped: boolean;
+    cleaned?: boolean;
+  };
 }
 
 export interface RunContext {
@@ -121,6 +141,8 @@ export interface RunContext {
   flags: Record<string, string>;
   env: NodeJS.ProcessEnv;
   runCommand: CommandRunner;
+  /** M18A in-memory runtime state (synthetic session, minted secrets). */
+  runtime: GateRuntime;
 }
 
 export interface CommandResult {

@@ -15,16 +15,19 @@ export async function postdeployPrerequisites(ctx: RunContext): Promise<CheckOut
   } else if (!/^https?:\/\//.test(ctx.flags["base-url"])) {
     return { status: "failed", summary: "--base-url must be an http(s) URL" };
   }
+  // The invite serves BOTH the ops:smoke synthetic account and (M18A,
+  // approach B) the in-gate synthetic-session bootstrap that feeds the
+  // mandatory authenticated /v1/ops/status check. Without it — and without a
+  // pre-supplied NOVA_VALIDATE_SESSION_TOKEN (approach A) — the gate cannot
+  // authenticate and is BLOCKED, never a quiet skip (M17B.1 finding 3).
   if (!ctx.flags.invite && !ctx.env.NOVA_SMOKE_INVITE) {
     reasons.push("missing invite code (--invite or NOVA_SMOKE_INVITE) for the synthetic smoke account");
-  }
-  // M17B.1 finding 3: a post-deploy PASS must validate the AUTHENTICATED
-  // /v1/ops/status endpoint, so the operator session credential is a hard
-  // prerequisite — without it the gate is BLOCKED, never a quiet skip.
-  if (!ctx.env.NOVA_VALIDATE_SESSION_TOKEN) {
-    reasons.push(
-      "missing env: NOVA_VALIDATE_SESSION_TOKEN (operator session required for the mandatory authenticated /v1/ops/status check)",
-    );
+    if (!ctx.env.NOVA_VALIDATE_SESSION_TOKEN) {
+      reasons.push(
+        "no authentication path for the mandatory authenticated /v1/ops/status check " +
+          "(supply an invite for the in-gate synthetic session, or NOVA_VALIDATE_SESSION_TOKEN)",
+      );
+    }
   }
   if (reasons.length) {
     return {
@@ -35,8 +38,135 @@ export async function postdeployPrerequisites(ctx: RunContext): Promise<CheckOut
   }
   return {
     status: "passed",
-    summary: "deployment URL + synthetic-account invite + operator session available (values not printed)",
+    summary: ctx.env.NOVA_VALIDATE_SESSION_TOKEN
+      ? "deployment URL + invite + pre-supplied operator session available (values not printed)"
+      : "deployment URL + invite available; authenticated checks use an in-gate synthetic session (created, used in memory, then destroyed)",
   };
+}
+
+/** Minimal in-gate API helper (bootstrap/cleanup only). */
+async function apiCall(
+  base: string,
+  path: string,
+  init: { method?: string; token?: string; body?: unknown },
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const res = await fetch(new URL(path, base), {
+    method: init.method ?? "GET",
+    headers: {
+      "content-type": "application/json",
+      ...(init.token ? { authorization: `Bearer ${init.token}` } : {}),
+    },
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    signal: AbortSignal.timeout(15_000),
+  });
+  const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  return { status: res.status, body };
+}
+
+/**
+ * M18A §5 (approach B): create the synthetic validation session INSIDE the
+ * gate. The account is created with the synthetic invite, the session token
+ * lives only in process memory (ctx.runtime — also fed to the sanitizer so
+ * it can never reach argv, reports, or logs), and `synthetic_session_cleanup`
+ * (alwaysRun) deletes the account + revokes the session afterwards — even
+ * when a later check fails.
+ *
+ * Approach A remains supported: when NOVA_VALIDATE_SESSION_TOKEN is supplied,
+ * it is used as-is and no account is created (nothing to clean up).
+ */
+export async function syntheticSessionBootstrap(ctx: RunContext): Promise<CheckOutcome> {
+  const supplied = ctx.env.NOVA_VALIDATE_SESSION_TOKEN;
+  if (supplied) {
+    ctx.runtime.session = { token: supplied, email: "", password: "", bootstrapped: false };
+    ctx.runtime.extraSecrets.push(supplied);
+    return {
+      status: "passed",
+      summary: "using pre-supplied operator session (approach A); no in-gate account created",
+    };
+  }
+  const base = ctx.flags["base-url"];
+  const invite = ctx.flags.invite ?? ctx.env.NOVA_SMOKE_INVITE;
+  if (!base || !invite) {
+    return { status: "failed", summary: "bootstrap prerequisites absent at check time (prerequisite bypass?)" };
+  }
+  // Unique per run → reruns are idempotent (no email collision with a
+  // previous run's leftover account, which cleanup should have removed).
+  const email = `validate-${Date.now().toString(36)}-${randomHex(6)}@nova-validate.invalid`;
+  const password = `Vg1-${randomHex(24)}`;
+  ctx.runtime.extraSecrets.push(password);
+  try {
+    const signup = await apiCall(base, "/v1/auth/signup", {
+      method: "POST",
+      body: { email, password, invite_code: invite },
+    });
+    if (signup.status !== 201) {
+      return { status: "failed", summary: `synthetic signup failed (HTTP ${signup.status})` };
+    }
+    const login = await apiCall(base, "/v1/auth/login", { method: "POST", body: { email, password } });
+    const token = typeof login.body.token === "string" ? login.body.token : null;
+    if (login.status !== 200 || !token) {
+      return { status: "failed", summary: `synthetic login failed (HTTP ${login.status})` };
+    }
+    ctx.runtime.session = { token, email, password, bootstrapped: true };
+    ctx.runtime.extraSecrets.push(token);
+    return {
+      status: "passed",
+      summary: "in-gate synthetic session created (token held in memory only; account will be deleted by cleanup)",
+    };
+  } catch (err) {
+    return { status: "failed", summary: sanitize(`synthetic bootstrap unreachable: ${(err as Error).message}`) };
+  }
+}
+
+/**
+ * M18A §5: destroy the in-gate synthetic session — ALWAYS runs (never
+ * cascade-skipped), so a failure between bootstrap and cleanup cannot leak a
+ * synthetic account. Deletion goes through the REAL account-deletion flow
+ * (password + typed confirm), which also revokes every session; the check
+ * then PROVES cleanup by requiring the deleted credentials to stop working.
+ */
+export async function syntheticSessionCleanup(ctx: RunContext): Promise<CheckOutcome> {
+  const s = ctx.runtime.session;
+  if (!s || !s.bootstrapped) {
+    // Required checks never self-skip (M17B.1 finding 4). Verifying that no
+    // in-gate account exists IS this check's assertion — that's a pass.
+    return {
+      status: "passed",
+      summary: "nothing to clean: no in-gate synthetic account was created (pre-supplied token or bootstrap never ran)",
+    };
+  }
+  const base = ctx.flags["base-url"];
+  try {
+    const del = await apiCall(base!, "/v1/auth/account/delete", {
+      method: "POST",
+      token: s.token,
+      body: { password: s.password, confirm: "DELETE" },
+    });
+    if (del.status !== 200) {
+      return { status: "failed", summary: `synthetic account deletion failed (HTTP ${del.status}) — manual cleanup required` };
+    }
+    // Prove cleanup: the deleted account's credentials must be dead.
+    const relogin = await apiCall(base!, "/v1/auth/login", {
+      method: "POST",
+      body: { email: s.email, password: s.password },
+    });
+    if (relogin.status === 200) {
+      return { status: "failed", summary: "synthetic account still authenticates after deletion (cleanup NOT proven)" };
+    }
+    s.cleaned = true;
+    return {
+      status: "passed",
+      summary: `synthetic account deleted + session revoked (post-delete login HTTP ${relogin.status} — cleanup proven)`,
+    };
+  } catch (err) {
+    return { status: "failed", summary: sanitize(`cleanup unreachable: ${(err as Error).message} — manual cleanup required`) };
+  }
+}
+
+function randomHex(bytes: number): string {
+  const buf = new Uint8Array(bytes);
+  crypto.getRandomValues(buf);
+  return [...buf].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 /** Public /readyz: must return HTTP success AND ready:true (booleans-only
@@ -93,11 +223,14 @@ const RAW_ERROR_PATTERNS: RegExp[] = [
  *   3. sanitizer diff (DSNs, keys, tokens, data: URLs).
  */
 export async function opsStatusAuthed(ctx: RunContext): Promise<CheckOutcome> {
-  const token = ctx.env.NOVA_VALIDATE_SESSION_TOKEN;
+  // M18A: the token comes from the in-memory runtime session (in-gate
+  // bootstrap, approach B) or the pre-supplied env token (approach A) —
+  // never from argv, never persisted.
+  const token = ctx.runtime.session?.token ?? ctx.env.NOVA_VALIDATE_SESSION_TOKEN;
   if (!token) {
-    // Defence in depth: prerequisites already block on a missing token; a
-    // required check must still never self-skip into a PASS.
-    return { status: "failed", summary: "operator session token absent at check time (prerequisite bypass?)" };
+    // Defence in depth: prerequisites/bootstrap already fail without an
+    // authentication path; a required check must still never self-skip.
+    return { status: "failed", summary: "no session token available at check time (prerequisite bypass?)" };
   }
   const started = Date.now();
   try {

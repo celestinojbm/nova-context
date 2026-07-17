@@ -10,6 +10,7 @@ const ctx = (over: Partial<RunContext> = {}): RunContext => ({
   flags: {},
   env: { ...process.env },
   runCommand,
+  runtime: { extraSecrets: [] },
   ...over,
 });
 

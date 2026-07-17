@@ -1,0 +1,159 @@
+# ============================================================================
+# Nova Context — Render Blueprint DRAFT (M18A). NOT SYNCED, NOT APPLIED.
+# ============================================================================
+# This file describes the proposed first controlled synthetic deployment on
+# Render (M18 Phase B). It is committed for review only:
+#   - creating these resources requires the operator's explicit
+#     "APPROVE M18 PROVISIONING" authorization (docs/M18_PREPROVISION_READINESS.md);
+#   - autoDeployTrigger is OFF everywhere — pushing this repo NEVER deploys;
+#   - env vars are NAMES ONLY (sync: false = set in the Render dashboard /
+#     secret store; no value ever lives in git);
+#   - no web frontend service initially (deferred; smoke targets the API);
+#   - no domain, no DNS, no autoscaling, no paid add-ons.
+# Region: virginia (operator-proposed; confirm at authorization). Plans are
+# the smallest paid tiers; exact prices are confirmed in the dashboard BEFORE
+# creation and compared against the authorized monthly cap.
+# ============================================================================
+
+previews:
+  generation: "off" # no PR preview environments (cost + surface control)
+
+services:
+  # --- API -------------------------------------------------------------------
+  - type: web
+    name: nova-api
+    runtime: docker
+    plan: starter
+    region: virginia
+    dockerfilePath: ./infra/deploy/api.Dockerfile
+    dockerContext: .
+    healthCheckPath: /readyz
+    autoDeployTrigger: "off"
+    # M18A §3: the Validation Gate predeploy mode runs INSIDE Render with the
+    # internal DATABASE_URL/REDIS_URL, after the image build and BEFORE the
+    # new version takes traffic. FAIL or BLOCKED exits non-zero → the deploy
+    # is aborted. (The gate's preflight covers migration state; migrations
+    # themselves run via the API preDeploy path documented in DEPLOY.md.)
+    preDeployCommand: pnpm validate:predeploy
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3001"
+      - key: NOVA_SIGNUP
+        value: invite
+      - key: NOVA_REDACTION
+        value: "on"
+      - key: NOVA_IMAGE_REDACTION
+        value: "on"
+      - key: NOVA_SCREENSHOT_STORAGE
+        value: "on"
+      - key: NOVA_CLOUD_ENRICHMENT
+        value: "off"
+      - key: NOVA_LIVE_QA
+        value: "off"
+      - key: NOVA_ANALYTICS
+        value: local
+      - key: NOVA_MEDIA_STORE
+        value: s3
+      # Secrets + operator-supplied values: NAMES only, set in the dashboard.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: nova-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: nova-keyvalue
+          property: connectionString
+      - key: NOVA_ENCRYPTION_KEY
+        sync: false
+      - key: NOVA_BACKUP_KEY
+        sync: false
+      - key: NOVA_ALPHA_INVITE_CODE
+        sync: false
+      - key: NOVA_MEDIA_S3_BUCKET
+        sync: false
+      - key: NOVA_MEDIA_S3_REGION
+        sync: false
+      - key: NOVA_MEDIA_S3_ENDPOINT
+        sync: false
+      - key: NOVA_MEDIA_S3_ACCESS_KEY_ID
+        sync: false
+      - key: NOVA_MEDIA_S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: NOVA_BACKUP_S3_BUCKET
+        sync: false
+      - key: NOVA_BACKUP_S3_ACCESS_KEY_ID
+        sync: false
+      - key: NOVA_BACKUP_S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: NOVA_VALIDATE_EVIDENCE_S3_BUCKET
+        sync: false
+      - key: NOVA_VALIDATE_EVIDENCE_S3_ENDPOINT
+        sync: false
+      - key: NOVA_VALIDATE_EVIDENCE_S3_ACCESS_KEY_ID
+        sync: false
+      - key: NOVA_VALIDATE_EVIDENCE_S3_SECRET_ACCESS_KEY
+        sync: false
+
+  # --- Worker ----------------------------------------------------------------
+  - type: worker
+    name: nova-worker
+    runtime: docker
+    plan: starter
+    region: virginia
+    dockerfilePath: ./infra/deploy/worker.Dockerfile
+    dockerContext: .
+    autoDeployTrigger: "off"
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NOVA_CLOUD_ENRICHMENT
+        value: "off"
+      - key: NOVA_ANALYTICS
+        value: local
+      - key: NOVA_ACTION_QUEUE
+        value: action-execution
+      - key: NOVA_MEDIA_STORE
+        value: s3
+      - key: DATABASE_URL
+        fromDatabase:
+          name: nova-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: nova-keyvalue
+          property: connectionString
+      - key: NOVA_ENCRYPTION_KEY
+        sync: false
+      - key: NOVA_MEDIA_S3_BUCKET
+        sync: false
+      - key: NOVA_MEDIA_S3_REGION
+        sync: false
+      - key: NOVA_MEDIA_S3_ENDPOINT
+        sync: false
+      - key: NOVA_MEDIA_S3_ACCESS_KEY_ID
+        sync: false
+      - key: NOVA_MEDIA_S3_SECRET_ACCESS_KEY
+        sync: false
+
+  # --- Queue store (Valkey — Redis-compatible; ioredis/BullMQ verified) ------
+  - type: keyvalue
+    name: nova-keyvalue
+    plan: starter
+    region: virginia
+    # Queues carry jobs: never evict, persist journal+snapshot (paid plans).
+    maxmemoryPolicy: noeviction
+    ipAllowList: [] # internal/private access only — never public
+
+# --- Postgres 16 + pgvector --------------------------------------------------
+databases:
+  - name: nova-postgres
+    plan: basic-256mb
+    region: virginia
+    postgresMajorVersion: "16"
+    # pgvector: `CREATE EXTENSION vector` is executed by the Nova migrations;
+    # verified as an M18 provisioning step before first deploy.
+    ipAllowList: [] # internal/private access only — never public

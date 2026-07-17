@@ -67,3 +67,14 @@ baseline.
   personal accounts create future migration work; account transferability is
   provider-dependent (assume buyer-recreates); no domain/brand ownership
   evidence (none exists); no real deployment.
+
+## M18A Value Delta (brief) — executable cloud-media recovery
+
+- **Primary effect:** executable cloud-media recovery added (S3/R2 media
+  backup/verify/restore with authenticated inventories, proven end-to-end
+  against a real S3 API in CI) and provider-independent recovery improved
+  (ObjectStore-based; MinIO/S3/R2 identical path). Gate hardening:
+  self-cleaning synthetic sessions, ephemeral-job evidence retention,
+  reviewed unapplied Render Blueprint.
+- **No production evidence yet:** nothing provisioned or deployed; the
+  infrastructure score cap remains; **no score change** (59/100).

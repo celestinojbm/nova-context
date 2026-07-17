@@ -9,6 +9,9 @@
     "test": "vitest run",
     "gate": "tsx src/cli.ts"
   },
+  "dependencies": {
+    "@nova/context-engine": "workspace:*"
+  },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "tsx": "^4.19.0",

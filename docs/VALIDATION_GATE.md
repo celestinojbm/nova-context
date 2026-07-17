@@ -90,6 +90,35 @@ must classify the target as local scratch (loopback + non-production) or the
 gate blocks; the backup is verified **before** any destructive restore step;
 raw DSNs and keys are never printed.
 
+### M18A additions (pre-provision closure)
+
+- **In-gate synthetic session (postdeploy, approach B).** The gate now
+  bootstraps its own synthetic validation session: unique account via the
+  invite → login → token held ONLY in process memory (registered as a
+  sanitizer extra-secret, so it cannot reach argv, reports, or logs) → the
+  mandatory authenticated `/v1/ops/status` check → `synthetic_session_cleanup`
+  (required, **alwaysRun** — never cascade-skipped) deletes the account
+  through the real deletion flow (revoking all sessions) and PROVES cleanup
+  by requiring the dead credentials to stop authenticating. A pre-supplied
+  `NOVA_VALIDATE_SESSION_TOKEN` (approach A) is still honored — then no
+  account is created and cleanup passes with "nothing to clean".
+- **Evidence retention.** With `NOVA_VALIDATE_EVIDENCE_S3_*` configured, the
+  sanitized `report.json`/`report.md`/`junit.xml` + a hash-bearing
+  `meta.json` are uploaded to `validation-evidence/<mode>/<run-id>/` in the
+  PRIVATE evidence store (ephemeral CI/Render-job filesystems lose local
+  reports). Upload failure prints `EVIDENCE RETENTION FAILED` and is never
+  silently claimed; `NOVA_VALIDATE_EVIDENCE_REQUIRED=yes` folds the failure
+  into the exit code.
+- **Render execution model.** predeploy runs as the API service's
+  pre-deploy command (inside Render, internal DSNs, deploy aborts on
+  FAIL/BLOCKED); postdeploy/recovery run as one-off jobs with narrowly
+  scoped env (recovery: scratch resources + backup-bucket read only). See
+  `docs/M18_PREPROVISION_READINESS.md` §3.
+- **S3 media recovery.** `validate:recovery`'s media path is now executable
+  on S3/R2 stores via `media:backup-s3` / `media:verify-backup-s3` /
+  `media:restore-s3` (encrypted-as-stored copies, HMAC-authenticated
+  inventory, scratch-only restore). Proven end-to-end against MinIO in CI.
+
 ## Outcomes
 
 - **PASS** — all mandatory checks ran and passed.

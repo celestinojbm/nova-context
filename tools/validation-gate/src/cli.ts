@@ -83,7 +83,14 @@ async function main(): Promise<void> {
     console.error("--debug is refused in CI (verbose local-only mode; output stays sanitized regardless).");
   }
 
-  const ctx: RunContext = { repoRoot, mode, flags, env: process.env, runCommand };
+  const ctx: RunContext = {
+    repoRoot,
+    mode,
+    flags,
+    env: process.env,
+    runCommand,
+    runtime: { extraSecrets: [] },
+  };
   console.log(`validation-gate: mode=${mode} (see --help for outcome semantics; no real user data, ever)`);
   const report = await runGate({ mode, ctx });
 
@@ -95,9 +102,46 @@ async function main(): Promise<void> {
   const mdPath = join(runDir, "report.md");
   writeFileSync(jsonPath, toJson(report));
   writeFileSync(mdPath, toMarkdown(report));
-  writeFileSync(join(runDir, "junit.xml"), toJUnit(report));
+  const junitPath = join(runDir, "junit.xml");
+  writeFileSync(junitPath, toJUnit(report));
   copyFileSync(jsonPath, join(outRoot, "latest.json"));
   copyFileSync(mdPath, join(outRoot, "latest.md"));
+
+  // M18A §4: retain sanitized evidence in the operator's PRIVATE evidence
+  // store (ephemeral Render jobs lose their filesystem). Upload failure is
+  // loud and never silently claimed as retained.
+  let evidenceExit = 0;
+  if (process.env.NOVA_VALIDATE_EVIDENCE_S3_BUCKET) {
+    const { S3ObjectStore } = await import("@nova/context-engine/object-store");
+    const { retainEvidence } = await import("./evidence.js");
+    const store = new S3ObjectStore({
+      bucket: process.env.NOVA_VALIDATE_EVIDENCE_S3_BUCKET,
+      region: process.env.NOVA_VALIDATE_EVIDENCE_S3_REGION ?? "us-east-1",
+      endpoint: process.env.NOVA_VALIDATE_EVIDENCE_S3_ENDPOINT,
+      accessKeyId: process.env.NOVA_VALIDATE_EVIDENCE_S3_ACCESS_KEY_ID ?? "",
+      secretAccessKey: process.env.NOVA_VALIDATE_EVIDENCE_S3_SECRET_ACCESS_KEY ?? "",
+    });
+    const retained = await retainEvidence({
+      store,
+      mode,
+      runId: report.run_id,
+      outcome: report.outcome,
+      gitSha: report.git_sha,
+      files: [{ path: jsonPath }, { path: mdPath }, { path: junitPath }],
+    });
+    if (retained.ok) {
+      console.log(`evidence retained: ${retained.prefix} (${retained.uploaded.length} files)`);
+      for (const [name, hash] of Object.entries(retained.hashes)) {
+        console.log(`  sha256 ${name}: ${hash}`);
+      }
+    } else {
+      console.error(`EVIDENCE RETENTION FAILED: ${retained.error ?? "unknown error"}`);
+      console.error("  reports exist ONLY on this (possibly ephemeral) filesystem — do NOT claim full evidence retention.");
+      if (process.env.NOVA_VALIDATE_EVIDENCE_REQUIRED === "yes") evidenceExit = 1;
+    }
+  } else {
+    console.log("evidence retention: not configured (NOVA_VALIDATE_EVIDENCE_S3_BUCKET unset) — reports are local only");
+  }
 
   // Console summary (sanitized fields only).
   for (const c of report.checks) {
@@ -116,7 +160,7 @@ async function main(): Promise<void> {
   if (report.outcome === "BLOCKED") {
     console.log("note: BLOCKED is not a pass — supply the missing operator prerequisites and re-run.");
   }
-  process.exit(exitCodeFor(report.outcome, mode));
+  process.exit(Math.max(exitCodeFor(report.outcome, mode), evidenceExit));
 }
 
 main().catch((err) => {

@@ -4,7 +4,13 @@ import {
   predeployFeaturePosture,
   predeployPrerequisites,
 } from "./checks/prerequisites.js";
-import { opsStatusAuthed, postdeployPrerequisites, readyz } from "./checks/postdeploy.js";
+import {
+  opsStatusAuthed,
+  postdeployPrerequisites,
+  readyz,
+  syntheticSessionBootstrap,
+  syntheticSessionCleanup,
+} from "./checks/postdeploy.js";
 import { recoveryPrerequisites, scratchTargetGuard, wrongBackupKey } from "./checks/recovery.js";
 import type { CheckSpec, Mode, RunContext } from "./types.js";
 
@@ -162,8 +168,22 @@ function postdeployChecks(ctx: RunContext): CheckSpec[] {
       fn: readyz,
     },
     {
+      // M18A §5 (approach B): the authenticated checks use an in-gate
+      // synthetic session — created here, held only in memory, destroyed by
+      // synthetic_session_cleanup below. A pre-supplied
+      // NOVA_VALIDATE_SESSION_TOKEN (approach A) is used as-is instead.
+      id: "synthetic_session_bootstrap",
+      name: "Synthetic validation session (in-memory bootstrap via invite, or pre-supplied token)",
+      category: "security",
+      severity: "P1",
+      required: true,
+      timeoutMs: 60_000,
+      fn: syntheticSessionBootstrap,
+    },
+    {
       // M17B.1 finding 3: MANDATORY — a post-deploy PASS must validate the
-      // authenticated status endpoint (token is a hard prerequisite above).
+      // authenticated status endpoint (an authentication path is a hard
+      // prerequisite above; the token itself is bootstrapped in-gate).
       id: "ops_status_authed",
       name: "Authenticated /v1/ops/status (JSON contract + raw-error/leak detection)",
       category: "privacy",
@@ -184,6 +204,20 @@ function postdeployChecks(ctx: RunContext): CheckSpec[] {
         args: ["--filter", "@nova/api", "ops:smoke", "--", `--base-url=${base}`],
         env: invite ? { NOVA_SMOKE_INVITE: invite } : undefined,
       },
+    },
+    {
+      // M18A §5: cleanup ALWAYS runs (never cascade-skipped) so a failure
+      // mid-validation cannot leak the synthetic account. Deleting the
+      // account revokes its sessions; the check proves post-delete login
+      // fails. Required: a leftover synthetic account is a hygiene failure.
+      id: "synthetic_session_cleanup",
+      name: "Synthetic session destroyed (account deleted, session revoked, cleanup proven)",
+      category: "privacy",
+      severity: "P1",
+      required: true,
+      alwaysRun: true,
+      timeoutMs: 60_000,
+      fn: syntheticSessionCleanup,
     },
   ];
 }

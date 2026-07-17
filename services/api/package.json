@@ -23,6 +23,9 @@
     "ops:smoke": "tsx src/db/run-smoke.ts",
     "ops:report": "tsx src/db/run-report.ts",
     "backup:seal": "tsx src/backup/run-seal.ts",
+    "media:backup-s3": "tsx src/backup/run-media-backup-s3.ts",
+    "media:verify-backup-s3": "tsx src/backup/run-media-verify-backup-s3.ts",
+    "media:restore-s3": "tsx src/backup/run-media-restore-s3.ts",
     "backup:verify": "tsx src/backup/run-verify.ts",
     "backup:restore-guard": "tsx src/backup/run-restore-guard.ts"
   },

@@ -30,6 +30,7 @@ const ctx = (over: Partial<RunContext>): RunContext => ({
   flags: {},
   env: {} as NodeJS.ProcessEnv,
   runCommand: fakeRunner().runner,
+  runtime: { extraSecrets: [] },
   ...over,
 });
 
@@ -113,12 +114,22 @@ describe("finding 2: unsafe supplied config cannot hide behind missing prerequis
 });
 
 describe("finding 3: authenticated /v1/ops/status is mandatory for post-deploy", () => {
-  it("prerequisites: missing NOVA_VALIDATE_SESSION_TOKEN → BLOCKED naming the credential", async () => {
+  it("prerequisites: no token but invite present → passed (M18A in-gate bootstrap covers the authed check)", async () => {
     const out = await postdeployPrerequisites(
       ctx({ mode: "postdeploy", flags: { "base-url": "http://localhost:9", invite: "x" } }),
     );
+    expect(out.status).toBe("passed");
+    expect(out.summary).toContain("in-gate synthetic session");
+  });
+
+  it("prerequisites: NO authentication path (no invite AND no token) → BLOCKED naming both options", async () => {
+    const out = await postdeployPrerequisites(
+      ctx({ mode: "postdeploy", flags: { "base-url": "http://localhost:9" } }),
+    );
     expect(out.status).toBe("blocked");
-    expect(out.blockingReasons?.join(" ")).toContain("NOVA_VALIDATE_SESSION_TOKEN");
+    const reasons = out.blockingReasons?.join(" ") ?? "";
+    expect(reasons).toContain("NOVA_VALIDATE_SESSION_TOKEN");
+    expect(reasons).toContain("invite");
   });
 
   it("the check is required in the postdeploy config", async () => {

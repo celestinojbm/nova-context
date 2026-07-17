@@ -62,9 +62,20 @@ pg_dump --format=custom --file="$WORK/nova-db-$STAMP.dump" "$DATABASE_URL"
 if [ -n "${NOVA_MEDIA_FS_ROOT:-}" ] && [ -d "${NOVA_MEDIA_FS_ROOT}" ]; then
   echo "→ Media store tar (private workspace)"
   tar -czf "$WORK/nova-media-$STAMP.tar.gz" -C "$NOVA_MEDIA_FS_ROOT" .
+elif [ "${NOVA_MEDIA_STORE:-fs}" = "s3" ] && [ -n "${NOVA_BACKUP_S3_BUCKET:-}" ]; then
+  # M18A: S3/R2 media store — copy DB-referenced ENCRYPTED blobs, as stored,
+  # into the separate backup bucket + write an HMAC-authenticated inventory
+  # (media-inventory-$STAMP.json) next to the sealed DB artifacts. No
+  # decryption, no plaintext, no reliance on unverified bucket replication.
+  echo "→ Media store: s3 — media:backup-s3 into NOVA_BACKUP_S3_BUCKET"
+  MEDIA_INV="$WORK/media-inv"
+  mkdir -p "$MEDIA_INV"; chmod 700 "$MEDIA_INV"
+  ( cd "$REPO_ROOT" && pnpm --filter @nova/api --silent media:backup-s3 -- \
+      --stamp="$STAMP" --out="$MEDIA_INV" --apply ) || {
+        echo "ERROR: media:backup-s3 failed — backup INCOMPLETE (db only)." >&2; exit 1; }
 else
-  echo "→ Media store: NOVA_MEDIA_FS_ROOT not set or missing — skipping"
-  echo "  (s3 store: rely on bucket versioning/replication + SSE instead)"
+  echo "→ Media store: no fs root and no NOVA_BACKUP_S3_BUCKET — media NOT backed up" >&2
+  echo "  s3 store: set NOVA_BACKUP_S3_BUCKET (+ scoped creds) so media:backup-s3 runs (M18A)." >&2
 fi
 
 # Seal FROM the private workspace INTO a staging dir inside it. Only sealed
@@ -78,6 +89,11 @@ mkdir -p "$SEALED"; chmod 700 "$SEALED"
 # Publish ONLY sealed artifacts + manifest into the final dir. If anything
 # above failed, we never reach here and the final dir stays plaintext-free.
 mv "$SEALED"/*.enc "$SEALED"/manifest-"$STAMP".json "$DEST"/
+# M18A: publish the media-backup inventory too (HMAC-authenticated; contains
+# object keys + ciphertext hashes only — no secrets, no content).
+if [ -f "$WORK/media-inv/media-inventory-$STAMP.json" ]; then
+  mv "$WORK/media-inv/media-inventory-$STAMP.json" "$DEST"/
+fi
 
 echo "Backup complete: $DEST (sealed db + media as of $STAMP)"
 echo "REMINDER: NOVA_BACKUP_KEY and NOVA_ENCRYPTION_KEY live in your secret store, NOT here."
