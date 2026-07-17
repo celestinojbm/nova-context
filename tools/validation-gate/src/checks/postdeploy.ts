@@ -15,19 +15,17 @@ export async function postdeployPrerequisites(ctx: RunContext): Promise<CheckOut
   } else if (!/^https?:\/\//.test(ctx.flags["base-url"])) {
     return { status: "failed", summary: "--base-url must be an http(s) URL" };
   }
-  // The invite serves BOTH the ops:smoke synthetic account and (M18A,
-  // approach B) the in-gate synthetic-session bootstrap that feeds the
-  // mandatory authenticated /v1/ops/status check. Without it — and without a
-  // pre-supplied NOVA_VALIDATE_SESSION_TOKEN (approach A) — the gate cannot
-  // authenticate and is BLOCKED, never a quiet skip (M17B.1 finding 3).
+  // The invite is MANDATORY: it feeds BOTH the ops:smoke synthetic account and
+  // (M17B.1 finding 3 / M18A approach B) the in-gate synthetic-session
+  // bootstrap that provides the mandatory authenticated /v1/ops/status check.
+  // Without it the gate cannot authenticate and is BLOCKED — never a quiet
+  // skip. A pre-supplied NOVA_VALIDATE_SESSION_TOKEN (approach A) is an
+  // OPTIONAL override for the authed check; it does not remove the invite need
+  // (ops:smoke still creates its own synthetic account).
   if (!ctx.flags.invite && !ctx.env.NOVA_SMOKE_INVITE) {
-    reasons.push("missing invite code (--invite or NOVA_SMOKE_INVITE) for the synthetic smoke account");
-    if (!ctx.env.NOVA_VALIDATE_SESSION_TOKEN) {
-      reasons.push(
-        "no authentication path for the mandatory authenticated /v1/ops/status check " +
-          "(supply an invite for the in-gate synthetic session, or NOVA_VALIDATE_SESSION_TOKEN)",
-      );
-    }
+    reasons.push(
+      "missing invite (--invite or NOVA_SMOKE_INVITE) — required for the synthetic smoke account AND the in-gate authenticated session",
+    );
   }
   if (reasons.length) {
     return {
@@ -39,7 +37,7 @@ export async function postdeployPrerequisites(ctx: RunContext): Promise<CheckOut
   return {
     status: "passed",
     summary: ctx.env.NOVA_VALIDATE_SESSION_TOKEN
-      ? "deployment URL + invite + pre-supplied operator session available (values not printed)"
+      ? "deployment URL + invite available; authenticated checks use the pre-supplied operator session (revoked by cleanup)"
       : "deployment URL + invite available; authenticated checks use an in-gate synthetic session (created, used in memory, then destroyed)",
   };
 }
@@ -63,25 +61,42 @@ async function apiCall(
   return { status: res.status, body };
 }
 
+const CLEANUP_ATTEMPTS = 3;
+const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** A synthetic account handle is safe to print for operator cleanup — it is a
+ * generated `@nova-validate.invalid` address, never a secret. The password,
+ * token, and invite never appear anywhere (they are sanitizer extra-secrets). */
+function syntheticHandle(email: string): string {
+  return email || "(unknown synthetic account)";
+}
+
 /**
- * M18A §5 (approach B): create the synthetic validation session INSIDE the
- * gate. The account is created with the synthetic invite, the session token
- * lives only in process memory (ctx.runtime — also fed to the sanitizer so
- * it can never reach argv, reports, or logs), and `synthetic_session_cleanup`
- * (alwaysRun) deletes the account + revokes the session afterwards — even
- * when a later check fails.
+ * M18A §5 / M18A.1 finding 4: create the synthetic validation session INSIDE
+ * the gate. The account is recorded (state `account_created`) the INSTANT
+ * signup succeeds — BEFORE login is attempted — so a login/network failure
+ * still leaves an explicit handle for `synthetic_session_cleanup` to recover
+ * and delete. Token/password live only in process memory and are sanitizer
+ * extra-secrets, so they can never reach argv, reports, or logs.
  *
- * Approach A remains supported: when NOVA_VALIDATE_SESSION_TOKEN is supplied,
- * it is used as-is and no account is created (nothing to clean up).
+ * Approach A (pre-supplied NOVA_VALIDATE_SESSION_TOKEN): the token is used
+ * as-is, but it is NOT a free pass — cleanup REVOKES it (POST /v1/auth/logout)
+ * and proves it is dead, so a supplied live session can never be left active.
  */
 export async function syntheticSessionBootstrap(ctx: RunContext): Promise<CheckOutcome> {
   const supplied = ctx.env.NOVA_VALIDATE_SESSION_TOKEN;
   if (supplied) {
-    ctx.runtime.session = { token: supplied, email: "", password: "", bootstrapped: false };
+    ctx.runtime.session = {
+      state: "authenticated",
+      email: "",
+      password: "",
+      token: supplied,
+      bootstrapped: false,
+    };
     ctx.runtime.extraSecrets.push(supplied);
     return {
       status: "passed",
-      summary: "using pre-supplied operator session (approach A); no in-gate account created",
+      summary: "using pre-supplied operator session (approach A); it will be REVOKED + proven dead by cleanup",
     };
   }
   const base = ctx.flags["base-url"];
@@ -94,73 +109,178 @@ export async function syntheticSessionBootstrap(ctx: RunContext): Promise<CheckO
   const email = `validate-${Date.now().toString(36)}-${randomHex(6)}@nova-validate.invalid`;
   const password = `Vg1-${randomHex(24)}`;
   ctx.runtime.extraSecrets.push(password);
+
+  let signupStatus: number;
   try {
     const signup = await apiCall(base, "/v1/auth/signup", {
       method: "POST",
       body: { email, password, invite_code: invite },
     });
-    if (signup.status !== 201) {
-      return { status: "failed", summary: `synthetic signup failed (HTTP ${signup.status})` };
-    }
+    signupStatus = signup.status;
+  } catch (err) {
+    // Signup itself failed → no account exists → nothing to clean.
+    return { status: "failed", summary: sanitize(`synthetic signup unreachable: ${(err as Error).message}`) };
+  }
+  if (signupStatus !== 201) {
+    return { status: "failed", summary: `synthetic signup failed (HTTP ${signupStatus})` };
+  }
+  // Account exists NOW — record it before anything else can fail.
+  ctx.runtime.session = { state: "account_created", email, password, bootstrapped: true };
+
+  try {
     const login = await apiCall(base, "/v1/auth/login", { method: "POST", body: { email, password } });
     const token = typeof login.body.token === "string" ? login.body.token : null;
     if (login.status !== 200 || !token) {
-      return { status: "failed", summary: `synthetic login failed (HTTP ${login.status})` };
+      // Account exists but we could not authenticate. Cleanup recovers it.
+      return {
+        status: "failed",
+        summary: `synthetic login failed (HTTP ${login.status}); account recorded — cleanup will recover + delete it`,
+      };
     }
-    ctx.runtime.session = { token, email, password, bootstrapped: true };
+    ctx.runtime.session.token = token;
+    ctx.runtime.session.state = "authenticated";
     ctx.runtime.extraSecrets.push(token);
     return {
       status: "passed",
-      summary: "in-gate synthetic session created (token held in memory only; account will be deleted by cleanup)",
+      summary: "in-gate synthetic session created (token in memory only; account deleted by cleanup)",
     };
   } catch (err) {
-    return { status: "failed", summary: sanitize(`synthetic bootstrap unreachable: ${(err as Error).message}`) };
+    // Network failure AFTER signup — the account exists; cleanup recovers it.
+    return {
+      status: "failed",
+      summary: sanitize(`synthetic login unreachable after signup: ${(err as Error).message}; cleanup will recover + delete`),
+    };
   }
 }
 
+/** Try to (re)obtain a token for the synthetic account, bounded retries. */
+async function recoverToken(base: string, email: string, password: string): Promise<string | null> {
+  for (let attempt = 0; attempt < CLEANUP_ATTEMPTS; attempt++) {
+    try {
+      const login = await apiCall(base, "/v1/auth/login", { method: "POST", body: { email, password } });
+      if (login.status === 200 && typeof login.body.token === "string") return login.body.token;
+    } catch {
+      // fall through to retry
+    }
+    await delay(500 * (attempt + 1));
+  }
+  return null;
+}
+
+/** Delete the synthetic account (real flow: password + typed DELETE), bounded
+ * retries against transient network failures. Returns the last HTTP status, or
+ * null if every attempt threw. */
+async function deleteAccount(
+  base: string,
+  token: string,
+  password: string,
+): Promise<number | null> {
+  let last: number | null = null;
+  for (let attempt = 0; attempt < CLEANUP_ATTEMPTS; attempt++) {
+    try {
+      const del = await apiCall(base, "/v1/auth/account/delete", {
+        method: "POST",
+        token,
+        body: { password, confirm: "DELETE" },
+      });
+      last = del.status;
+      if (del.status === 200) return 200;
+    } catch {
+      last = null;
+    }
+    await delay(500 * (attempt + 1));
+  }
+  return last;
+}
+
 /**
- * M18A §5: destroy the in-gate synthetic session — ALWAYS runs (never
- * cascade-skipped), so a failure between bootstrap and cleanup cannot leak a
- * synthetic account. Deletion goes through the REAL account-deletion flow
- * (password + typed confirm), which also revokes every session; the check
- * then PROVES cleanup by requiring the deleted credentials to stop working.
+ * M18A §5 / M18A.1 finding 4: destroy the synthetic session — ALWAYS runs
+ * (never cascade-skipped), so a failure anywhere after signup cannot leak a
+ * synthetic account. Handles every lifecycle state:
+ *   - approach A (supplied token): REVOKE via /v1/auth/logout and prove the
+ *     token no longer authenticates;
+ *   - authenticated (approach B): delete via the real flow, prove dead;
+ *   - account_created (login had failed): RECOVER a token via bounded re-login,
+ *     then delete + prove; if unrecoverable, FAIL loudly with a sanitized
+ *     synthetic handle for operator cleanup — never "nothing to clean".
+ * In-memory secret references are cleared once cleanup finishes.
  */
 export async function syntheticSessionCleanup(ctx: RunContext): Promise<CheckOutcome> {
   const s = ctx.runtime.session;
-  if (!s || !s.bootstrapped) {
-    // Required checks never self-skip (M17B.1 finding 4). Verifying that no
-    // in-gate account exists IS this check's assertion — that's a pass.
+  const base = ctx.flags["base-url"];
+  if (!s || s.state === "not_started") {
+    // Bootstrap never created anything (e.g. signup itself failed).
+    return { status: "passed", summary: "no synthetic account was created — nothing to clean" };
+  }
+
+  // Approach A: revoke the supplied session and prove it is dead.
+  if (!s.bootstrapped) {
+    try {
+      await apiCall(base!, "/v1/auth/logout", { method: "POST", token: s.token });
+      // Prove revoked: an authed call must now be rejected.
+      const probe = await apiCall(base!, "/v1/ops/status", { token: s.token });
+      const dead = probe.status === 401 || probe.status === 403;
+      s.token = undefined;
+      s.state = dead ? "cleaned" : "cleanup_failed";
+      return dead
+        ? { status: "passed", summary: `pre-supplied session REVOKED + proven dead (probe HTTP ${probe.status})` }
+        : { status: "failed", summary: `pre-supplied session still authenticates after logout (HTTP ${probe.status}) — NOT revoked` };
+    } catch (err) {
+      s.state = "cleanup_failed";
+      return { status: "failed", summary: sanitize(`approach-A revoke unreachable: ${(err as Error).message}`) };
+    }
+  }
+
+  // Approach B: recover a token if login had failed, then delete + prove.
+  let token = s.token;
+  if (!token) {
+    token = (await recoverToken(base!, s.email, s.password)) ?? undefined;
+    if (token) {
+      s.token = token;
+      ctx.runtime.extraSecrets.push(token);
+      s.state = "authenticated";
+    }
+  }
+  if (!token) {
+    s.state = "cleanup_failed";
     return {
-      status: "passed",
-      summary: "nothing to clean: no in-gate synthetic account was created (pre-supplied token or bootstrap never ran)",
+      status: "failed",
+      summary: `could not authenticate to delete the synthetic account after ${CLEANUP_ATTEMPTS} attempts — MANUAL cleanup required for synthetic handle ${syntheticHandle(s.email)}`,
     };
   }
-  const base = ctx.flags["base-url"];
+
+  s.state = "deletion_attempted";
+  const delStatus = await deleteAccount(base!, token, s.password);
+  if (delStatus !== 200) {
+    s.state = "cleanup_failed";
+    return {
+      status: "failed",
+      summary: `synthetic account deletion failed (HTTP ${delStatus ?? "network error"}) after ${CLEANUP_ATTEMPTS} attempts — MANUAL cleanup required for synthetic handle ${syntheticHandle(s.email)}`,
+    };
+  }
+  // Prove cleanup: the deleted account's credentials must be dead.
+  let reloginStatus: number | null = null;
   try {
-    const del = await apiCall(base!, "/v1/auth/account/delete", {
-      method: "POST",
-      token: s.token,
-      body: { password: s.password, confirm: "DELETE" },
-    });
-    if (del.status !== 200) {
-      return { status: "failed", summary: `synthetic account deletion failed (HTTP ${del.status}) — manual cleanup required` };
-    }
-    // Prove cleanup: the deleted account's credentials must be dead.
     const relogin = await apiCall(base!, "/v1/auth/login", {
       method: "POST",
       body: { email: s.email, password: s.password },
     });
-    if (relogin.status === 200) {
-      return { status: "failed", summary: "synthetic account still authenticates after deletion (cleanup NOT proven)" };
-    }
-    s.cleaned = true;
-    return {
-      status: "passed",
-      summary: `synthetic account deleted + session revoked (post-delete login HTTP ${relogin.status} — cleanup proven)`,
-    };
-  } catch (err) {
-    return { status: "failed", summary: sanitize(`cleanup unreachable: ${(err as Error).message} — manual cleanup required`) };
+    reloginStatus = relogin.status;
+  } catch {
+    reloginStatus = null; // unreachable at prove-time; deletion already 200'd
   }
+  if (reloginStatus === 200) {
+    s.state = "cleanup_failed";
+    return { status: "failed", summary: "synthetic account still authenticates after deletion (cleanup NOT proven)" };
+  }
+  // Clear in-memory secret references now that cleanup is done.
+  s.token = undefined;
+  s.password = "";
+  s.state = "cleaned";
+  return {
+    status: "passed",
+    summary: `synthetic account deleted + sessions revoked (post-delete login HTTP ${reloginStatus ?? "unreachable"} — cleanup proven)`,
+  };
 }
 
 function randomHex(bytes: number): string {

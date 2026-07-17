@@ -168,15 +168,23 @@ the fs media root. What each piece means:
 - **Postgres** — all metadata, moments, audit, encrypted tokens. Restore:
   `pg_restore --clean --dbname "$DATABASE_URL" nova-db-<stamp>.dump`.
 - **Media objects** — encrypted blobs. fs: untar back to
-  `NOVA_MEDIA_FS_ROOT`. s3/R2 (M18A): `scripts/backup.sh` runs
-  `media:backup-s3` automatically when `NOVA_BACKUP_S3_BUCKET` is set —
-  DB-referenced ciphertext blobs are copied AS STORED into the separate
-  backup bucket with an HMAC-authenticated inventory
-  (`media-inventory-<stamp>.json`, published next to the sealed DB
-  artifacts). Verify with `media:verify-backup-s3`; restore into an
-  ISOLATED scratch store with `media:restore-s3` (refuses the original
-  primary), then prove decryptability with `media:verify`. Never rely on
-  unverified bucket versioning/replication.
+  `NOVA_MEDIA_FS_ROOT`. s3/R2 (M18A / M18A.1): `scripts/backup.sh` runs
+  `media:backup-s3` automatically when `NOVA_MEDIA_STORE=s3`, and FAILS the
+  whole backup (non-zero, no "Backup complete") if `NOVA_BACKUP_S3_BUCKET`
+  is unset — an s3 deployment never produces a silent db-only backup. The
+  backup is two-phase and atomic: DB-referenced ciphertext blobs are copied
+  AS STORED into the separate backup bucket, every destination object is
+  re-verified, and an HMAC-authenticated inventory
+  (`media-inventory-<stamp>.json`) is published LAST as the commit marker;
+  `backup.sh` then runs `media:verify-backup-s3` before declaring
+  completion. Restore into an ISOLATED scratch store with `media:restore-s3`
+  (refuses the original primary), then prove decryptability with
+  `media:verify`. Never rely on unverified bucket versioning/replication.
+- **Deploy pre-flight** — the Render pre-deploy hook runs `pnpm
+  validate:deploy` (M18A.1): config-safety → prerequisites → `db:migrate`
+  (once) → `ops:preflight` → `db:migrate:status`. Migrations are applied by
+  this single orchestration, never a separate `db:migrate &&` command, and
+  never under an unsafe configuration.
 - **Encryption key** — NOT in any backup, deliberately. Keep
   `NOVA_ENCRYPTION_KEY` (+ previous keys during rotation) in a secret
   store. **Without the key, a restore recovers metadata only**: media

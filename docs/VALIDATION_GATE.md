@@ -90,6 +90,36 @@ must classify the target as local scratch (loopback + non-production) or the
 gate blocks; the backup is verified **before** any destructive restore step;
 raw DSNs and keys are never printed.
 
+### M18A.1 gate-integrity corrections
+
+- **`validate:deploy` mode** — the single Render pre-deploy orchestration:
+  pure config-safety FIRST (unsafe config FAILs and cascade-skips the
+  migration), then operator prerequisites, then `db:migrate` (once), then
+  `ops:preflight`, then `db:migrate:status` (explicit 0-pending confirm).
+  Migrations are never applied under an unsafe configuration; no duplicated
+  migration logic.
+- **S3 media wired into `validate:recovery`** — for s3 stores the gate runs
+  `s3_recovery_prerequisites` (scratch ≠ backup → BLOCKED before mutation) →
+  `media:verify-backup-s3` (+ wrong-key expected failure) → `media:restore-s3
+  --apply` → `media:verify` → post-restore smoke, all required/protected. fs
+  stores keep the tar path.
+- **Atomic fail-closed s3 media backup** — two-phase (completeness scan →
+  copy + destination re-verify → authenticated inventory published LAST as
+  the commit marker); the verifier rejects incomplete/count-mismatched/
+  wrong-HMAC/altered inventories.
+- **Session lifecycle** — explicit states; the account is recorded the
+  instant signup succeeds so cleanup can RECOVER a failed login and still
+  delete it (or FAIL loudly with a sanitized synthetic handle — never
+  "nothing to clean"); approach A REVOKES the supplied token and proves it
+  dead.
+- **Evidence** — upload errors are sanitized; `meta.json` is
+  HMAC-authenticated with `NOVA_BACKUP_KEY` and uploaded last as the commit
+  marker.
+- **Identity fingerprints canonicalized** — endpoint case/port/slash and fs
+  trailing-slash variants collapse, so aliases cannot bypass source/backup/
+  scratch separation. The fingerprint is a safety guard, not proof of
+  provider-account identity.
+
 ### M18A additions (pre-provision closure)
 
 - **In-gate synthetic session (postdeploy, approach B).** The gate now

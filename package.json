@@ -16,6 +16,7 @@
     "db:migrate": "pnpm --filter @nova/api db:migrate",
     "validate:pr": "pnpm --filter @nova/validation-gate gate pr",
     "validate:predeploy": "pnpm --filter @nova/validation-gate gate predeploy",
+    "validate:deploy": "pnpm --filter @nova/validation-gate gate deploy",
     "validate:postdeploy": "pnpm --filter @nova/validation-gate gate postdeploy",
     "validate:recovery": "pnpm --filter @nova/validation-gate gate recovery"
   },

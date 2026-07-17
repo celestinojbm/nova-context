@@ -48,19 +48,34 @@ async function main(): Promise<void> {
     backupKey: key,
     apply,
   });
-  const invPath = await writeInventoryFile(out, res.inventory);
 
   console.log(`media backup (${apply ? "APPLIED" : "DRY RUN — pass --apply to copy"}):`);
-  console.log(`  referenced objects: ${res.inventory.object_count}`);
-  console.log(`  encrypted bytes:    ${res.inventory.total_bytes}`);
+  console.log(`  expected objects:   ${res.expected}`);
   console.log(`  copied:             ${res.copied}`);
   console.log(`  already identical:  ${res.skippedIdentical}`);
+  console.log(`  verified at dest:   ${res.verifiedAtDestination}`);
   console.log(`  missing at source:  ${res.missingAtSource.length}`);
-  console.log(`  inventory:          ${invPath}`);
-  if (res.missingAtSource.length > 0) {
-    console.error("  ERROR: database references objects the primary store does not hold.");
-    process.exitCode = 2;
+  console.log(`  failed at dest:     ${res.failedAtDestination.length}`);
+
+  if (!res.complete || !res.inventory) {
+    // Fail closed: no commit marker, no completion. An incomplete set must
+    // never be recognized as a backup.
+    if (res.missingAtSource.length > 0) {
+      console.error("  ERROR: database references objects the primary store does not hold — NO inventory published.");
+    } else if (res.failedAtDestination.length > 0) {
+      console.error("  ERROR: destination verification failed — NO inventory published (backup NOT committed).");
+    } else {
+      console.error("  ERROR: media backup incomplete — NO inventory published.");
+    }
+    process.exit(2);
   }
+
+  // Complete + committed: also drop the authenticated inventory next to the
+  // sealed DB artifacts (the copy in the backup store is the commit marker).
+  const invPath = await writeInventoryFile(out, res.inventory);
+  console.log(`  encrypted bytes:    ${res.inventory.total_bytes}`);
+  console.log(`  inventory:          ${invPath}`);
+  console.log("MEDIA BACKUP COMMITTED");
 }
 
 main().catch((err) => {

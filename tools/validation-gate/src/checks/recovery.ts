@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { canonicalizeEndpoint, fingerprintIdentity, s3Identity } from "@nova/context-engine/object-store";
 import type { CheckOutcome, RunContext } from "../types.js";
 
 /**
@@ -99,4 +100,63 @@ export async function scratchTargetGuard(ctx: RunContext): Promise<CheckOutcome>
  * Random, never a real secret. */
 export function wrongBackupKey(): string {
   return randomBytes(32).toString("hex");
+}
+
+/** Is the media store s3-backed? Recovery inserts the S3 media path only then;
+ * fs mode keeps the tar-based path. */
+export function isS3Media(env: NodeJS.ProcessEnv): boolean {
+  return (env.NOVA_MEDIA_STORE ?? "fs") === "s3";
+}
+
+/**
+ * M18A.1 finding 2: S3 media recovery prerequisites. The recovery job restores
+ * media into the CONFIGURED (scratch) store (NOVA_MEDIA_S3_*) from the backup
+ * store (NOVA_BACKUP_S3_*). Both must exist, and — critically — the scratch
+ * media destination must be a DIFFERENT physical store from the backup store,
+ * so a restore can never overwrite the backup it reads from. (Separation from
+ * the ORIGINAL PRIMARY is enforced inside media:restore-s3 via the inventory's
+ * source_fingerprint, which is unknown until the inventory is read.)
+ * Missing/aliased config is a safe-prerequisite BLOCKED — before any mutation.
+ */
+export async function s3RecoveryPrerequisites(ctx: RunContext): Promise<CheckOutcome> {
+  if (!isS3Media(ctx.env)) {
+    return {
+      status: "skipped",
+      skipReason: "not_applicable",
+      summary: "fs media mode — s3 media recovery checks not applicable (tar path used)",
+    };
+  }
+  const reasons: string[] = [];
+  if (!ctx.env.NOVA_BACKUP_S3_BUCKET) reasons.push("missing env: NOVA_BACKUP_S3_BUCKET (media backup store to restore FROM)");
+  if (!ctx.env.NOVA_MEDIA_S3_BUCKET) reasons.push("missing env: NOVA_MEDIA_S3_BUCKET (scratch media destination to restore INTO)");
+  if (
+    ctx.env.NOVA_BACKUP_S3_BUCKET &&
+    ctx.env.NOVA_MEDIA_S3_BUCKET
+  ) {
+    const scratch = fingerprintIdentity(
+      s3Identity(canonicalizeEndpoint(ctx.env.NOVA_MEDIA_S3_ENDPOINT), ctx.env.NOVA_MEDIA_S3_BUCKET),
+    );
+    const backup = fingerprintIdentity(
+      s3Identity(
+        canonicalizeEndpoint(ctx.env.NOVA_BACKUP_S3_ENDPOINT ?? ctx.env.NOVA_MEDIA_S3_ENDPOINT),
+        ctx.env.NOVA_BACKUP_S3_BUCKET,
+      ),
+    );
+    if (scratch === backup) {
+      reasons.push(
+        "scratch media store (NOVA_MEDIA_S3_*) resolves to the SAME store as the backup (NOVA_BACKUP_S3_*) — they must be physically separate",
+      );
+    }
+  }
+  if (reasons.length) {
+    return {
+      status: "blocked",
+      summary: "s3 media recovery prerequisites unavailable (values not inspected)",
+      blockingReasons: reasons,
+    };
+  }
+  return {
+    status: "passed",
+    summary: "s3 media backup store + a SEPARATE scratch media destination configured",
+  };
 }

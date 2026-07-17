@@ -18,6 +18,7 @@
     "test:integration": "vitest run --dir test",
     "ops:maintenance": "tsx src/db/run-maintenance.ts",
     "media:verify": "tsx src/db/verify-media.ts",
+    "db:migrate:status": "tsx src/db/run-migrate-status.ts",
     "auth:reset-token": "tsx src/db/reset-token.ts",
     "ops:preflight": "tsx src/db/run-preflight.ts",
     "ops:smoke": "tsx src/db/run-smoke.ts",

@@ -114,7 +114,7 @@ describe("finding 2: unsafe supplied config cannot hide behind missing prerequis
 });
 
 describe("finding 3: authenticated /v1/ops/status is mandatory for post-deploy", () => {
-  it("prerequisites: no token but invite present → passed (M18A in-gate bootstrap covers the authed check)", async () => {
+  it("prerequisites: invite present (no token) → passed (in-gate bootstrap covers the authed check)", async () => {
     const out = await postdeployPrerequisites(
       ctx({ mode: "postdeploy", flags: { "base-url": "http://localhost:9", invite: "x" } }),
     );
@@ -122,14 +122,12 @@ describe("finding 3: authenticated /v1/ops/status is mandatory for post-deploy",
     expect(out.summary).toContain("in-gate synthetic session");
   });
 
-  it("prerequisites: NO authentication path (no invite AND no token) → BLOCKED naming both options", async () => {
+  it("prerequisites: no invite → BLOCKED (the invite feeds both smoke and the authed session)", async () => {
     const out = await postdeployPrerequisites(
       ctx({ mode: "postdeploy", flags: { "base-url": "http://localhost:9" } }),
     );
     expect(out.status).toBe("blocked");
-    const reasons = out.blockingReasons?.join(" ") ?? "";
-    expect(reasons).toContain("NOVA_VALIDATE_SESSION_TOKEN");
-    expect(reasons).toContain("invite");
+    expect(out.blockingReasons?.join(" ") ?? "").toContain("invite");
   });
 
   it("the check is required in the postdeploy config", async () => {

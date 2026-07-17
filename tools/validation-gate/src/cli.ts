@@ -13,6 +13,9 @@ const HELP = `nova validation gate v0 (M17B)
 Usage:
   pnpm validate:pr
   pnpm validate:predeploy
+  pnpm validate:deploy       (Render pre-deploy hook: config-safety → prereqs →
+                              db:migrate → ops:preflight → 0-pending confirm;
+                              unsafe config FAILs BEFORE any migration runs)
   pnpm validate:postdeploy -- --base-url=https://api.example.com [--invite=<code>]
                               (NOVA_VALIDATE_SESSION_TOKEN required — the
                                authenticated /v1/ops/status check is mandatory)
@@ -61,7 +64,8 @@ function parseArgs(argv: string[]): { mode: Mode | null; flags: Record<string, s
   const flags: Record<string, string> = {};
   let mode: Mode | null = null;
   for (const a of argv) {
-    if (a === "pr" || a === "predeploy" || a === "postdeploy" || a === "recovery") mode = a;
+    if (a === "pr" || a === "predeploy" || a === "deploy" || a === "postdeploy" || a === "recovery")
+      mode = a;
     else if (a.startsWith("--")) {
       const [k, ...rest] = a.slice(2).split("=");
       if (k) flags[k] = rest.length ? rest.join("=") : "true";
@@ -127,14 +131,27 @@ async function main(): Promise<void> {
       runId: report.run_id,
       outcome: report.outcome,
       gitSha: report.git_sha,
+      uploadedAt: report.finished_at,
       files: [{ path: jsonPath }, { path: mdPath }, { path: junitPath }],
+      // Scrub the run's minted synthetic secrets AND the evidence
+      // endpoint/bucket from any (already sanitized) upload error.
+      extraSecrets: [
+        ...ctx.runtime.extraSecrets,
+        process.env.NOVA_VALIDATE_EVIDENCE_S3_ENDPOINT,
+        process.env.NOVA_VALIDATE_EVIDENCE_S3_BUCKET,
+      ].filter((v): v is string => !!v),
+      backupKey: parseBackupKeyLoose(process.env.NOVA_BACKUP_KEY),
+      env: process.env,
     });
     if (retained.ok) {
-      console.log(`evidence retained: ${retained.prefix} (${retained.uploaded.length} files)`);
+      console.log(
+        `evidence retained: ${retained.prefix} (${retained.uploaded.length} files, ${retained.authenticated ? "HMAC-authenticated meta" : "integrity hashes only — NOVA_BACKUP_KEY unset"})`,
+      );
       for (const [name, hash] of Object.entries(retained.hashes)) {
         console.log(`  sha256 ${name}: ${hash}`);
       }
     } else {
+      // retained.error is already sanitized by retainEvidence.
       console.error(`EVIDENCE RETENTION FAILED: ${retained.error ?? "unknown error"}`);
       console.error("  reports exist ONLY on this (possibly ephemeral) filesystem — do NOT claim full evidence retention.");
       if (process.env.NOVA_VALIDATE_EVIDENCE_REQUIRED === "yes") evidenceExit = 1;
@@ -161,6 +178,18 @@ async function main(): Promise<void> {
     console.log("note: BLOCKED is not a pass — supply the missing operator prerequisites and re-run.");
   }
   process.exit(Math.max(exitCodeFor(report.outcome, mode), evidenceExit));
+}
+
+/** Parse a 32-byte NOVA_BACKUP_KEY (hex or base64) for evidence-meta HMAC.
+ * Returns undefined if absent/invalid — retention then falls back to
+ * integrity-hash-only meta (honestly marked). */
+function parseBackupKeyLoose(value: string | undefined): Buffer | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  const key = /^[0-9a-fA-F]{64}$/.test(trimmed)
+    ? Buffer.from(trimmed, "hex")
+    : Buffer.from(trimmed, "base64");
+  return key.length === 32 ? key : undefined;
 }
 
 main().catch((err) => {

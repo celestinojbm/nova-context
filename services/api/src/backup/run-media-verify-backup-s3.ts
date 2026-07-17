@@ -32,12 +32,13 @@ async function main(): Promise<void> {
   console.log(`media backup verification (stamp ${stamp}):`);
   console.log(`  inventory shape: ${res.manifest.shape}${res.manifest.detail ? ` (${res.manifest.detail})` : ""}`);
   console.log(`  inventory mac:   ${res.manifest.mac}`);
+  console.log(`  expected:        ${res.expected}`);
   console.log(`  objects:         ${res.objectCount}`);
   console.log(`  verified:        ${res.verified}`);
   console.log(`  missing:         ${res.missing}`);
   console.log(`  altered:         ${res.altered}`);
   console.log(res.ok ? "MEDIA BACKUP VERIFIED" : "MEDIA BACKUP VERIFICATION FAILED");
-  if (!res.ok) process.exitCode = 2;
+  if (!res.ok) process.exit(2);
 }
 
 main().catch((err) => {

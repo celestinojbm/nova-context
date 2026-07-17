@@ -43,6 +43,7 @@ const S3_ENDPOINT = process.env.NOVA_TEST_S3_ENDPOINT ?? "http://127.0.0.1:9000"
 const S3_KEY = process.env.NOVA_TEST_S3_ACCESS_KEY_ID ?? "nova";
 const S3_SECRET = process.env.NOVA_TEST_S3_SECRET_ACCESS_KEY ?? "nova-minio-secret";
 
+const s3Required = process.env.NOVA_TEST_S3_REQUIRED === "yes";
 const s3Available = await (async () => {
   try {
     const res = await fetch(`${S3_ENDPOINT}/minio/health/live`, {
@@ -53,6 +54,20 @@ const s3Available = await (async () => {
     return false;
   }
 })();
+
+// M18A.1 finding 5: when the drill is REQUIRED (CI), an unavailable MinIO
+// must FAIL the suite loudly — never a silent skip. Local dev may still skip
+// when MinIO isn't requested.
+if (s3Required && (!databaseUrl || !s3Available)) {
+  describe("M18A: MinIO end-to-end media recovery drill (REQUIRED)", () => {
+    it("MinIO + Postgres must be available when NOVA_TEST_S3_REQUIRED=yes", () => {
+      throw new Error(
+        `NOVA_TEST_S3_REQUIRED=yes but the drill cannot run: ` +
+          `databaseUrl=${!!databaseUrl}, s3Available(${S3_ENDPOINT})=${s3Available}`,
+      );
+    });
+  });
+}
 
 const KEY_HEX = randomBytes(32).toString("hex");
 const BACKUP_KEY = randomBytes(32);
@@ -193,7 +208,7 @@ describe.skipIf(!databaseUrl || !s3Available)("M18A: MinIO end-to-end media reco
     }
   }, 120_000);
 
-  let inventory: Awaited<ReturnType<typeof backupMediaToStore>>["inventory"];
+  let inventory: NonNullable<Awaited<ReturnType<typeof backupMediaToStore>>["inventory"]>;
 
   it("backs up encrypted blobs into the separate backup bucket with a verifiable inventory", async () => {
     const res = await backupMediaToStore({
@@ -205,7 +220,9 @@ describe.skipIf(!databaseUrl || !s3Available)("M18A: MinIO end-to-end media reco
       backupKey: BACKUP_KEY,
       apply: true,
     });
-    inventory = res.inventory;
+    expect(res.complete).toBe(true);
+    expect(res.inventory).not.toBeNull();
+    inventory = res.inventory!;
     expect(res.missingAtSource).toEqual([]);
     expect(res.copied).toBe(inventory.object_count);
     const verify = await verifyMediaBackup(inventory, backup, BACKUP_KEY);

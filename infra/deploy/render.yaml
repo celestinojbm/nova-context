@@ -29,12 +29,15 @@ services:
     dockerContext: .
     healthCheckPath: /readyz
     autoDeployTrigger: "off"
-    # M18A §3: the Validation Gate predeploy mode runs INSIDE Render with the
-    # internal DATABASE_URL/REDIS_URL, after the image build and BEFORE the
-    # new version takes traffic. FAIL or BLOCKED exits non-zero → the deploy
-    # is aborted. (The gate's preflight covers migration state; migrations
-    # themselves run via the API preDeploy path documented in DEPLOY.md.)
-    preDeployCommand: pnpm validate:predeploy
+    # M18A.1 §3: `validate:deploy` is the SINGLE deploy orchestration Render
+    # runs inside the network (internal DATABASE_URL/REDIS_URL) after the image
+    # build and BEFORE the new version takes traffic. It enforces the correct
+    # order — pure config-safety FIRST (unsafe config FAILs before any
+    # migration), then prerequisites, then db:migrate (once), then ops:preflight,
+    # then an explicit zero-pending-migrations confirmation. FAIL/BLOCKED exit
+    # non-zero → the deploy is aborted. Migrations are NOT applied by a separate
+    # command (no `db:migrate && validate:predeploy`).
+    preDeployCommand: pnpm validate:deploy
     envVars:
       - key: NODE_ENV
         value: production

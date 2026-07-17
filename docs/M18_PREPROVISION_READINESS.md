@@ -4,6 +4,25 @@ Status: **complete, awaiting provisioning authorization.** No external
 resource has been created; no production secret exists; nothing is deployed;
 no cost has been incurred; the Render Blueprint is committed but NOT synced.
 
+## 0. M18A.1 gate-integrity corrections (applied after the B1 review)
+
+A focused review of the M18A work surfaced gate-integrity gaps; all are
+closed on this branch: (1) the s3 media backup is now **two-phase, atomic,
+and fail-closed** — a completeness scan reads/hashes every DB-referenced
+object before any copy, every destination object is re-read/verified, and the
+authenticated inventory (now binding expected count + `completeness`) is
+published LAST as the commit marker; `scripts/backup.sh` refuses a db-only
+"complete" backup for an s3 store and verifies media before printing
+completion. (2) The s3 media path is **wired into `validate:recovery`** (no
+manual out-of-gate command). (3) A single **`validate:deploy`** orchestration
+fixes the migration/config ordering (config-safety before any migration). (4)
+The synthetic-session lifecycle is **explicit and recovers** from a bootstrap
+that created an account but failed to log in, and approach A now **revokes +
+proves** the supplied session dead. (5) The MinIO drill is **mandatory in
+CI**. (6) Evidence-retention errors are **sanitized** and `meta.json` is
+**HMAC-authenticated**. (7) Store-identity fingerprints are **canonicalized**
+so endpoint/case/slash aliases cannot bypass separation.
+
 ## 1. Why the original S3-media recovery plan was incomplete
 
 `scripts/backup.sh` tarred the media store only when `NOVA_MEDIA_FS_ROOT`
@@ -54,9 +73,9 @@ requires opening public datastore access.
 
 | Gate | Where it executes | Datastore access | Notes |
 |---|---|---|---|
-| `validate:predeploy` | Render **pre-deploy command** of the API service (`preDeployCommand: pnpm validate:predeploy`) — after image build, inside Render, before the new version takes traffic | internal `DATABASE_URL`/`REDIS_URL` | FAIL/BLOCKED exits non-zero → deploy aborted. The gate's pure config checks + ops:preflight (which probes DB/Redis/store and pending migrations) run with the same env the app will boot with. Render's pre-deploy timeout (30 min) comfortably covers the observed preflight duration (seconds-to-minutes); the gate's own per-check timeouts are far below it. Migrations are NOT duplicated into a second command — preflight validates state and the deploy pipeline applies migrations exactly once (DEPLOY.md) |
+| `validate:deploy` (M18A.1) | Render **pre-deploy command** of the API service (`preDeployCommand: pnpm validate:deploy`) — after image build, inside Render, before the new version takes traffic | internal `DATABASE_URL`/`REDIS_URL` | The SINGLE deploy orchestration, in strict order: pure config-safety FIRST (an unsafe config FAILs and cascade-skips the migration — migrations are NEVER applied under unsafe config) → operator prerequisites → **db:migrate (once)** → ops:preflight → **db:migrate:status (explicit 0-pending confirm)**. FAIL/BLOCKED exits non-zero → deploy aborted. No `db:migrate && validate:predeploy` — one command, no duplicated migration logic. Render's pre-deploy timeout (30 min) comfortably covers it. (`validate:predeploy` still exists for a no-migrate config-safety pre-check.) |
 | `validate:postdeploy` | Render **one-off job** based on the API image (`render jobs` / dashboard), terminating automatically | none directly — only the PUBLIC API URL + the approved secret env | Creates its own synthetic session in-gate (§5), runs readyz/authed-status/smoke, uploads sanitized evidence (§4), exits |
-| `validate:recovery` | separate one-off job / temporary restored API+worker stack | scratch `DATABASE_URL`, scratch `REDIS_URL` (if needed), scratch media bucket, backup bucket READ, restored-stack URL, synthetic invite via env | **No write access to the primary database or primary media bucket**; the only primary-adjacent permission is narrowly-scoped read on the backup bucket. The restore CLI additionally refuses primary-fingerprint destinations |
+| `validate:recovery` | separate one-off job / temporary restored API+worker stack | scratch `DATABASE_URL`, scratch `REDIS_URL` (if needed), scratch media bucket, backup bucket READ, restored-stack URL, synthetic invite via env | **No write access to the primary database or primary media bucket**; the only primary-adjacent permission is narrowly-scoped read on the backup bucket. For s3 stores the gate now RUNS the media path in-band (M18A.1): `s3_recovery_prerequisites` (scratch ≠ backup, BLOCKED before mutation) → `media:verify-backup-s3` (+ wrong-key expected failure) → `media:restore-s3 --apply` into scratch → `media:verify` → post-restore smoke. The restore CLI additionally refuses primary-fingerprint destinations |
 
 **Credential/IAM separation (names only):**
 - primary stack: media-bucket credential (rw on `nova-media` only) + backup-bucket credential (write for `media:backup-s3` + evidence prefix).
