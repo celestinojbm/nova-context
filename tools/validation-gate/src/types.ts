@@ -129,7 +129,8 @@ export interface CheckSpec {
  */
 export type SessionState =
   | "not_started"
-  | "account_created" // signup ok; login not yet proven — MUST be cleaned
+  | "signup_attempted" // signup SENT; response lost/failed — account MAY exist
+  | "account_created" // signup confirmed 201; login not yet proven — MUST be cleaned
   | "authenticated" // have a live token
   | "deletion_attempted"
   | "cleaned"

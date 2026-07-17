@@ -108,7 +108,14 @@ export async function syntheticSessionBootstrap(ctx: RunContext): Promise<CheckO
   // previous run's leftover account, which cleanup should have removed).
   const email = `validate-${Date.now().toString(36)}-${randomHex(6)}@nova-validate.invalid`;
   const password = `Vg1-${randomHex(24)}`;
-  ctx.runtime.extraSecrets.push(password);
+  // The password AND the invite are sanitizer extra-secrets (M18A.1 review P3).
+  ctx.runtime.extraSecrets.push(password, invite);
+
+  // Record the INTENT before calling signup (M18A.1 review P2): if signup
+  // commits server-side but the response is lost (timeout / proxy 5xx), the
+  // account may exist — cleanup must still have the email+password to verify
+  // and delete it rather than falsely reporting "nothing to clean".
+  ctx.runtime.session = { state: "signup_attempted", email, password, bootstrapped: true };
 
   let signupStatus: number;
   try {
@@ -118,14 +125,22 @@ export async function syntheticSessionBootstrap(ctx: RunContext): Promise<CheckO
     });
     signupStatus = signup.status;
   } catch (err) {
-    // Signup itself failed → no account exists → nothing to clean.
-    return { status: "failed", summary: sanitize(`synthetic signup unreachable: ${(err as Error).message}`) };
+    // Response lost — the account MAY have been created; stays signup_attempted.
+    return {
+      status: "failed",
+      summary: sanitize(`synthetic signup response lost: ${(err as Error).message}; cleanup will verify + delete any created account`),
+    };
   }
   if (signupStatus !== 201) {
-    return { status: "failed", summary: `synthetic signup failed (HTTP ${signupStatus})` };
+    // Non-201 could still be a committed-then-5xx account; stays
+    // signup_attempted so cleanup verifies rather than assumes.
+    return {
+      status: "failed",
+      summary: `synthetic signup returned HTTP ${signupStatus}; cleanup will verify + delete any created account`,
+    };
   }
-  // Account exists NOW — record it before anything else can fail.
-  ctx.runtime.session = { state: "account_created", email, password, bootstrapped: true };
+  // Signup CONFIRMED — the account definitely exists now.
+  ctx.runtime.session.state = "account_created";
 
   try {
     const login = await apiCall(base, "/v1/auth/login", { method: "POST", body: { email, password } });
@@ -216,15 +231,21 @@ export async function syntheticSessionCleanup(ctx: RunContext): Promise<CheckOut
   // Approach A: revoke the supplied session and prove it is dead.
   if (!s.bootstrapped) {
     try {
-      await apiCall(base!, "/v1/auth/logout", { method: "POST", token: s.token });
-      // Prove revoked: an authed call must now be rejected.
+      const logout = await apiCall(base!, "/v1/auth/logout", { method: "POST", token: s.token });
+      // Prove revoked: an authed call must now be UNAUTHENTICATED (401).
+      // 403 = authenticated-but-forbidden → the session is STILL LIVE (it
+      // proves identity was accepted), the opposite of revocation — so only
+      // 401 counts as dead (M18A.1 review P1).
       const probe = await apiCall(base!, "/v1/ops/status", { token: s.token });
-      const dead = probe.status === 401 || probe.status === 403;
+      const dead = probe.status === 401;
       s.token = undefined;
       s.state = dead ? "cleaned" : "cleanup_failed";
       return dead
-        ? { status: "passed", summary: `pre-supplied session REVOKED + proven dead (probe HTTP ${probe.status})` }
-        : { status: "failed", summary: `pre-supplied session still authenticates after logout (HTTP ${probe.status}) — NOT revoked` };
+        ? { status: "passed", summary: `pre-supplied session REVOKED + proven dead (logout HTTP ${logout.status}, probe HTTP 401)` }
+        : {
+            status: "failed",
+            summary: `pre-supplied session NOT proven revoked (logout HTTP ${logout.status}, probe HTTP ${probe.status}; only 401 proves a dead session) — revoke it manually`,
+          };
     } catch (err) {
       s.state = "cleanup_failed";
       return { status: "failed", summary: sanitize(`approach-A revoke unreachable: ${(err as Error).message}`) };
@@ -242,10 +263,26 @@ export async function syntheticSessionCleanup(ctx: RunContext): Promise<CheckOut
     }
   }
   if (!token) {
+    // No token. Whether this is a genuine failure depends on whether the
+    // account is CONFIRMED to exist:
+    //   - signup_attempted (unconfirmed): a failed re-login most likely means
+    //     the account was never created (or the password never took). We
+    //     cannot prove an orphan exists, so PASS but emit the handle so an
+    //     operator can double-check (M18A.1 review P2 — never a false
+    //     "orphan confirmed", never a false "nothing to clean").
+    //   - account_created (confirmed 201): an orphan DEFINITELY exists and we
+    //     could not delete it → FAIL loudly with the handle.
+    if (s.state === "signup_attempted") {
+      s.state = "cleaned";
+      return {
+        status: "passed",
+        summary: `signup was unconfirmed and no matching account could be authenticated after ${CLEANUP_ATTEMPTS} attempts — likely no orphan; verify synthetic handle ${syntheticHandle(s.email)} if in doubt`,
+      };
+    }
     s.state = "cleanup_failed";
     return {
       status: "failed",
-      summary: `could not authenticate to delete the synthetic account after ${CLEANUP_ATTEMPTS} attempts — MANUAL cleanup required for synthetic handle ${syntheticHandle(s.email)}`,
+      summary: `could not authenticate to delete the CONFIRMED synthetic account after ${CLEANUP_ATTEMPTS} attempts — MANUAL cleanup required for synthetic handle ${syntheticHandle(s.email)}`,
     };
   }
 

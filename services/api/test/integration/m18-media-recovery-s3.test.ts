@@ -3,6 +3,7 @@ import { decryptBytesWithAny, parseEncryptionKey } from "@nova/context-engine/se
 import type { FastifyInstance } from "fastify";
 import { Jimp, JimpMime } from "jimp";
 import { randomBytes } from "node:crypto";
+import { join } from "node:path";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../../src/app.js";
@@ -333,6 +334,44 @@ describe.skipIf(!databaseUrl || !s3Available)("M18A: MinIO end-to-end media reco
     expect(scratch.identity).not.toBe(primary.identity);
     expect(backup.identity).not.toBe(primary.identity);
   }, 60_000);
+
+  it("media:backup-s3 DRY RUN (no --apply) writes NO inventory file and never claims COMMITTED", async () => {
+    // Regression (M18A.1 review): a dry run must not persist a commit-marker
+    // inventory or emit the COMMITTED sentinel.
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const { mkdtempSync, existsSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const outDir = mkdtempSync(join(tmpdir(), "nova-dry-"));
+    const repoRoot = join(import.meta.dirname, "..", "..", "..", "..");
+    // Use the self-consistent SCRATCH DB + SCRATCH bucket (restored earlier in
+    // this drill) so every DB-referenced object exists at the source — the
+    // dry run then exercises the complete-but-not-applied CLI path.
+    const { stdout } = await promisify(execFile)(
+      "pnpm",
+      ["--filter", "@nova/api", "--silent", "media:backup-s3", "--", `--stamp=drytest-${RUN}`, `--out=${outDir}`],
+      {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          DATABASE_URL: scratchUrl,
+          NOVA_BACKUP_KEY: BACKUP_KEY.toString("hex"),
+          NOVA_ENCRYPTION_KEY: KEY_HEX,
+          NOVA_MEDIA_STORE: "s3",
+          NOVA_MEDIA_S3_BUCKET: SCRATCH,
+          NOVA_MEDIA_S3_ENDPOINT: S3_ENDPOINT,
+          NOVA_MEDIA_S3_ACCESS_KEY_ID: S3_KEY,
+          NOVA_MEDIA_S3_SECRET_ACCESS_KEY: S3_SECRET,
+          NOVA_BACKUP_S3_BUCKET: BACKUP,
+        },
+      },
+    );
+    expect(stdout).toContain("DRY RUN OK");
+    expect(stdout).not.toContain("MEDIA BACKUP COMMITTED");
+    expect(existsSync(join(outDir, `media-inventory-drytest-${RUN}.json`))).toBe(false);
+    // And no committed inventory landed in the backup store either.
+    expect(await backup.store.get(`media/drytest-${RUN}/inventory.json`)).toBeNull();
+  }, 120_000);
 
   it("evidence retention works against the real store (private prefix, hash-verifiable)", async () => {
     // The gate's retention path is unit-tested in tools/validation-gate; here

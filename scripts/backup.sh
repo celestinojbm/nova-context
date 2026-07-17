@@ -62,14 +62,16 @@ pg_dump --format=custom --file="$WORK/nova-db-$STAMP.dump" "$DATABASE_URL"
 # M18A.1: media backup is FAIL-CLOSED for s3 stores. The final "Backup
 # complete" line is printed ONLY on the branch that actually backed media up
 # (fs tar or committed s3 inventory) or on an explicitly fs-less non-s3 store.
+# M18A.1: the media store TYPE is decided by NOVA_MEDIA_STORE, NOT by whether
+# a local fs root happens to exist. NOVA_MEDIA_FS_ROOT has a non-empty default
+# (./var/media) and is often present in shared env files, so testing the fs
+# branch first would let an s3 deployment tar an empty/stale local dir and
+# report "complete" while the real s3 media is never backed up. Dispatch on
+# NOVA_MEDIA_STORE so the s3 fail-closed guard can never be shadowed.
 MEDIA_MODE="none"
-if [ -n "${NOVA_MEDIA_FS_ROOT:-}" ] && [ -d "${NOVA_MEDIA_FS_ROOT}" ]; then
-  echo "→ Media store tar (private workspace)"
-  tar -czf "$WORK/nova-media-$STAMP.tar.gz" -C "$NOVA_MEDIA_FS_ROOT" .
-  MEDIA_MODE="fs"
-elif [ "${NOVA_MEDIA_STORE:-fs}" = "s3" ]; then
-  # M18A.1: an s3 media store MUST have a configured, separate backup bucket
-  # (+ credentials). A missing backup bucket terminates the whole backup with
+if [ "${NOVA_MEDIA_STORE:-fs}" = "s3" ]; then
+  # An s3 media store MUST have a configured, separate backup bucket (+
+  # credentials). A missing backup bucket terminates the whole backup with
   # non-zero status — it must NEVER silently produce a db-only "complete"
   # backup for an s3 deployment.
   if [ -z "${NOVA_BACKUP_S3_BUCKET:-}" ]; then
@@ -87,6 +89,10 @@ elif [ "${NOVA_MEDIA_STORE:-fs}" = "s3" ]; then
         echo "ERROR: media:backup-s3 did not commit — backup INCOMPLETE. Refusing to complete." >&2
         exit 1; }
   MEDIA_MODE="s3"
+elif [ -n "${NOVA_MEDIA_FS_ROOT:-}" ] && [ -d "${NOVA_MEDIA_FS_ROOT}" ]; then
+  echo "→ Media store tar (private workspace)"
+  tar -czf "$WORK/nova-media-$STAMP.tar.gz" -C "$NOVA_MEDIA_FS_ROOT" .
+  MEDIA_MODE="fs"
 else
   # fs store with no populated root (nothing captured yet): media backup is a
   # genuine no-op, and this is NOT an s3 store, so it is safe to continue.

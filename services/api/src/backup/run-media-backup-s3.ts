@@ -70,6 +70,16 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
+  if (!res.applied) {
+    // Dry run: the set is complete and would back up cleanly, but NOTHING was
+    // copied or committed. A dry run must NEVER write a commit-marker
+    // inventory or emit the COMMITTED sentinel — otherwise a caller keying off
+    // exit 0 / the inventory file would treat a no-op as a real backup.
+    console.log(`  would back up ${res.inventory.object_count} object(s), ${res.inventory.total_bytes} encrypted bytes`);
+    console.log("MEDIA BACKUP DRY RUN OK (no data copied; pass --apply to commit)");
+    return;
+  }
+
   // Complete + committed: also drop the authenticated inventory next to the
   // sealed DB artifacts (the copy in the backup store is the commit marker).
   const invPath = await writeInventoryFile(out, res.inventory);

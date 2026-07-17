@@ -54,6 +54,26 @@ describe.skipIf(!databaseUrl)("M18A.1: scripts/backup.sh fail-closed media handl
     expect(out).toContain("NOVA_BACKUP_S3_BUCKET is not set");
   }, 60_000);
 
+  it("s3 store STILL refuses (no db-only backup) even when NOVA_MEDIA_FS_ROOT is set to a real dir", async () => {
+    // Regression (M18A.1 review): the fs branch must NOT shadow the s3
+    // fail-closed guard. NOVA_MEDIA_FS_ROOT has a default and is often present.
+    const fsRoot = mkdtempSync(join(tmpdir(), "nova-fsroot-"));
+    dirs.push(fsRoot);
+    const { code, out } = await runBackup(
+      {
+        NOVA_BACKUP_KEY: randomBytes(32).toString("hex"),
+        DATABASE_URL: databaseUrl!,
+        NOVA_MEDIA_STORE: "s3",
+        NOVA_MEDIA_FS_ROOT: fsRoot, // exists — would wrongly win under the old order
+      },
+      dest(),
+    );
+    expect(code).not.toBe(0);
+    expect(out).not.toContain("Backup complete");
+    expect(out).toContain("NOVA_BACKUP_S3_BUCKET is not set");
+    expect(out).not.toContain("Media store tar"); // fs branch was NOT taken
+  }, 60_000);
+
   it("fs store with no media root → completes as db-only (distinct 'no media present' message)", async () => {
     const { code, out } = await runBackup(
       {
