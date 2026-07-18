@@ -180,6 +180,24 @@ the fs media root. What each piece means:
   completion. Restore into an ISOLATED scratch store with `media:restore-s3`
   (refuses the original primary), then prove decryptability with
   `media:verify`. Never rely on unverified bucket versioning/replication.
+- **Sealed backup off-box (M18A.2 §3)** — a Render one-off job's local
+  sealed dir is ephemeral. Set `NOVA_BACKUP_PUBLISH_S3=yes` on the backup job
+  and `scripts/backup.sh` also runs `backup:publish-s3` (verify local →
+  upload + re-verify each object → HMAC-authenticated commit marker LAST) then
+  `backup:verify-s3`, publishing the COMPLETE sealed set to
+  `sealed-backups/<stamp>/` in `NOVA_BACKUP_S3_BUCKET` (no plaintext). The
+  recovery job runs `backup:fetch-s3 -- --stamp=<s> --out=<dir>` to fetch a
+  committed set into a private dir, which authenticates the marker + verifies
+  every hash + runs `backup:verify` BEFORE restore — so no persistent disk is
+  required.
+- **Recovery scratch target (M18A.2 §1)** — the recovery gate's
+  `backup:scratch-guard` accepts local loopback Postgres, OR a temporary
+  managed remote scratch when the full `NOVA_RESTORE_*` envelope matches
+  (allow-flag + `scratch` class + typed `NOVA_RESTORE_SCRATCH_CONFIRM` +
+  expected host/database/fingerprint + `NOVA_RECOVERY_RUN_ID` marker +
+  fingerprint proven ≠ the primary). Compute a target's credential-free
+  fingerprint with `backup:scratch-guard -- --fingerprint`. Any mismatch
+  BLOCKS before mutation; the raw DSN is never printed.
 - **Deploy pre-flight** — the Render pre-deploy hook runs `pnpm
   validate:deploy` (M18A.1): config-safety → prerequisites → `db:migrate`
   (once) → `ops:preflight` → `db:migrate:status`. Migrations are applied by

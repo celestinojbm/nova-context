@@ -133,4 +133,28 @@ case "$MEDIA_MODE" in
   empty) echo "Backup complete: $DEST (sealed db; no media present as of $STAMP)" ;;
   *)     echo "Backup complete: $DEST (sealed db as of $STAMP)" ;;
 esac
+
+# M18A.2 §3: optionally PUBLISH the complete sealed set to the remote backup
+# store so an ephemeral (e.g. Render one-off) job's local artifacts survive
+# teardown. Opt-in via NOVA_BACKUP_PUBLISH_S3=yes; fails CLOSED. backup:publish-s3
+# verifies the local set, uploads + re-verifies every object, and commits the
+# authenticated marker LAST; backup:verify-s3 then re-authenticates the remote
+# set. No plaintext is uploaded.
+if [ "${NOVA_BACKUP_PUBLISH_S3:-no}" = "yes" ]; then
+  if [ -z "${NOVA_BACKUP_S3_BUCKET:-}" ]; then
+    echo "ERROR: NOVA_BACKUP_PUBLISH_S3=yes but NOVA_BACKUP_S3_BUCKET is not set." >&2
+    echo "  Cannot publish the sealed backup off-box. Refusing." >&2
+    exit 1
+  fi
+  echo "→ Publishing sealed backup set to remote store (local verify → publish → remote verify)"
+  ( cd "$REPO_ROOT" && pnpm --filter @nova/api --silent backup:publish-s3 -- \
+      --dir="$DEST" --stamp="$STAMP" --created-at="$CREATED_AT" --apply ) || {
+        echo "ERROR: remote sealed-backup publish failed — backup is NOT durable off-box." >&2
+        exit 1; }
+  ( cd "$REPO_ROOT" && pnpm --filter @nova/api --silent backup:verify-s3 -- \
+      --stamp="$STAMP" ) || {
+        echo "ERROR: remote sealed-backup verification failed — publish NOT trustworthy." >&2
+        exit 1; }
+  echo "Remote sealed backup published + verified (sealed-backups/$STAMP/)"
+fi
 echo "REMINDER: NOVA_BACKUP_KEY and NOVA_ENCRYPTION_KEY live in your secret store, NOT here."

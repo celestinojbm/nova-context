@@ -1,8 +1,43 @@
 # M18A — Pre-Provision Deployment & Recovery Closure
 
-Status: **complete, awaiting provisioning authorization.** No external
-resource has been created; no production secret exists; nothing is deployed;
-no cost has been incurred; the Render Blueprint is committed but NOT synced.
+Status: **executable cloud recovery closed (M18A / M18A.1 / M18A.2); awaiting
+operator review before any provisioning.** No external resource has been
+created; no production secret exists; nothing is deployed; no cost has been
+incurred; the Render Blueprint is committed but NOT synced. Provisioning
+remains gated on the operator's explicit `APPROVE M18 PROVISIONING` phrase.
+
+## 0.2. M18A.2 executable-recovery corrections (this milestone)
+
+Three blockers that would have stopped a *real* Render + R2 recovery drill are
+closed on this branch:
+
+1. **Authorized remote scratch databases.** The recovery gate's scratch guard
+   accepted only loopback Postgres, so a drill against a managed Render
+   Postgres (internal remote host) always BLOCKED. `backup:scratch-guard` now
+   admits an **explicitly-authorized remote scratch** class that passes ONLY
+   when every condition holds: `NOVA_VALIDATE_ALLOW_REMOTE_SCRATCH=yes`,
+   `NOVA_RESTORE_TARGET_CLASS=scratch`, an exact expected host + database name +
+   credential-free target fingerprint, a typed confirmation
+   (`NOVA_RESTORE_SCRATCH_CONFIRM`), a database name containing `NOVA_RECOVERY_RUN_ID`,
+   and a fingerprint proven ≠ `NOVA_PRIMARY_DATABASE_FINGERPRINT`. Any
+   mismatch/absence/production-classification → BLOCKED before mutation; a
+   malformed DSN → FAIL. No generic "allow remote restore" bypass exists, and
+   the guard prints only a credential-free target + names-only reasons.
+2. **No false-PASS synthetic cleanup.** A cleanup check now PASSes ONLY with
+   affirmative evidence that no synthetic account/session remains. An ambiguous
+   signup (timeout / network loss / 5xx / malformed / any non-definitive
+   response) is `account_state_unknown`; cleanup attempts bounded recovery and
+   FAILs (never "likely no orphan") if it cannot delete-and-prove. Post-delete
+   proof requires exactly HTTP 401 (200/403/4xx/5xx/timeout all FAIL). Approach
+   A requires exactly 401 after logout (403/5xx/unreachable FAIL).
+3. **Sealed DB backup survives the ephemeral job.** `backup:publish-s3` /
+   `backup:verify-s3` / `backup:fetch-s3` publish the COMPLETE sealed set
+   (encrypted DB dump, encrypted media tar when present, the sealed manifest,
+   and the media inventory) to a private `sealed-backups/<stamp>/` prefix,
+   bound by an **HMAC-authenticated commit marker published LAST**. Fetch
+   authenticates the marker, downloads into a private 0700 temp dir, verifies
+   sizes/hashes, and runs `backup:verify` before restore — so a Render one-off
+   job needs no persistent disk.
 
 ## 0. M18A.1 gate-integrity corrections (applied after the B1 review)
 
@@ -49,11 +84,12 @@ inventory next to the sealed DB artifacts — and fails loudly (backup
 INCOMPLETE) instead of silently skipping media. Bucket versioning/replication
 is no longer relied upon anywhere.
 
-**Proof.** 11 unit tests (in-memory stores) cover: successful backup,
-successful restore, missing object, altered object, altered inventory
-(MAC), wrong backup key, source/destination alias + primary-destination
-refusal, interrupted/idempotent rerun, empty media set, dry-run write-free,
-and secret/content-free inventory output. A 7-test integration drill against
+**Proof.** The `media-s3` unit suite (17 tests, in-memory stores) covers:
+successful backup, successful restore, missing object, altered object, altered
+inventory (MAC), wrong backup key, source/destination alias + primary-
+destination refusal (incl. AWS-endpoint-respelling aliases, M18A.1 review),
+interrupted/idempotent rerun, empty media set, dry-run write-free, and
+secret/content-free inventory output. An 8-test integration drill against
 **real MinIO** executes the complete sequence: synthetic encrypted media →
 primary bucket → backup bucket + inventory → wrong-key/tamper proofs →
 scratch DATABASE (real migrations + row copy; the sealed pg_dump/pg_restore
@@ -66,6 +102,44 @@ after the drill) → full local cleanup. CI now starts a MinIO container so
 the drill runs on every PR; the suite skips itself only where MinIO is
 genuinely unavailable.
 
+## 2.1. Sealed database-backup persistence off-box (M18A.2 §3)
+
+`scripts/backup.sh` seals the DB dump (and, when present, the media tar), the
+authenticated manifest, and the s3 media inventory — but into a LOCAL
+directory that a Render one-off job discards at teardown. Three thin commands
+on the existing `ObjectStore` abstraction publish/fetch the COMPLETE sealed set
+without a persistent disk:
+
+| Command | What it does |
+|---|---|
+| `backup:publish-s3 -- --dir=<sealed-dir> --stamp=<s> [--apply]` | verifies the LOCAL sealed backup first, uploads every artifact to `sealed-backups/<stamp>/`, RE-READS + hashes each destination object, then publishes an **HMAC-authenticated commit marker LAST** binding the stamp, every artifact name + ciphertext sha256 + size, the sealed-manifest hash, the media-inventory hash (when applicable), the expected artifact count, completeness, creation time, and source/destination roles. Dry-run by default; idempotent; no plaintext uploaded; counts-only output |
+| `backup:verify-s3 -- --stamp=<s>` | authenticates the remote marker (wrong/absent key or ANY tampering fails closed) and re-hashes every remote object. Read-only; exit 2 on failure |
+| `backup:fetch-s3 -- --stamp=<s> [--out=<dir>]` | fetches ONLY a committed set: authenticates the marker, downloads into a private **0700** temp dir (removed at exit unless `--out` is given for a subsequent restore step), verifies sizes/hashes, and runs `backup:verify` — failing BEFORE restore on any missing/altered artifact |
+
+`scripts/backup.sh` runs publish + remote-verify automatically when
+`NOVA_BACKUP_PUBLISH_S3=yes` (fail-closed if `NOVA_BACKUP_S3_BUCKET` is unset).
+
+**Backup job:** `scripts/backup.sh` → local verify → remote publish → remote
+verify → evidence retention. **Recovery job (no persistent disk required):**
+`backup:fetch-s3` a committed set → verify → DB restore → s3 media restore →
+`media:verify` → post-restore smoke.
+
+**Proof.** An 11-test unit suite (in-memory store) covers publish→verify→fetch
+round-trip, no-plaintext-uploaded, wrong-key/no-key, missing artifact, altered
+artifact, altered marker, dry-run write-free, interrupted-without-marker,
+idempotent rerun, unsafe-stamp (path-traversal) refusal, and local-verify-
+before-upload. A 3-test MinIO integration drill proves the same against a
+**real S3 API**, including the fetch CLI's 0700 temp dir being removed at exit
+and a refusal to fetch an uncommitted (marker-deleted) set.
+
+## 2.2. No-false-PASS synthetic cleanup (M18A.2 §2)
+
+The postdeploy in-gate synthetic session (§5) may only report a passing cleanup
+with AFFIRMATIVE evidence that nothing remains. An ambiguous signup response is
+`account_state_unknown` and cleanup FAILs if it cannot recover-delete-and-prove
+(no more "likely no orphan"); post-delete proof and approach-A revocation both
+require an exact HTTP 401. See §5.
+
 ## 3. In-network Validation Gate execution model (Render)
 
 Postgres and Key Value stay private (`ipAllowList: []`); no gate ever
@@ -75,7 +149,7 @@ requires opening public datastore access.
 |---|---|---|---|
 | `validate:deploy` (M18A.1) | Render **pre-deploy command** of the API service (`preDeployCommand: pnpm validate:deploy`) — after image build, inside Render, before the new version takes traffic | internal `DATABASE_URL`/`REDIS_URL` | The SINGLE deploy orchestration, in strict order: pure config-safety FIRST (an unsafe config FAILs and cascade-skips the migration — migrations are NEVER applied under unsafe config) → operator prerequisites → **db:migrate (once)** → ops:preflight → **db:migrate:status (explicit 0-pending confirm)**. FAIL/BLOCKED exits non-zero → deploy aborted. No `db:migrate && validate:predeploy` — one command, no duplicated migration logic. Render's pre-deploy timeout (30 min) comfortably covers it. (`validate:predeploy` still exists for a no-migrate config-safety pre-check.) |
 | `validate:postdeploy` | Render **one-off job** based on the API image (`render jobs` / dashboard), terminating automatically | none directly — only the PUBLIC API URL + the approved secret env | Creates its own synthetic session in-gate (§5), runs readyz/authed-status/smoke, uploads sanitized evidence (§4), exits |
-| `validate:recovery` | separate one-off job / temporary restored API+worker stack | scratch `DATABASE_URL`, scratch `REDIS_URL` (if needed), scratch media bucket, backup bucket READ, restored-stack URL, synthetic invite via env | **No write access to the primary database or primary media bucket**; the only primary-adjacent permission is narrowly-scoped read on the backup bucket. For s3 stores the gate now RUNS the media path in-band (M18A.1): `s3_recovery_prerequisites` (scratch ≠ backup, BLOCKED before mutation) → `media:verify-backup-s3` (+ wrong-key expected failure) → `media:restore-s3 --apply` into scratch → `media:verify` → post-restore smoke. The restore CLI additionally refuses primary-fingerprint destinations |
+| `validate:recovery` | separate one-off job / temporary restored API+worker stack (preceded by `backup:fetch-s3` of a committed sealed set — §2.1) | scratch `DATABASE_URL` (loopback **or** an explicitly-authorized remote scratch — see below), scratch `REDIS_URL` (if needed), scratch media bucket, backup bucket READ, restored-stack URL, synthetic invite via env | **No write access to the primary database or primary media bucket**; the only primary-adjacent permission is narrowly-scoped read on the backup bucket. The scratch guard (`backup:scratch-guard`) admits an authorized remote managed Postgres via the `NOVA_RESTORE_*` envelope (§2, M18A.2 §1) and BLOCKs `NOVA_MEDIA_RESTORE_ALLOW_PRIMARY=yes`. For s3 stores the gate RUNS the media path in-band (M18A.1): `s3_recovery_prerequisites` (scratch ≠ backup, BLOCKED before mutation) → `media:verify-backup-s3` (+ wrong-key expected failure) → `media:restore-s3 --apply` into scratch → `media:verify` → post-restore smoke. The restore CLI additionally refuses primary-fingerprint destinations |
 
 **Credential/IAM separation (names only):**
 - primary stack: media-bucket credential (rw on `nova-media` only) + backup-bucket credential (write for `media:backup-s3` + evidence prefix).
@@ -117,19 +191,32 @@ gate **bootstraps its own synthetic session in-process**:
    session) and then PROVES cleanup by requiring the deleted credentials to
    stop authenticating. A cleanup failure is a FAIL, never silent.
 
-Approach A still works: a pre-supplied `NOVA_VALIDATE_SESSION_TOKEN` is used
-as-is (no account created; cleanup passes with "nothing to clean"). Tests
-(against a real local HTTP server): success-path cleanup, cleanup after
-mid-validation failure, token/password/invite absent from the entire report,
-account deletion + session revocation proven, rerun idempotency (unique
-account per run), approach-A passthrough, and loud cleanup failure.
+Approach A still works: a pre-supplied `NOVA_VALIDATE_SESSION_TOKEN` creates no
+account, but cleanup does NOT pass it through — it **REVOKES the token
+(`/v1/auth/logout`) and PROVES it dead**, requiring an exact HTTP 401 on a
+re-probe (403/5xx/unreachable → FAIL). "Nothing to clean" is reserved for the
+case where bootstrap never transmitted a signup at all.
+
+**Cleanup invariant (M18A.2 §2): a cleanup may PASS only with affirmative
+evidence that no synthetic account or live session remains.** An ambiguous
+signup (timeout / network loss / 5xx / malformed / any non-definitive response)
+is `account_state_unknown`; cleanup attempts bounded recovery, deletes, and
+proves the credentials dead — and FAILs (with the safe synthetic handle for
+manual verification; postdeploy approval stops) if it cannot. Post-delete proof
+requires exactly HTTP 401. Tests (against a real local HTTP server, 18 cases):
+success-path cleanup, cleanup after mid-validation failure, login-failure
+recovery, committed-but-lost-signup recovery, unrecoverable-ambiguous-signup
+FAIL, delete-then-proof-401 PASS, delete-then-proof-500/timeout FAIL,
+approach-A revoke-and-prove (401 PASS; 403/5xx/unreachable FAIL),
+token/password/invite absent from every report, rerun idempotency, and loud
+cleanup failure.
 
 ## 6. Render deployment specification (draft, NOT synced)
 
 `infra/deploy/render.yaml` — validated against the official
 `render.com/schema/render.yaml.json` (jsonschema; zero errors). Contents:
 paid API web service (docker, `/readyz` health check, `preDeployCommand: pnpm
-validate:predeploy`), paid background worker, `basic-256mb` Postgres 16
+validate:deploy`), paid background worker, `basic-256mb` Postgres 16
 (pgvector via the migrations; verified at provisioning), `starter` Key Value
 (Valkey 8 — drop-in Redis; `maxmemoryPolicy: noeviction`; private only), NO
 web frontend service initially, no domain, no DNS, no autoscaling, region
@@ -143,7 +230,7 @@ only if migration or preflight fails on resources.
 
 One open image consideration recorded honestly: the current Dockerfiles keep
 the full workspace (pnpm + sources) in the image, which is what makes
-`preDeployCommand: pnpm validate:predeploy` executable — acceptable for the
+`preDeployCommand: pnpm validate:deploy` executable — acceptable for the
 controlled synthetic deployment; image slimming is deferred and must keep the
 gate runnable.
 

@@ -20,8 +20,10 @@ created-at / expected cost / connectivity / TLS / private-network / retention
 
 ## 2. Predeploy gate (B3)
 
-_pending — outcome (PASS/CONDITIONAL_PASS required), report run-id + hashes,
-evidence-store prefix._
+_pending — the Render pre-deploy command `pnpm validate:deploy` (config-safety
+→ prerequisites → db:migrate once → ops:preflight → db:migrate:status):
+outcome (PASS/CONDITIONAL_PASS required), report run-id + hashes, evidence-store
+prefix._
 
 ## 3. Controlled deployment (B4)
 
@@ -36,9 +38,11 @@ status → smoke → cleanup), report run-id + hashes._
 
 ## 5. Backup + isolated recovery drill (B6)
 
-_pending — sealed DB backup, media:backup-s3 inventory, wrong-key proof,
-scratch restore, media:verify, post-restore smoke, temporary-resource
-teardown evidence._
+_pending — sealed DB backup + `backup:publish-s3` off-box (remote commit
+marker), `media:backup-s3` inventory, wrong-key proof, `backup:fetch-s3` into
+the recovery job (marker auth + verify before restore), authorized-remote-
+scratch classification, scratch restore, `media:verify`, post-restore smoke,
+temporary-resource teardown evidence._
 
 ## 6. Cost & operational baseline (B7)
 

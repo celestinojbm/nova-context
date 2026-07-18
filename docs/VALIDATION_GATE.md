@@ -85,10 +85,11 @@ runs the aggregates, never a hand-maintained file list.
 
 Safety invariants baked into the modes: post-deploy uses **synthetic data
 only** (the smoke account self-deletes; no real user data, ever); recovery
-**never restores over production** — the existing `backup:restore-guard`
-must classify the target as local scratch (loopback + non-production) or the
-gate blocks; the backup is verified **before** any destructive restore step;
-raw DSNs and keys are never printed.
+**never restores over production** — `backup:scratch-guard` (M18A.2) must
+classify the target as local scratch (loopback + non-production) OR an
+explicitly-authorized remote scratch (the full `NOVA_RESTORE_*` envelope) or
+the gate blocks before any mutation; the backup is verified **before** any
+destructive restore step; raw DSNs and keys are never printed.
 
 ### M18A.1 gate-integrity corrections
 
@@ -130,8 +131,9 @@ raw DSNs and keys are never printed.
   (required, **alwaysRun** — never cascade-skipped) deletes the account
   through the real deletion flow (revoking all sessions) and PROVES cleanup
   by requiring the dead credentials to stop authenticating. A pre-supplied
-  `NOVA_VALIDATE_SESSION_TOKEN` (approach A) is still honored — then no
-  account is created and cleanup passes with "nothing to clean".
+  `NOVA_VALIDATE_SESSION_TOKEN` (approach A) is still honored — no account is
+  created, but cleanup **REVOKES the token and proves it dead** (exact 401);
+  it does NOT pass through as "nothing to clean".
 - **Evidence retention.** With `NOVA_VALIDATE_EVIDENCE_S3_*` configured, the
   sanitized `report.json`/`report.md`/`junit.xml` + a hash-bearing
   `meta.json` are uploaded to `validation-evidence/<mode>/<run-id>/` in the
@@ -139,15 +141,41 @@ raw DSNs and keys are never printed.
   reports). Upload failure prints `EVIDENCE RETENTION FAILED` and is never
   silently claimed; `NOVA_VALIDATE_EVIDENCE_REQUIRED=yes` folds the failure
   into the exit code.
-- **Render execution model.** predeploy runs as the API service's
+- **Render execution model.** `validate:deploy` runs as the API service's
   pre-deploy command (inside Render, internal DSNs, deploy aborts on
-  FAIL/BLOCKED); postdeploy/recovery run as one-off jobs with narrowly
-  scoped env (recovery: scratch resources + backup-bucket read only). See
+  FAIL/BLOCKED; NOT `validate:predeploy`, which remains a no-migrate
+  config-safety pre-check mode); postdeploy/recovery run as one-off jobs with
+  narrowly scoped env (recovery: scratch resources + backup-bucket read only). See
   `docs/M18_PREPROVISION_READINESS.md` §3.
 - **S3 media recovery.** `validate:recovery`'s media path is now executable
   on S3/R2 stores via `media:backup-s3` / `media:verify-backup-s3` /
   `media:restore-s3` (encrypted-as-stored copies, HMAC-authenticated
   inventory, scratch-only restore). Proven end-to-end against MinIO in CI.
+
+### M18A.2 additions (executable cloud recovery closure)
+
+- **Authorized remote scratch database.** The recovery scratch guard
+  (`backup:scratch-guard`, distinct from `restore.sh`'s `backup:restore-guard`)
+  admits an explicitly-authorized remote managed Postgres in addition to local
+  loopback. A remote target passes ONLY when the full `NOVA_RESTORE_*` envelope
+  matches (allow-flag + `scratch` class + expected host/database/credential-free
+  fingerprint + typed `NOVA_RESTORE_SCRATCH_CONFIRM` + a `NOVA_RECOVERY_RUN_ID` marker in
+  the DB name + a fingerprint proven ≠ the primary). Any mismatch/absence/
+  production → BLOCKED before mutation; a malformed DSN → FAIL. No generic
+  remote-restore bypass; the guard prints only a credential-free target +
+  names-only reasons. It also BLOCKs `NOVA_MEDIA_RESTORE_ALLOW_PRIMARY=yes`
+  (a drill must never overwrite primary).
+- **No false-PASS synthetic cleanup.** A cleanup PASSes only with affirmative
+  evidence: an ambiguous signup is `account_state_unknown` and FAILs if it
+  cannot recover-delete-and-prove (no "likely no orphan"); post-delete proof and
+  approach-A revocation both require an exact HTTP 401 (200/403/4xx/5xx/timeout
+  → FAIL).
+- **Sealed backup persistence off-box.** `backup:publish-s3` /
+  `backup:verify-s3` / `backup:fetch-s3` publish the complete sealed set to a
+  private `sealed-backups/<stamp>/` prefix bound by an HMAC-authenticated
+  commit marker written LAST; fetch downloads a committed set into a private
+  0700 temp dir, verifies, and runs `backup:verify` before restore — so a
+  Render one-off recovery job needs no persistent disk.
 
 ## Outcomes
 

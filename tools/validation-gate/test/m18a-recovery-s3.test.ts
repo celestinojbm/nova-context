@@ -139,6 +139,25 @@ describe("M18A.1 finding 2: S3 media recovery gate", () => {
     expect(ran).toHaveLength(0); // nothing mutating ran
   });
 
+  it("scratch guard BLOCKED (exit 3: unauthorized remote) → BLOCKED, no restore spawned (M18A.2 §1)", async () => {
+    const { report, ran } = await recovery(S3_ENV(), (cmd) =>
+      cmd.includes("backup:scratch-guard") ? 3 : undefined,
+    );
+    expect(report.outcome).toBe("BLOCKED");
+    expect(report.checks.find((c) => c.id === "scratch_guard")!.status).toBe("blocked");
+    expect(ran.some((c) => c.includes("media:restore-s3"))).toBe(false);
+    expect(ran.some((c) => c.includes("restore.sh") || c.includes("restore-scratch"))).toBe(false);
+  });
+
+  it("scratch guard ERROR (exit 2: malformed DATABASE_URL) → FAIL, no restore spawned (M18A.2 §1)", async () => {
+    const { report, ran } = await recovery(S3_ENV(), (cmd) =>
+      cmd.includes("backup:scratch-guard") ? 2 : undefined,
+    );
+    expect(report.outcome).toBe("FAIL");
+    expect(report.checks.find((c) => c.id === "scratch_guard")!.status).toBe("failed");
+    expect(ran.some((c) => c.includes("media:restore-s3"))).toBe(false);
+  });
+
   it("wrong media backup key that UNEXPECTEDLY succeeds → FAIL", async () => {
     // Force the expected-failure media wrong-key check to exit 0 (success).
     const { report } = await recovery(S3_ENV(), (_cmd, spec) =>

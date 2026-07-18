@@ -78,30 +78,35 @@ export async function recoveryPrerequisites(ctx: RunContext): Promise<CheckOutco
   };
 }
 
-/** The scratch target must classify as LOCAL SCRATCH (loopback + non-prod)
- * via the existing restore guard. A non-scratch target is a missing safe
- * prerequisite (BLOCKED) — the gate never drives a production restore. */
+/** The scratch target must classify as a SAFE scratch database via
+ * `backup:scratch-guard` (M18A.2): either LOCAL SCRATCH (loopback + non-prod)
+ * or an EXPLICITLY-AUTHORIZED REMOTE SCRATCH (every NOVA_RESTORE_* condition
+ * satisfied — host/db/fingerprint match, run-id marker, proven distinct from
+ * the primary, typed confirmation). Anything else is a missing safe
+ * prerequisite (BLOCKED); a malformed DATABASE_URL is a guard error (FAILED).
+ * The gate never drives a production or unverified restore, and the guard
+ * prints only a credential-free target + names-only reasons. */
 export async function scratchTargetGuard(ctx: RunContext): Promise<CheckOutcome> {
   const res = await ctx.runCommand(
-    { cmd: "pnpm", args: ["--filter", "@nova/api", "--silent", "backup:restore-guard"] },
+    { cmd: "pnpm", args: ["--filter", "@nova/api", "--silent", "backup:scratch-guard"] },
     { timeoutMs: 120_000, cwd: ctx.repoRoot },
   );
   if (res.code === 0) {
     return {
       status: "passed",
-      summary: "restore target classified as local scratch (loopback, non-production)",
-      evidence: res.stdoutExcerpt, // guard prints only the redacted target
+      summary: "restore target classified as safe scratch (local loopback OR explicitly-authorized remote scratch)",
+      evidence: res.stdoutExcerpt, // guard prints only the redacted target + reasons
     };
   }
   if (res.code === 3) {
     return {
       status: "blocked",
-      summary: "restore target is NOT a local scratch database — the gate refuses to drill against it",
-      blockingReasons: ["scratch restore target required (guard exit 3: non-local/production target)"],
+      summary: "restore target is NOT an authorized scratch database — the gate refuses to drill against it",
+      blockingReasons: ["safe scratch target required (guard exit 3: unauthorized remote / mismatch / primary-equal / production)"],
       evidence: res.stdoutExcerpt,
     };
   }
-  return { status: "failed", summary: "restore guard rejected DATABASE_URL (unparseable or guard error)", evidence: res.stderrExcerpt };
+  return { status: "failed", summary: "scratch guard rejected DATABASE_URL (missing or malformed)", evidence: res.stderrExcerpt };
 }
 
 /** A structurally-valid but WRONG backup key for the expected-failure check.

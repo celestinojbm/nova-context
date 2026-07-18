@@ -16,9 +16,13 @@ import type { CheckSpec, CommandRunner, RunContext } from "../src/types.js";
  *   - P1: an approach-A logout that leaves the session live (probe 403) is NOT
  *     accepted as revocation — only a literal 401 proves a dead session;
  *   - P2: a committed-but-lost signup (502) is recovered and deleted (no
- *     orphan), while a truly failed signup (500) passes as "likely no orphan"
- *     with a handle — never a false "nothing to clean";
+ *     orphan), while an unrecoverable ambiguous signup FAILs (M18A.2 §2);
  *   - P3: the invite is a sanitizer extra-secret (absent from every report).
+ *
+ * M18A.2 §2 tightens the invariant: a cleanup may PASS only with affirmative
+ * evidence that no account/session remains. An unrecoverable ambiguous signup
+ * FAILs (no more "likely no orphan"); post-delete proof requires exactly 401;
+ * approach-A revocation requires exactly 401 (403/5xx/unreachable → FAIL).
  */
 
 interface FakeApiState {
@@ -27,8 +31,9 @@ interface FakeApiState {
   sessions: Map<string, string>; // live token -> email
   revoked: Set<string>;
   /** "ok" | "error" (503) | "forbidden" (403 for a LIVE token — authenticated
-   *  but not allowed; must NOT be read as revoked, M18A.1 review P1). */
-  statusMode: "ok" | "error" | "forbidden";
+   *  but not allowed; must NOT be read as revoked, P1) | "unreachable" (destroy
+   *  the socket — approach-A probe cannot complete, M18A.2 §2). */
+  statusMode: "ok" | "error" | "forbidden" | "unreachable";
   /** "ok" (revokes the token) | "noop" (returns 200 but leaves the session
    *  live — a broken logout that must not be trusted as revocation, P1). */
   logoutMode: "ok" | "noop";
@@ -40,6 +45,9 @@ interface FakeApiState {
    *  "reset" (destroy socket on the 1st call, then ok). */
   loginMode: "ok" | "reject" | "reject-then-ok" | "reset";
   deleteMode: "ok" | "reject";
+  /** How the post-delete PROOF login responds for a DELETED account (M18A.2 §2):
+   *  "normal" → 401 (dead) | "http-500" → 500 | "timeout" → destroy socket. */
+  postDeleteProofMode: "normal" | "http-500" | "timeout";
   loginCalls: number;
   signups: string[];
 }
@@ -55,6 +63,7 @@ function freshState(over: Partial<FakeApiState> = {}): FakeApiState {
     signupMode: "ok",
     loginMode: "ok",
     deleteMode: "ok",
+    postDeleteProofMode: "normal",
     loginCalls: 0,
     signups: [],
     ...over,
@@ -118,7 +127,18 @@ function makeFakeApi(): Server {
       }
       const b = await readBody(req);
       const acct = stateOf().accounts.get(b.email!);
-      if (!acct || acct.deleted || acct.password !== b.password) return send(401, { error: "no" });
+      // Post-delete PROOF call (M18A.2 §2): a DELETED account's login normally
+      // returns 401 (dead), but a test can force an ambiguous 500 / a timeout —
+      // both of which must FAIL the proof, not pass.
+      if (acct?.deleted) {
+        if (stateOf().postDeleteProofMode === "http-500") return send(500, { error: "err" });
+        if (stateOf().postDeleteProofMode === "timeout") {
+          req.socket.destroy();
+          return;
+        }
+        return send(401, { error: "no" });
+      }
+      if (!acct || acct.password !== b.password) return send(401, { error: "no" });
       const token = `tok-${Math.random().toString(36).slice(2)}`;
       stateOf().sessions.set(token, b.email!);
       return send(200, { token });
@@ -136,6 +156,12 @@ function makeFakeApi(): Server {
     }
 
     if (url === "/v1/ops/status") {
+      // M18A.2 §2: an approach-A probe that cannot complete is NOT proof of a
+      // dead session — force an unreachable probe.
+      if (stateOf().statusMode === "unreachable") {
+        req.socket.destroy();
+        return;
+      }
       const t = bearer(req);
       if (!t || stateOf().revoked.has(t)) return send(401, { error: "unauthorized" });
       const email = stateOf().sessions.get(t);
@@ -272,12 +298,13 @@ describe("M18A.1 finding 4: synthetic session lifecycle", () => {
     const report = await run(ctx);
     const cleanup = report.checks.find((c) => c.id === "synthetic_session_cleanup")!;
     expect(cleanup.status).toBe("failed");
-    expect(cleanup.summary).toContain("MANUAL cleanup required");
+    expect(cleanup.summary).toContain("MANUAL cleanup/verification required");
     expect(cleanup.summary).toContain("@nova-validate.invalid"); // the handle
     expect(ctx.runtime.session?.state).toBe("cleanup_failed");
-    // The password is NEVER in the summary/report even on this failure path.
+    // The password (an extra-secret) is NEVER in the report even on this
+    // failure path. (session.password is wiped on terminal paths, so we assert
+    // via the registered extra-secrets, not the now-cleared field.)
     noSecretsInReport(report, ctx);
-    expect(cleanup.summary).not.toContain(ctx.runtime.session!.password);
   });
 
   it("delete rejected → cleanup FAILs (never silent) with a sanitized handle", async () => {
@@ -348,21 +375,82 @@ describe("M18A.1 finding 4: synthetic session lifecycle", () => {
     noSecretsInReport(report, ctx);
   });
 
-  it("finding P2: signup truly failed (HTTP 500, no account) → cleanup passes 'likely no orphan' with a handle, deletes nothing", async () => {
-    state.signupMode = "fail"; // 500, nothing created
+  it("M18A.2 §2: signup HTTP 500 + no recoverable login → cleanup FAILs (no more 'likely no orphan')", async () => {
+    state.signupMode = "fail"; // 500, nothing created — but we cannot PROVE that
     const ctx = makeCtx();
     const report = await run(ctx);
     const byId = Object.fromEntries(report.checks.map((c) => [c.id, c]));
     expect(byId.synthetic_session_bootstrap!.status).toBe("failed");
     const cleanup = byId.synthetic_session_cleanup!;
-    // No confirmed account → we cannot claim an orphan, but must not claim a
-    // false "nothing to clean" either: PASS while emitting the handle.
-    expect(cleanup.status).toBe("passed");
-    expect(cleanup.summary).toContain("likely no orphan");
+    // No affirmative evidence the account is gone → FAIL with the handle.
+    expect(cleanup.status).toBe("failed");
+    expect(cleanup.summary).toContain("MANUAL cleanup/verification required");
     expect(cleanup.summary).toContain("@nova-validate.invalid");
-    expect(ctx.runtime.session?.state).toBe("cleaned");
-    expect(state.signups).toHaveLength(0); // nothing was created
+    expect(cleanup.summary).not.toContain("likely no orphan");
+    expect(ctx.runtime.session?.state).toBe("cleanup_failed");
     noSecretsInReport(report, ctx);
+  });
+
+  it("M18A.2 §2: committed-but-lost signup (502) + login unrecoverable → cleanup FAILs (real orphan flagged)", async () => {
+    state.signupMode = "commit-then-502"; // account EXISTS (orphan)
+    state.loginMode = "reject"; // …but no login can ever recover it
+    const ctx = makeCtx();
+    const report = await run(ctx);
+    const cleanup = report.checks.find((c) => c.id === "synthetic_session_cleanup")!;
+    expect(cleanup.status).toBe("failed");
+    expect(cleanup.summary).toContain("MANUAL cleanup/verification required");
+    expect(cleanup.summary).toContain("@nova-validate.invalid");
+    expect(state.signups).toHaveLength(1); // the orphan really exists
+    noSecretsInReport(report, ctx);
+  });
+
+  it("M18A.2 §2: delete 200 but post-delete proof returns HTTP 500 → cleanup FAILs (only 401 proves dead)", async () => {
+    state.postDeleteProofMode = "http-500";
+    const ctx = makeCtx();
+    const report = await run(ctx);
+    const cleanup = report.checks.find((c) => c.id === "synthetic_session_cleanup")!;
+    expect(cleanup.status).toBe("failed");
+    expect(cleanup.summary).toContain("only 401 proves dead credentials");
+    expect(cleanup.summary).toContain("HTTP 500");
+    // The account WAS deleted, but cleanup is not PROVEN, so it must not PASS.
+    expect([...state.accounts.values()][0]!.deleted).toBe(true);
+    noSecretsInReport(report, ctx);
+  });
+
+  it("M18A.2 §2: delete 200 but the proof request times out → cleanup FAILs (proof unreachable)", async () => {
+    state.postDeleteProofMode = "timeout";
+    const ctx = makeCtx();
+    const report = await run(ctx);
+    const cleanup = report.checks.find((c) => c.id === "synthetic_session_cleanup")!;
+    expect(cleanup.status).toBe("failed");
+    expect(cleanup.summary).toContain("only 401 proves dead credentials");
+    expect(cleanup.summary).toContain("unreachable");
+    noSecretsInReport(report, ctx);
+  });
+
+  it("M18A.2 §2: approach-A probe HTTP 503 → cleanup FAILs (5xx is not proof of a dead session)", async () => {
+    state.accounts.set("op@nova-validate.invalid", { password: "x", deleted: false });
+    state.sessions.set("operator-token-live", "op@nova-validate.invalid");
+    state.logoutMode = "noop";
+    state.statusMode = "error"; // probe → 503
+    const ctx = makeCtx({ env: { NOVA_VALIDATE_SESSION_TOKEN: "operator-token-live" } as NodeJS.ProcessEnv });
+    ctx.runtime.session = { state: "authenticated", email: "", password: "", token: "operator-token-live", bootstrapped: false };
+    const out = await syntheticSessionCleanup(ctx);
+    expect(out.status).toBe("failed");
+    expect(out.summary).toContain("only 401 proves a dead session");
+    expect(ctx.runtime.session.state).toBe("cleanup_failed");
+  });
+
+  it("M18A.2 §2: approach-A probe unreachable → cleanup FAILs (cannot prove revocation)", async () => {
+    state.accounts.set("op@nova-validate.invalid", { password: "x", deleted: false });
+    state.sessions.set("operator-token-live", "op@nova-validate.invalid");
+    state.statusMode = "unreachable"; // probe cannot complete
+    const ctx = makeCtx({ env: { NOVA_VALIDATE_SESSION_TOKEN: "operator-token-live" } as NodeJS.ProcessEnv });
+    ctx.runtime.session = { state: "authenticated", email: "", password: "", token: "operator-token-live", bootstrapped: false };
+    const out = await syntheticSessionCleanup(ctx);
+    expect(out.status).toBe("failed");
+    expect(out.summary).toContain("approach-A revoke unreachable");
+    expect(ctx.runtime.session.state).toBe("cleanup_failed");
   });
 
   it("finding P3: the invite is registered as a sanitizer secret (present in extraSecrets, absent from the report)", async () => {

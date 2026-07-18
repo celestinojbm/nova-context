@@ -111,11 +111,12 @@ export async function syntheticSessionBootstrap(ctx: RunContext): Promise<CheckO
   // The password AND the invite are sanitizer extra-secrets (M18A.1 review P3).
   ctx.runtime.extraSecrets.push(password, invite);
 
-  // Record the INTENT before calling signup (M18A.1 review P2): if signup
-  // commits server-side but the response is lost (timeout / proxy 5xx), the
-  // account may exist — cleanup must still have the email+password to verify
-  // and delete it rather than falsely reporting "nothing to clean".
-  ctx.runtime.session = { state: "signup_attempted", email, password, bootstrapped: true };
+  // Record the INTENT before calling signup (M18A.1 review P2 / M18A.2 §2): the
+  // instant the request is transmitted the account MAY exist, so the state is
+  // `account_state_unknown` until a definitive 201 confirms it. Cleanup must
+  // then attempt recovery and PROVE the account is gone — never assume "nothing
+  // to clean".
+  ctx.runtime.session = { state: "account_state_unknown", email, password, bootstrapped: true };
 
   let signupStatus: number;
   try {
@@ -125,18 +126,19 @@ export async function syntheticSessionBootstrap(ctx: RunContext): Promise<CheckO
     });
     signupStatus = signup.status;
   } catch (err) {
-    // Response lost — the account MAY have been created; stays signup_attempted.
+    // Timeout / network loss / any non-definitive response → account_state_unknown.
     return {
       status: "failed",
-      summary: sanitize(`synthetic signup response lost: ${(err as Error).message}; cleanup will verify + delete any created account`),
+      summary: sanitize(`synthetic signup response lost: ${(err as Error).message}; cleanup must recover + delete or FAIL`),
     };
   }
   if (signupStatus !== 201) {
-    // Non-201 could still be a committed-then-5xx account; stays
-    // signup_attempted so cleanup verifies rather than assumes.
+    // A non-201 (5xx / malformed / anything non-definitive) could still be a
+    // committed-then-error account; stays account_state_unknown so cleanup
+    // recovers-and-proves rather than assuming.
     return {
       status: "failed",
-      summary: `synthetic signup returned HTTP ${signupStatus}; cleanup will verify + delete any created account`,
+      summary: `synthetic signup returned HTTP ${signupStatus}; cleanup must recover + delete or FAIL`,
     };
   }
   // Signup CONFIRMED — the account definitely exists now.
@@ -209,16 +211,24 @@ async function deleteAccount(
 }
 
 /**
- * M18A §5 / M18A.1 finding 4: destroy the synthetic session — ALWAYS runs
- * (never cascade-skipped), so a failure anywhere after signup cannot leak a
- * synthetic account. Handles every lifecycle state:
- *   - approach A (supplied token): REVOKE via /v1/auth/logout and prove the
- *     token no longer authenticates;
- *   - authenticated (approach B): delete via the real flow, prove dead;
- *   - account_created (login had failed): RECOVER a token via bounded re-login,
- *     then delete + prove; if unrecoverable, FAIL loudly with a sanitized
- *     synthetic handle for operator cleanup — never "nothing to clean".
- * In-memory secret references are cleared once cleanup finishes.
+ * M18A §5 / M18A.1 finding 4 / M18A.2 §2: destroy the synthetic session —
+ * ALWAYS runs (never cascade-skipped), so a failure anywhere after signup
+ * cannot leak a synthetic account.
+ *
+ * INVARIANT (M18A.2 §2): a cleanup check may PASS only with AFFIRMATIVE
+ * evidence that no synthetic account or live session remains. Ambiguity is
+ * never a pass.
+ *   - approach A (supplied token): REVOKE via /v1/auth/logout, then prove the
+ *     token is dead — ONLY a literal 401 proves it; 403 / 5xx / unreachable
+ *     are all FAIL;
+ *   - authenticated (approach B): delete via the real flow, then prove dead;
+ *   - account_state_unknown / account_created: RECOVER a token via bounded
+ *     re-login, then delete + prove. If a token cannot be recovered, FAIL
+ *     (never "likely no orphan") with a sanitized synthetic handle and a
+ *     manual-verification instruction — postdeploy approval stops.
+ *   - post-delete proof: the deleted account's credentials must return exactly
+ *     HTTP 401 on login; 200 / 403 / 4xx / 5xx / timeout are all FAIL.
+ * In-memory secret references are cleared on every terminal path.
  */
 export async function syntheticSessionCleanup(ctx: RunContext): Promise<CheckOutcome> {
   const s = ctx.runtime.session;
@@ -238,7 +248,7 @@ export async function syntheticSessionCleanup(ctx: RunContext): Promise<CheckOut
       // 401 counts as dead (M18A.1 review P1).
       const probe = await apiCall(base!, "/v1/ops/status", { token: s.token });
       const dead = probe.status === 401;
-      s.token = undefined;
+      clearSessionSecrets(ctx);
       s.state = dead ? "cleaned" : "cleanup_failed";
       return dead
         ? { status: "passed", summary: `pre-supplied session REVOKED + proven dead (logout HTTP ${logout.status}, probe HTTP 401)` }
@@ -247,6 +257,7 @@ export async function syntheticSessionCleanup(ctx: RunContext): Promise<CheckOut
             summary: `pre-supplied session NOT proven revoked (logout HTTP ${logout.status}, probe HTTP ${probe.status}; only 401 proves a dead session) — revoke it manually`,
           };
     } catch (err) {
+      clearSessionSecrets(ctx);
       s.state = "cleanup_failed";
       return { status: "failed", summary: sanitize(`approach-A revoke unreachable: ${(err as Error).message}`) };
     }
@@ -263,39 +274,35 @@ export async function syntheticSessionCleanup(ctx: RunContext): Promise<CheckOut
     }
   }
   if (!token) {
-    // No token. Whether this is a genuine failure depends on whether the
-    // account is CONFIRMED to exist:
-    //   - signup_attempted (unconfirmed): a failed re-login most likely means
-    //     the account was never created (or the password never took). We
-    //     cannot prove an orphan exists, so PASS but emit the handle so an
-    //     operator can double-check (M18A.1 review P2 — never a false
-    //     "orphan confirmed", never a false "nothing to clean").
-    //   - account_created (confirmed 201): an orphan DEFINITELY exists and we
-    //     could not delete it → FAIL loudly with the handle.
-    if (s.state === "signup_attempted") {
-      s.state = "cleaned";
-      return {
-        status: "passed",
-        summary: `signup was unconfirmed and no matching account could be authenticated after ${CLEANUP_ATTEMPTS} attempts — likely no orphan; verify synthetic handle ${syntheticHandle(s.email)} if in doubt`,
-      };
-    }
+    // No recoverable token. Whether the account is CONFIRMED (account_created)
+    // or only POSSIBLE (account_state_unknown), we cannot PROVE it is gone, so
+    // both FAIL (M18A.2 §2 — no more "likely no orphan" pass). The synthetic
+    // handle is emitted for manual verification; postdeploy approval stops.
+    const handle = syntheticHandle(s.email);
+    const kind = s.state === "account_created" ? "CONFIRMED" : "possible (signup response was non-definitive)";
+    clearSessionSecrets(ctx);
     s.state = "cleanup_failed";
     return {
       status: "failed",
-      summary: `could not authenticate to delete the CONFIRMED synthetic account after ${CLEANUP_ATTEMPTS} attempts — MANUAL cleanup required for synthetic handle ${syntheticHandle(s.email)}`,
+      summary: `could not authenticate to delete the ${kind} synthetic account after ${CLEANUP_ATTEMPTS} attempts — MANUAL cleanup/verification required for synthetic handle ${handle}`,
     };
   }
 
   s.state = "deletion_attempted";
   const delStatus = await deleteAccount(base!, token, s.password);
   if (delStatus !== 200) {
+    const handle = syntheticHandle(s.email);
+    clearSessionSecrets(ctx);
     s.state = "cleanup_failed";
     return {
       status: "failed",
-      summary: `synthetic account deletion failed (HTTP ${delStatus ?? "network error"}) after ${CLEANUP_ATTEMPTS} attempts — MANUAL cleanup required for synthetic handle ${syntheticHandle(s.email)}`,
+      summary: `synthetic account deletion failed (HTTP ${delStatus ?? "network error"}) after ${CLEANUP_ATTEMPTS} attempts — MANUAL cleanup required for synthetic handle ${handle}`,
     };
   }
-  // Prove cleanup: the deleted account's credentials must be dead.
+  // Prove cleanup: the deleted account's credentials must return EXACTLY 401
+  // (credential rejected). Anything else — 200 (still live), 403 (still
+  // authenticated), 4xx/5xx (indeterminate), or an unreachable proof — is NOT
+  // affirmative evidence and FAILs (M18A.2 §2).
   let reloginStatus: number | null = null;
   try {
     const relogin = await apiCall(base!, "/v1/auth/login", {
@@ -304,20 +311,34 @@ export async function syntheticSessionCleanup(ctx: RunContext): Promise<CheckOut
     });
     reloginStatus = relogin.status;
   } catch {
-    reloginStatus = null; // unreachable at prove-time; deletion already 200'd
+    reloginStatus = null; // unreachable at prove-time → cleanup NOT proven.
   }
-  if (reloginStatus === 200) {
+  if (reloginStatus !== 401) {
+    const handle = syntheticHandle(s.email);
+    clearSessionSecrets(ctx);
     s.state = "cleanup_failed";
-    return { status: "failed", summary: "synthetic account still authenticates after deletion (cleanup NOT proven)" };
+    return {
+      status: "failed",
+      summary: `synthetic account deletion NOT proven — post-delete login returned HTTP ${reloginStatus ?? "unreachable"} (only 401 proves dead credentials); MANUAL verification required for synthetic handle ${handle}`,
+    };
   }
-  // Clear in-memory secret references now that cleanup is done.
-  s.token = undefined;
-  s.password = "";
+  // Affirmative evidence: credentials rejected (401). Clear secret references.
+  clearSessionSecrets(ctx);
   s.state = "cleaned";
   return {
     status: "passed",
-    summary: `synthetic account deleted + sessions revoked (post-delete login HTTP ${reloginStatus ?? "unreachable"} — cleanup proven)`,
+    summary: "synthetic account deleted + sessions revoked (post-delete login HTTP 401 — cleanup proven)",
   };
+}
+
+/** Clear in-memory secret references once a cleanup path is terminal. The
+ * email (a safe synthetic handle) is kept for the report; token/password are
+ * wiped. Extra-secrets already registered stay registered (sanitizer safety). */
+function clearSessionSecrets(ctx: RunContext): void {
+  if (ctx.runtime.session) {
+    ctx.runtime.session.token = undefined;
+    ctx.runtime.session.password = "";
+  }
 }
 
 function randomHex(bytes: number): string {
