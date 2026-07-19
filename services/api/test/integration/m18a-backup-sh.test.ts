@@ -74,7 +74,7 @@ describe.skipIf(!databaseUrl)("M18A.1: scripts/backup.sh fail-closed media handl
     expect(out).not.toContain("Media store tar"); // fs branch was NOT taken
   }, 60_000);
 
-  it("fs store with no media root → completes as db-only (distinct 'no media present' message)", async () => {
+  it("fs db-only, publish off → 'Local sealed backup prepared' + 'Local-only backup complete' (NOT durable off-box) (M18A.3 §4)", async () => {
     const { code, out } = await runBackup(
       {
         NOVA_BACKUP_KEY: randomBytes(32).toString("hex"),
@@ -85,7 +85,26 @@ describe.skipIf(!databaseUrl)("M18A.1: scripts/backup.sh fail-closed media handl
       dest(),
     );
     expect(code).toBe(0);
-    expect(out).toContain("Backup complete");
+    expect(out).toContain("Local sealed backup prepared");
     expect(out).toContain("no media present");
+    // Off-box publishing disabled → durability is NOT claimed.
+    expect(out).toContain("Local-only backup complete; off-box durability not established");
+    expect(out).not.toContain("durable off-box:"); // the durable-completion line
+  }, 60_000);
+
+  it("fs db-only + NOVA_BACKUP_REQUIRE_OFFBOX=yes but publish off → fails closed, no completion (M18A.3 §4)", async () => {
+    const { code, out } = await runBackup(
+      {
+        NOVA_BACKUP_KEY: randomBytes(32).toString("hex"),
+        DATABASE_URL: databaseUrl!,
+        NOVA_MEDIA_STORE: "fs",
+        NOVA_MEDIA_FS_ROOT: "",
+        NOVA_BACKUP_REQUIRE_OFFBOX: "yes",
+      },
+      dest(),
+    );
+    expect(code).not.toBe(0);
+    expect(out).toContain("NOVA_BACKUP_REQUIRE_OFFBOX=yes but off-box publish is not enabled");
+    expect(out).not.toContain("backup complete"); // no completion statement at all
   }, 60_000);
 });

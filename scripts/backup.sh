@@ -127,26 +127,29 @@ if [ "$MEDIA_MODE" = "s3" ]; then
         exit 1; }
 fi
 
+# M18A.3 §4: completion semantics are STAGED. The local sealed set is only
+# "prepared"; a durability claim is made ONLY after off-box publish + remote
+# verification succeed. Every stage fails CLOSED (set -e + explicit exits), so
+# no completion line is ever printed after a failure.
 case "$MEDIA_MODE" in
-  fs)    echo "Backup complete: $DEST (sealed db + fs media tar as of $STAMP)" ;;
-  s3)    echo "Backup complete: $DEST (sealed db + verified s3 media backup as of $STAMP)" ;;
-  empty) echo "Backup complete: $DEST (sealed db; no media present as of $STAMP)" ;;
-  *)     echo "Backup complete: $DEST (sealed db as of $STAMP)" ;;
+  fs)    echo "Local sealed backup prepared: $DEST (sealed db + fs media tar as of $STAMP)" ;;
+  s3)    echo "Local sealed backup prepared: $DEST (sealed db + verified s3 media backup as of $STAMP)" ;;
+  empty) echo "Local sealed backup prepared: $DEST (sealed db; no media present as of $STAMP)" ;;
+  *)     echo "Local sealed backup prepared: $DEST (sealed db as of $STAMP)" ;;
 esac
 
-# M18A.2 §3: optionally PUBLISH the complete sealed set to the remote backup
-# store so an ephemeral (e.g. Render one-off) job's local artifacts survive
-# teardown. Opt-in via NOVA_BACKUP_PUBLISH_S3=yes; fails CLOSED. backup:publish-s3
-# verifies the local set, uploads + re-verifies every object, and commits the
-# authenticated marker LAST; backup:verify-s3 then re-authenticates the remote
-# set. No plaintext is uploaded.
+# Optionally PUBLISH the complete sealed set off-box (NOVA_BACKUP_PUBLISH_S3=yes;
+# M18A.2 §3) so an ephemeral (e.g. Render one-off) job's local artifacts survive
+# teardown. backup:publish-s3 verifies the local set, uploads + re-verifies
+# every object, and commits the authenticated marker LAST; backup:verify-s3 then
+# re-authenticates the remote set. No plaintext is uploaded.
 if [ "${NOVA_BACKUP_PUBLISH_S3:-no}" = "yes" ]; then
   if [ -z "${NOVA_BACKUP_S3_BUCKET:-}" ]; then
     echo "ERROR: NOVA_BACKUP_PUBLISH_S3=yes but NOVA_BACKUP_S3_BUCKET is not set." >&2
     echo "  Cannot publish the sealed backup off-box. Refusing." >&2
     exit 1
   fi
-  echo "→ Publishing sealed backup set to remote store (local verify → publish → remote verify)"
+  echo "Publishing off-box (sealed-backups/$STAMP/)"
   ( cd "$REPO_ROOT" && pnpm --filter @nova/api --silent backup:publish-s3 -- \
       --dir="$DEST" --stamp="$STAMP" --created-at="$CREATED_AT" --apply ) || {
         echo "ERROR: remote sealed-backup publish failed — backup is NOT durable off-box." >&2
@@ -155,6 +158,19 @@ if [ "${NOVA_BACKUP_PUBLISH_S3:-no}" = "yes" ]; then
       --stamp="$STAMP" ) || {
         echo "ERROR: remote sealed-backup verification failed — publish NOT trustworthy." >&2
         exit 1; }
-  echo "Remote sealed backup published + verified (sealed-backups/$STAMP/)"
+  echo "Remote verification passed"
+  echo "Backup complete and durable off-box: $DEST -> sealed-backups/$STAMP/ (as of $STAMP)"
+else
+  # Off-box publishing disabled. A local-only backup on an EPHEMERAL job's
+  # discarded filesystem is not durable — fail CLOSED when the operator has
+  # declared the job ephemeral (NOVA_BACKUP_REQUIRE_OFFBOX=yes). Otherwise state
+  # plainly that off-box durability was NOT established.
+  if [ "${NOVA_BACKUP_REQUIRE_OFFBOX:-no}" = "yes" ]; then
+    echo "ERROR: NOVA_BACKUP_REQUIRE_OFFBOX=yes but off-box publish is not enabled" >&2
+    echo "  (NOVA_BACKUP_PUBLISH_S3 != yes). A local-only backup on an ephemeral" >&2
+    echo "  job's filesystem is not durable. Refusing (invalid configuration)." >&2
+    exit 1
+  fi
+  echo "Local-only backup complete; off-box durability not established: $DEST (as of $STAMP)"
 fi
 echo "REMINDER: NOVA_BACKUP_KEY and NOVA_ENCRYPTION_KEY live in your secret store, NOT here."

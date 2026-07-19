@@ -161,9 +161,14 @@ export function classifyScratchTarget(url: string, env: NodeJS.ProcessEnv): Scra
     // A DISTINCT var from restore.sh's NOVA_RESTORE_CONFIRM, to avoid clobbering.
     reasons.push("explicit typed recovery confirmation absent/incorrect (NOVA_RESTORE_SCRATCH_CONFIRM)");
   }
-  if (isProd) {
-    reasons.push("target is production-classified (NODE_ENV=production) — never a scratch target");
-  }
+  // M18A.3 §1: NODE_ENV is a RUNTIME flag, NOT a target classifier. A temporary
+  // restored stack / recovery job may legitimately run with NODE_ENV=production
+  // for production-equivalent behavior; that does not make a managed SCRATCH
+  // database the primary. Safety for a remote target derives ENTIRELY from the
+  // explicit envelope below (class + host + database + fingerprint + run-id
+  // marker + fingerprint ≠ primary + typed confirmation + allow-flag), so
+  // NODE_ENV=production is NOT a block here. (Local loopback still requires
+  // non-production — see branch A above.)
 
   const expectHost = (env.NOVA_RESTORE_EXPECT_HOST ?? "").trim().toLowerCase();
   const expectDb = (env.NOVA_RESTORE_EXPECT_DATABASE ?? "").trim();

@@ -1,6 +1,7 @@
 import { loadEnv } from "../env.js";
 import { parseBackupKey } from "./crypto.js";
 import { backupTarget } from "./media-s3-env.js";
+import { sanitizeBackupError } from "./sanitize.js";
 import { publishSealedBackup } from "./sealed-backup-s3.js";
 
 /**
@@ -42,6 +43,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error(`backup:publish-s3 failed: ${(err as Error).message}`);
+  console.error(`backup:publish-s3 failed: ${sanitizeBackupError((err as Error).message)}`);
   process.exit(1);
 });

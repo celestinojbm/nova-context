@@ -358,7 +358,7 @@ function recoveryChecks(ctx: RunContext): CheckSpec[] {
   checks.push(
     {
       id: "scratch_guard",
-      name: "Restore target classifies as LOCAL SCRATCH (never production)",
+      name: "Restore target classifies as SAFE SCRATCH (local loopback OR authorized remote scratch)",
       category: "recovery",
       severity: "P0",
       required: true,
@@ -431,7 +431,7 @@ function recoveryChecks(ctx: RunContext): CheckSpec[] {
   checks.push(
     {
       id: "restore_scratch",
-      name: "scripts/restore.sh into the scratch target (guarded, verified-first)",
+      name: "scripts/restore.sh into the scratch target (authorized-scratch guard, verified-first)",
       category: "recovery",
       severity: "P0",
       required: true,
@@ -439,7 +439,10 @@ function recoveryChecks(ctx: RunContext): CheckSpec[] {
       command: {
         cmd: "bash",
         args: ["scripts/restore.sh", dir, stamp],
-        env: { NOVA_RESTORE_CONFIRM: "RESTORE" },
+        // M18A.3 §1: the destructive restore uses the SAME authorization the
+        // gate validated (backup:scratch-guard, re-checked before pg_restore) —
+        // the production override is inaccessible in this mode.
+        env: { NOVA_RESTORE_CONFIRM: "RESTORE", NOVA_RESTORE_MODE: "authorized-scratch" },
       },
     },
     {

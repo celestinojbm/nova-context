@@ -38,11 +38,20 @@ status → smoke → cleanup), report run-id + hashes._
 
 ## 5. Backup + isolated recovery drill (B6)
 
-_pending — sealed DB backup + `backup:publish-s3` off-box (remote commit
-marker), `media:backup-s3` inventory, wrong-key proof, `backup:fetch-s3` into
-the recovery job (marker auth + verify before restore), authorized-remote-
-scratch classification, scratch restore, `media:verify`, post-restore smoke,
-temporary-resource teardown evidence._
+_pending — driven by the SINGLE orchestration entrypoint
+`pnpm validate:recovery-remote -- --stamp=<s> --restored-base-url=<url>
+[--invite=<code>]` (never a hand-composed fetch+mkdir+gate+rm chain). It: seals
+a DB backup + `backup:publish-s3` off-box (remote commit marker), `media:backup-s3`
+inventory, wrong-key proof; creates a NEW private 0700 workspace; `backup:fetch-s3`
+into it (marker auth + per-artifact verify + local `backup:verify` BEFORE
+restore); runs `restore.sh` in `NOVA_RESTORE_MODE=authorized-scratch` (the SAME
+`backup:scratch-guard` decision the gate validated — production override
+inaccessible, re-checked immediately before `pg_restore`, unseal via
+`backup:unseal-file`); restores S3 media into the scratch bucket and runs
+`media:verify` in the CORRECTED order (DB → media restore → media:verify, never
+media:verify first); post-restore smoke against the restored stack; ALWAYS
+removes the temporary workspace and reports any cleanup failure; teardown
+evidence for the temporary recovery resources._
 
 ## 6. Cost & operational baseline (B7)
 

@@ -41,7 +41,8 @@ load/chaos tooling, or anything that duplicates an existing suite.
 | `pnpm validate:pr` | PR/merge gate: `build → typecheck → test → db:migrate → test:integration` | local/CI Postgres+Redis only — no cloud creds, ever | **PASS** when repo checks pass |
 | `pnpm validate:predeploy` | production posture + operator prerequisites + `ops:preflight` | `NODE_ENV=production` + operator secrets (names checked, values never printed) | **BLOCKED** (no sanctioned real infra) |
 | `pnpm validate:postdeploy -- --base-url=… [--invite=…]` | `/readyz`, **mandatory** authed `/v1/ops/status` (`NOVA_VALIDATE_SESSION_TOKEN`), synthetic `ops:smoke` | a REAL deployed Nova API + invite for the self-deleting synthetic account + operator session token | **BLOCKED** (no real deployment) |
-| `pnpm validate:recovery -- --backup-dir=… --stamp=… --restored-base-url=… [--invite=…]` | `backup:verify` (+ expected wrong-key failure) → guarded scratch restore → migrate no-op → `media:verify` → **mandatory** post-restore smoke against the restored scratch stack | sealed backup, `NOVA_BACKUP_KEY`, `NOVA_ENCRYPTION_KEY`, a SCRATCH `DATABASE_URL`, the restored stack's loopback URL, a synthetic invite (`--invite` or `NOVA_SMOKE_INVITE`) | **BLOCKED** (no sanctioned backup/scratch target) |
+| `pnpm validate:recovery -- --backup-dir=… --stamp=… --restored-base-url=… [--invite=…]` | `backup:verify` (+ expected wrong-key failure) → guarded scratch restore → migrate no-op → **S3 media restore** → `media:verify` → **mandatory** post-restore smoke against the restored scratch stack | a LOCAL sealed backup dir, `NOVA_BACKUP_KEY`, `NOVA_ENCRYPTION_KEY`, a SCRATCH `DATABASE_URL`, the restored stack's loopback URL, a synthetic invite (`--invite` or `NOVA_SMOKE_INVITE`) | **BLOCKED** (no sanctioned backup/scratch target) |
+| `pnpm validate:recovery-remote -- --stamp=… --restored-base-url=… [--invite=…]` | SINGLE off-box drill: new private 0700 workspace → `backup:fetch-s3` (marker auth + verify + `backup:verify`) → gate `recovery` mode → ALWAYS remove the workspace | off-box sealed set in the backup store (`NOVA_BACKUP_S3_*`) + everything `validate:recovery` needs; NO operator-supplied `--out`/`--backup-dir` | **BLOCKED** (no sanctioned off-box set/scratch target) |
 
 ### Gate-integrity guarantees (M17B.1)
 
@@ -176,6 +177,41 @@ destructive restore step; raw DSNs and keys are never printed.
   commit marker written LAST; fetch downloads a committed set into a private
   0700 temp dir, verifies, and runs `backup:verify` before restore — so a
   Render one-off recovery job needs no persistent disk.
+
+### M18A.3 additions (single executable recovery orchestration)
+
+- **One remote-recovery entrypoint.** `pnpm validate:recovery-remote --
+  --stamp=<s> --restored-base-url=<url> [--invite=<code>]` is the SINGLE command
+  for a real off-box recovery drill — the operator never hand-composes
+  `backup:fetch-s3 && mkdir && validate:recovery && rm -rf`. It creates a NEW
+  private 0700 workspace (mkdtemp; refuses a symlink/non-directory), fetches the
+  COMMITTED sealed set into it (marker auth + per-artifact verify + local
+  `backup:verify`), invokes the gate `recovery` mode against that exact
+  directory, preserves ONLY the sanitized reports, and ALWAYS removes the
+  workspace in a `finally` — reporting any cleanup failure explicitly and
+  exiting non-zero on gate FAIL/BLOCKED **or** a cleanup failure. Synthetic data
+  only. Local `validate:recovery` is unchanged.
+- **One authorization decision on the destructive path.** `scripts/restore.sh`
+  now runs under `NOVA_RESTORE_MODE`: `authorized-scratch` uses the EXACT
+  `backup:scratch-guard` decision the gate validated (local loopback OR the full
+  remote-scratch envelope) and the manual production override
+  (`NOVA_RESTORE_ALLOW_PRODUCTION=yes`) is INACCESSIBLE; `manual` (default) keeps
+  the `backup:restore-guard` loopback-or-explicit-override behavior for hands-on
+  disaster recovery. `NODE_ENV=production` is runtime-only and never by itself
+  classifies a managed scratch DB as primary — safety comes from the envelope.
+  The guard is re-checked IMMEDIATELY before `pg_restore`, so a DATABASE_URL
+  swapped mid-run is caught by the same guard.
+- **Corrected DB/media restoration order.** `restore.sh` is responsible ONLY for
+  guard → verify → unseal → restore (DB, and fs media when present). Post-restore
+  migrations, S3 media restore, `media:verify`, and smoke are owned by the gate
+  (`validate:recovery` / `validate:recovery-remote`) in the one authoritative
+  order: DB restore → S3 **media restore** → `media:verify`. The script no longer
+  runs `media:verify` against a scratch bucket the gate has not populated yet
+  (the earlier wrong-order defect), and migrations run once, not twice.
+- **Robust unseal primitive.** Decryption is done by the dedicated
+  `backup:unseal-file -- --in=<sealed.enc> --out=<plaintext>` command (realpath'd
+  input, GCM-authenticated, fail-closed exit 2 on wrong key, sanitized errors),
+  replacing the earlier fragile inline `tsx -e` eval on the restore path.
 
 ## Outcomes
 

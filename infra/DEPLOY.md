@@ -190,6 +190,29 @@ the fs media root. What each piece means:
   committed set into a private dir, which authenticates the marker + verifies
   every hash + runs `backup:verify` BEFORE restore — so no persistent disk is
   required.
+- **Completion semantics (M18A.3 §4)** — `scripts/backup.sh` never prints an
+  unqualified "Backup complete" before off-box durability is established. A
+  successful local seal prints "Local sealed backup prepared"; only after
+  `backup:publish-s3` + `backup:verify-s3` succeed does it print "Backup
+  complete and durable off-box". A local-only seal (no publish) prints
+  "Local-only backup complete; off-box durability not established". On a backup
+  job whose disk is ephemeral, set `NOVA_BACKUP_REQUIRE_OFFBOX=yes` so the
+  script FAILS closed unless the set was published + verified off-box.
+- **Single off-box recovery drill (M18A.3 §3)** — the whole drill is ONE
+  command: `pnpm validate:recovery-remote -- --stamp=<s> --restored-base-url=<url>
+  [--invite=<code>]`. It creates a new private 0700 workspace, fetches the
+  committed set into it, runs the gate `recovery` mode, and ALWAYS removes the
+  workspace (non-zero on gate FAIL/BLOCKED or a cleanup failure). Do NOT
+  hand-compose `backup:fetch-s3 && mkdir && validate:recovery && rm`.
+- **Restore-script authorization + order (M18A.3 §1/§2)** — run the destructive
+  `scripts/restore.sh <dir> <stamp>` with `NOVA_RESTORE_MODE=authorized-scratch`
+  for the automated drill: it uses the SAME `backup:scratch-guard` decision the
+  gate validated (re-checked immediately before `pg_restore`) and the manual
+  `NOVA_RESTORE_ALLOW_PRODUCTION=yes` override is inaccessible. The script does
+  guard → verify → unseal (`backup:unseal-file`) → restore only; post-restore
+  migration, **S3 media restore, then `media:verify`** (in that order), and smoke
+  are owned by the gate — the script no longer runs `media:verify` before the
+  media exists. Leave `NOVA_RESTORE_MODE` empty for the hands-on `manual` path.
 - **Recovery scratch target (M18A.2 §1)** — the recovery gate's
   `backup:scratch-guard` accepts local loopback Postgres, OR a temporary
   managed remote scratch when the full `NOVA_RESTORE_*` envelope matches

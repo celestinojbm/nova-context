@@ -7,7 +7,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "gate": "tsx src/cli.ts"
+    "gate": "tsx src/cli.ts",
+    "recovery-remote": "tsx src/recovery-remote.ts"
   },
   "dependencies": {
     "@nova/context-engine": "workspace:*"

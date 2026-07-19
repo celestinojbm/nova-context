@@ -151,10 +151,22 @@ describe("classifyScratchTarget (M18A.2)", () => {
     expect(c.reasons.join(" ")).toContain("NOVA_RESTORE_EXPECT_FINGERPRINT");
   });
 
-  it("production-classified remote → blocked even if otherwise authorized", () => {
+  it("NODE_ENV=production does NOT block an otherwise-authorized remote scratch (M18A.3 §1)", () => {
+    // A recovery job may run production-runtime; safety is the envelope, not
+    // NODE_ENV. The managed scratch DB is still proven scratch by host/db/
+    // fingerprint/run-id/primary-diff/confirmation.
     const c = classifyScratchTarget(REMOTE_DSN, authEnv({ NODE_ENV: "production" }));
+    expect(c.verdict).toBe("remote_scratch");
+    expect(c.reasons).toEqual([]);
+  });
+
+  it("local loopback STILL requires non-production (branch A unchanged)", () => {
+    const c = classifyScratchTarget("postgresql://nova:nova@localhost:5432/scratch", {
+      NODE_ENV: "production",
+    } as NodeJS.ProcessEnv);
+    // loopback+production falls through to the remote branch → blocked without
+    // the full envelope.
     expect(c.verdict).toBe("blocked");
-    expect(c.reasons.join(" ")).toContain("production");
   });
 
   it("malformed DATABASE_URL → error (FAIL, not block)", () => {

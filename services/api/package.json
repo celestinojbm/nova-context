@@ -28,6 +28,7 @@
     "media:verify-backup-s3": "tsx src/backup/run-media-verify-backup-s3.ts",
     "media:restore-s3": "tsx src/backup/run-media-restore-s3.ts",
     "backup:verify": "tsx src/backup/run-verify.ts",
+    "backup:unseal-file": "tsx src/backup/run-unseal-file.ts",
     "backup:restore-guard": "tsx src/backup/run-restore-guard.ts",
     "backup:scratch-guard": "tsx src/backup/run-scratch-guard.ts",
     "backup:publish-s3": "tsx src/backup/run-backup-publish-s3.ts",

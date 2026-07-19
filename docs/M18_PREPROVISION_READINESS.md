@@ -1,10 +1,44 @@
 # M18A — Pre-Provision Deployment & Recovery Closure
 
-Status: **executable cloud recovery closed (M18A / M18A.1 / M18A.2); awaiting
-operator review before any provisioning.** No external resource has been
-created; no production secret exists; nothing is deployed; no cost has been
-incurred; the Render Blueprint is committed but NOT synced. Provisioning
-remains gated on the operator's explicit `APPROVE M18 PROVISIONING` phrase.
+Status: **executable cloud recovery closed and proven end-to-end (M18A / M18A.1
+/ M18A.2 / M18A.3); awaiting operator review before any provisioning.** No
+external resource has been created; no production secret exists; nothing is
+deployed; no cost has been incurred; the Render Blueprint is committed but NOT
+synced. Provisioning remains gated on the operator's explicit
+`APPROVE M18 PROVISIONING` phrase.
+
+## 0.3. M18A.3 single executable recovery orchestration (this milestone)
+
+Four correctness gaps between the recovery *pieces* and a single *executable*
+drill are closed on this branch, and the full path is now exercised by a real
+end-to-end test against Postgres + MinIO (`m18a3-recovery-e2e.test.ts`):
+
+1. **One authorization decision reaches the destructive restore.** The
+   automated drill and `scripts/restore.sh` now share ONE guard decision via
+   `NOVA_RESTORE_MODE`. In `authorized-scratch` mode the script calls the EXACT
+   `backup:scratch-guard` the gate validated (local loopback OR the full remote
+   envelope) and the manual production override
+   (`NOVA_RESTORE_ALLOW_PRODUCTION=yes`) is **inaccessible**; `NODE_ENV=production`
+   is runtime-only and never by itself reclassifies a managed scratch DB as
+   primary. The guard is **re-checked immediately before `pg_restore`**, so a
+   DATABASE_URL swapped mid-run is caught by the same guard. `manual` (default)
+   keeps the hands-on `backup:restore-guard` behavior.
+2. **One authoritative DB/media order.** `restore.sh` does guard → verify →
+   unseal → restore (DB, and fs media when present) only. Post-restore migration,
+   S3 media restore, `media:verify`, and smoke are owned by the gate in the
+   order DB restore → **S3 media restore** → `media:verify`; the script no longer
+   runs `media:verify` before the media is restored, and migrations run once.
+3. **A single off-box entrypoint.** `pnpm validate:recovery-remote` creates a
+   NEW private 0700 workspace, `backup:fetch-s3` the committed set into it,
+   invokes the gate `recovery` mode, and ALWAYS removes the workspace (reporting
+   any cleanup failure and exiting non-zero on gate FAIL/BLOCKED or cleanup
+   failure). The operator never hand-composes fetch + mkdir + gate + rm.
+4. **Off-box completion semantics + robust unseal.** `scripts/backup.sh` never
+   prints an unqualified "Backup complete" before an off-box publish+verify;
+   a local-only seal on an ephemeral host is stated as "off-box durability not
+   established", and `NOVA_BACKUP_REQUIRE_OFFBOX=yes` fails closed if publish is
+   off. Decryption on the restore path uses the dedicated, GCM-authenticated,
+   fail-closed `backup:unseal-file` command (replacing a fragile inline eval).
 
 ## 0.2. M18A.2 executable-recovery corrections (this milestone)
 
@@ -120,9 +154,15 @@ without a persistent disk:
 `NOVA_BACKUP_PUBLISH_S3=yes` (fail-closed if `NOVA_BACKUP_S3_BUCKET` is unset).
 
 **Backup job:** `scripts/backup.sh` → local verify → remote publish → remote
-verify → evidence retention. **Recovery job (no persistent disk required):**
-`backup:fetch-s3` a committed set → verify → DB restore → s3 media restore →
-`media:verify` → post-restore smoke.
+verify → evidence retention (M18A.3 §4: completion is stated as durable off-box
+only after the remote verify; `NOVA_BACKUP_REQUIRE_OFFBOX=yes` fails a local-only
+seal closed). **Recovery job (no persistent disk required):** the whole sequence
+is ONE command — `pnpm validate:recovery-remote -- --stamp=<s>
+--restored-base-url=<url> [--invite=<code>]` (M18A.3 §3) — which does
+`backup:fetch-s3` a committed set into a fresh private 0700 workspace → verify →
+DB restore (via `restore.sh` in `authorized-scratch` mode, the same guard the
+gate validated) → s3 media restore → `media:verify` → post-restore smoke, and
+ALWAYS removes the workspace afterward.
 
 **Proof.** An 11-test unit suite (in-memory store) covers publish→verify→fetch
 round-trip, no-plaintext-uploaded, wrong-key/no-key, missing artifact, altered
