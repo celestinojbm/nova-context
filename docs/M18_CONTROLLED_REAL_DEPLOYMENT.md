@@ -12,6 +12,14 @@
 - Phrase: _pending_
 - Provider plan / region / budget cap / temporary-recovery approval: _pending_
 
+> **Pre-provision audit status (M18A.4).** Before any of the below executes,
+> Hermes ran an independent read-only audit of head `83a6185`: verdict **FAIL**,
+> no P0, three P1 blockers (NCA-17-001 recovery-remote exit codes, NCA-17-002
+> ops:smoke provable cleanup, NCA-17-003 DB identity + run-id). M18A.4 closes
+> those **provisionally** — this is NOT a Hermes PASS. Merge and provisioning
+> stay blocked pending exact-head CI on the M18A.4 head and a focused Hermes
+> re-audit of that head.
+
 ## 1. Resources created (B2)
 
 _pending — table of resource / sanitized identifier / region / plan /

@@ -34,6 +34,20 @@ export function redactDatabaseUrl(url: string): string {
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
+/**
+ * M18A.4 P1-3 (NCA-17-003): ONE canonical host form used everywhere a host is
+ * compared or fingerprinted, so DNS-equivalent spellings can never produce two
+ * different identities. It:
+ *   - lowercases (DNS + IPv6 hex are case-insensitive);
+ *   - strips the DNS root's trailing dot(s): `db.internal.` ≡ `db.internal`
+ *     (IPv4/IPv6 literals never carry a trailing dot, so this is safe for them);
+ *   - leaves IPv4 dotted-quads and bracketed IPv6 literals otherwise intact.
+ * Credentials are never involved — this is host identity only.
+ */
+export function canonicalizeHost(host: string): string {
+  return host.trim().toLowerCase().replace(/\.+$/, "");
+}
+
 export interface RestoreTarget {
   redacted: string;
   /** True only for a clearly local scratch target (loopback host, non-prod). */
@@ -51,7 +65,7 @@ export interface RestoreTarget {
 export function classifyRestoreTarget(url: string, nodeEnv?: string): RestoreTarget {
   let host = "";
   try {
-    host = new URL(url).hostname;
+    host = canonicalizeHost(new URL(url).hostname);
   } catch {
     host = "";
   }
@@ -79,7 +93,7 @@ export function classifyRestoreTarget(url: string, nodeEnv?: string): RestoreTar
 export function canonicalizeDbIdentity(url: string): string {
   const u = new URL(url);
   const proto = /^postgres(ql)?:$/i.test(u.protocol) ? "postgresql:" : u.protocol.toLowerCase();
-  const host = u.hostname.toLowerCase();
+  const host = canonicalizeHost(u.hostname);
   const port = u.port || "5432";
   const db = decodeURIComponent(u.pathname.replace(/^\//, ""));
   const sslmode = (u.searchParams.get("sslmode") ?? "").toLowerCase();
@@ -113,6 +127,16 @@ const FINGERPRINT_RE = /^[0-9a-f]{64}$/;
 export const REMOTE_SCRATCH_CONFIRM = "RESTORE-TO-SCRATCH";
 
 /**
+ * M18A.4 P1-3 (NCA-17-003): a recovery run id must be a HIGH-ENTROPY,
+ * unambiguous identifier — exactly 32 lowercase hex chars (128 random bits),
+ * e.g. `openssl rand -hex 16`. This replaces the old weak `database.includes()`
+ * substring test, under which a short word like `nova` could match an unrelated
+ * or primary database name. The scratch database name must bind the run id
+ * through a delimiter so it cannot match inside another word (see below).
+ */
+export const RUN_ID_RE = /^[0-9a-f]{32}$/;
+
+/**
  * Classify a restore target for the automated recovery gate. Returns:
  *   - `local_scratch`  — loopback host, non-production (proceed, as today);
  *   - `remote_scratch` — a remote target for which EVERY authorization
@@ -135,7 +159,7 @@ export function classifyScratchTarget(url: string, env: NodeJS.ProcessEnv): Scra
   } catch {
     return { verdict: "error", redacted, reasons: ["DATABASE_URL is malformed/unparseable"] };
   }
-  const host = u.hostname.toLowerCase();
+  const host = canonicalizeHost(u.hostname);
   const db = decodeURIComponent(u.pathname.replace(/^\//, ""));
   if (!host || !db) {
     return { verdict: "error", redacted, reasons: ["DATABASE_URL is missing a host or database name"] };
@@ -170,7 +194,9 @@ export function classifyScratchTarget(url: string, env: NodeJS.ProcessEnv): Scra
   // NODE_ENV=production is NOT a block here. (Local loopback still requires
   // non-production — see branch A above.)
 
-  const expectHost = (env.NOVA_RESTORE_EXPECT_HOST ?? "").trim().toLowerCase();
+  // Canonicalize the EXPECTED host with the SAME function used for the target,
+  // so a trailing-dot / case difference on either side can never split identity.
+  const expectHost = canonicalizeHost(env.NOVA_RESTORE_EXPECT_HOST ?? "");
   const expectDb = (env.NOVA_RESTORE_EXPECT_DATABASE ?? "").trim();
   const expectFp = (env.NOVA_RESTORE_EXPECT_FINGERPRINT ?? "").trim().toLowerCase();
   const primaryFp = (env.NOVA_PRIMARY_DATABASE_FINGERPRINT ?? "").trim().toLowerCase();
@@ -181,7 +207,16 @@ export function classifyScratchTarget(url: string, env: NodeJS.ProcessEnv): Scra
   if (!expectDb) reasons.push("NOVA_RESTORE_EXPECT_DATABASE absent");
   if (!FINGERPRINT_RE.test(expectFp)) reasons.push("NOVA_RESTORE_EXPECT_FINGERPRINT absent/malformed (want 64-hex)");
   if (!FINGERPRINT_RE.test(primaryFp)) reasons.push("NOVA_PRIMARY_DATABASE_FINGERPRINT absent/malformed (want 64-hex)");
-  if (!runId) reasons.push("NOVA_RECOVERY_RUN_ID absent");
+
+  // P1-3 (NCA-17-003): strict, delimiter-bound run-id contract — NOT a substring
+  // match. The run id must be exactly 32 lowercase hex chars, AND the scratch
+  // database name must END WITH `_<run-id>` so a weak/short value can never
+  // match inside an unrelated or primary database name.
+  if (!RUN_ID_RE.test(runId)) {
+    reasons.push("NOVA_RECOVERY_RUN_ID absent/malformed (want exactly 32 lowercase hex chars = 128 random bits)");
+  } else if (!db.endsWith(`_${runId}`)) {
+    reasons.push("database name does not END WITH _<NOVA_RECOVERY_RUN_ID> (delimiter-bound drill marker)");
+  }
 
   // Match the live target against the operator's declared expectations.
   if (expectHost && host !== expectHost) reasons.push("target host differs from NOVA_RESTORE_EXPECT_HOST");
@@ -189,7 +224,6 @@ export function classifyScratchTarget(url: string, env: NodeJS.ProcessEnv): Scra
   if (FINGERPRINT_RE.test(expectFp) && fingerprint !== expectFp) {
     reasons.push("target fingerprint differs from NOVA_RESTORE_EXPECT_FINGERPRINT");
   }
-  if (runId && !db.includes(runId)) reasons.push("database name does not contain NOVA_RECOVERY_RUN_ID (drill marker)");
   if (FINGERPRINT_RE.test(primaryFp) && fingerprint === primaryFp) {
     reasons.push("target fingerprint EQUALS the primary database fingerprint — refusing to restore over primary");
   }

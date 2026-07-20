@@ -90,8 +90,11 @@ describe("M18A.3 §1: restore.sh authorized-scratch guard", () => {
 
   it("authorized-scratch + fully-authorized remote envelope → guard PASSES", async () => {
     // Build the exact envelope for a remote target using the guard's own
-    // fingerprint command so the values match.
-    const dsn = "postgresql://nova:pw@render-pg.internal:5432/nova_scratch_run7";
+    // fingerprint command so the values match. P1-3 (NCA-17-003): the run id is
+    // a strong 32-hex value, delimiter-bound to the scratch db name.
+    const runId = "1122334455667788990011223344aabb";
+    const dbName = `nova_scratch_${runId}`;
+    const dsn = `postgresql://nova:pw@render-pg.internal:5432/${dbName}`;
     const { stdout: fp } = await execFileAsync(
       "pnpm",
       ["--filter", "@nova/api", "--silent", "backup:scratch-guard", "--", "--fingerprint"],
@@ -109,10 +112,10 @@ describe("M18A.3 §1: restore.sh authorized-scratch guard", () => {
       NOVA_RESTORE_TARGET_CLASS: "scratch",
       NOVA_RESTORE_SCRATCH_CONFIRM: "RESTORE-TO-SCRATCH",
       NOVA_RESTORE_EXPECT_HOST: "render-pg.internal",
-      NOVA_RESTORE_EXPECT_DATABASE: "nova_scratch_run7",
+      NOVA_RESTORE_EXPECT_DATABASE: dbName,
       NOVA_RESTORE_EXPECT_FINGERPRINT: fingerprint,
       NOVA_PRIMARY_DATABASE_FINGERPRINT: primaryFp,
-      NOVA_RECOVERY_RUN_ID: "run7",
+      NOVA_RECOVERY_RUN_ID: runId,
     });
     // Envelope matches → guard passes; the run then fails later on the missing
     // backup — proving the same envelope the gate validated also authorizes the

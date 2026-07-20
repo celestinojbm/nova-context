@@ -213,14 +213,25 @@ the fs media root. What each piece means:
   migration, **S3 media restore, then `media:verify`** (in that order), and smoke
   are owned by the gate — the script no longer runs `media:verify` before the
   media exists. Leave `NOVA_RESTORE_MODE` empty for the hands-on `manual` path.
-- **Recovery scratch target (M18A.2 §1)** — the recovery gate's
-  `backup:scratch-guard` accepts local loopback Postgres, OR a temporary
+- **Recovery scratch target (M18A.2 §1; hardened M18A.4 §P1-3)** — the recovery
+  gate's `backup:scratch-guard` accepts local loopback Postgres, OR a temporary
   managed remote scratch when the full `NOVA_RESTORE_*` envelope matches
   (allow-flag + `scratch` class + typed `NOVA_RESTORE_SCRATCH_CONFIRM` +
   expected host/database/fingerprint + `NOVA_RECOVERY_RUN_ID` marker +
-  fingerprint proven ≠ the primary). Compute a target's credential-free
-  fingerprint with `backup:scratch-guard -- --fingerprint`. Any mismatch
-  BLOCKS before mutation; the raw DSN is never printed.
+  fingerprint proven ≠ the primary). **`NOVA_RECOVERY_RUN_ID` must be exactly 32
+  lowercase hex chars (`openssl rand -hex 16`) and the scratch database name must
+  END WITH `_<run-id>`** — a substring/weak/uppercase/undelimited id is BLOCKED
+  before `pg_restore` (NCA-17-003). Host identity is canonicalized (trailing dot,
+  case, default port collapse to one fingerprint). Compute a target's
+  credential-free fingerprint with `backup:scratch-guard -- --fingerprint`. Any
+  mismatch BLOCKS before mutation; the raw DSN is never printed. This is defence
+  in depth, NOT a replacement for provider IAM — the recovery credential must be
+  unable to write the primary database.
+- **Recovery-remote exit codes (M18A.4 §P1-1)** — `validate:recovery-remote`
+  exits 0 ONLY when the recovery gate returned PASS AND the temporary workspace
+  was removed. A missing marker, unreachable/mis-credentialed bucket, network or
+  verification failure, a thrown exception, gate FAIL/BLOCKED, or a workspace
+  cleanup failure all exit non-zero — a failed drill can never look successful.
 - **Deploy pre-flight** — the Render pre-deploy hook runs `pnpm
   validate:deploy` (M18A.1): config-safety → prerequisites → `db:migrate`
   (once) → `ops:preflight` → `db:migrate:status`. Migrations are applied by

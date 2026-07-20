@@ -213,6 +213,44 @@ destructive restore step; raw DSNs and keys are never printed.
   input, GCM-authenticated, fail-closed exit 2 on wrong key, sanitized errors),
   replacing the earlier fragile inline `tsx -e` eval on the restore path.
 
+### M18A.4 additions (Hermes P1 closure — provisional)
+
+> Hermes performed an independent read-only audit of head `83a6185`: verdict
+> **FAIL**, no P0, **three confirmed P1 blockers**. M18A.4 closes those findings
+> **provisionally**. This is NOT a Hermes PASS; merge and provisioning stay
+> blocked pending exact-head CI and a focused Hermes re-audit.
+
+- **NCA-17-001 — `validate:recovery-remote` never exits 0 on failure.** The
+  orchestrator now has a SINGLE terminal exit path: no `return` inside the
+  orchestration `try`; an explicit result that starts non-zero; cleanup ALWAYS
+  runs in `finally`; a cleanup failure upgrades the result to non-zero; and
+  `process.exitCode` is set exactly once, via the pure `computeExit(resultCode,
+  cleanupOk)` rule, AFTER cleanup. It exits 0 ONLY when the recovery gate
+  returned PASS **and** the temporary workspace was removed. A missing marker,
+  unreachable bucket, bad credentials, network failure, fetch verification
+  failure, a thrown exception, and gate FAIL/BLOCKED all exit non-zero.
+- **NCA-17-002 — `ops:smoke` synthetic cleanup is failure-safe and provable.**
+  The smoke account has an explicit lifecycle (`not_started` →
+  `account_state_unknown` → `account_created` → `authenticated` →
+  `deletion_attempted` → `cleaned`/`cleanup_failed`). Its email/password +
+  unknown state are recorded BEFORE signup; every stage after runs under
+  `try/finally` so cleanup runs after a lost signup response, a login failure, a
+  network exception, a mid-smoke throw, or a deletion failure. Cleanup reports
+  the account clean ONLY with affirmative evidence: deleted through the real flow
+  AND the access token no longer authenticates (exact 401) AND the credentials no
+  longer log in (exact 401). HTTP 200 from delete is NOT proof; an unprovable
+  cleanup is a `fail` (never "likely clean") → `ok:false` → the command exits
+  non-zero. Mirrors the gate's `syntheticSessionCleanup` contract.
+- **NCA-17-003 — DB target identity + strong run-id.** One `canonicalizeHost`
+  (lowercase + strip DNS trailing dot) feeds the target fingerprint, the expected
+  fingerprint, the primary fingerprint, and the guard's host comparison — so
+  `db.internal` and `db.internal.` (and case/default-port/credential variants)
+  are one identity. The run-id contract is now strict and delimiter-bound: the
+  run id must be exactly 32 lowercase hex chars AND the scratch database name must
+  END WITH `_<run-id>`. Weak/short words, uppercase, or an id embedded without the
+  `_` delimiter are BLOCKED before `pg_restore`. Fingerprinting is defence in
+  depth, not a substitute for provider IAM.
+
 ## Outcomes
 
 - **PASS** — all mandatory checks ran and passed.

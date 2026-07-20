@@ -1,11 +1,48 @@
 # M18A — Pre-Provision Deployment & Recovery Closure
 
 Status: **executable cloud recovery closed and proven end-to-end (M18A / M18A.1
-/ M18A.2 / M18A.3); awaiting operator review before any provisioning.** No
-external resource has been created; no production secret exists; nothing is
-deployed; no cost has been incurred; the Render Blueprint is committed but NOT
-synced. Provisioning remains gated on the operator's explicit
-`APPROVE M18 PROVISIONING` phrase.
+/ M18A.2 / M18A.3), with the three Hermes P1 findings against head `83a6185`
+provisionally closed (M18A.4); awaiting a focused Hermes re-audit + operator
+review before any provisioning.** No external resource has been created; no
+production secret exists; nothing is deployed; no cost has been incurred; the
+Render Blueprint is committed but NOT synced. Provisioning remains gated on the
+operator's explicit `APPROVE M18 PROVISIONING` phrase.
+
+## 0.4. M18A.4 — Hermes P1 closure (this milestone, PROVISIONAL)
+
+Hermes ran an independent read-only audit of head `83a6185`: verdict **FAIL**,
+**no P0**, **three confirmed P1 blockers**. M18A.4 closes those findings; this is
+**not** a Hermes PASS, and merge/provisioning remain blocked pending exact-head
+CI and a focused Hermes re-audit.
+
+1. **NCA-17-001 — remote-recovery failures must never exit 0.**
+   `validate:recovery-remote` had a `return` inside its orchestration `try` that
+   bypassed the terminal exit after a non-zero fetch, so a missing marker,
+   unreachable bucket, bad credentials, network failure, verification failure, or
+   a thrown exception could print a failure yet exit 0. It now has ONE terminal
+   path: an explicit result that starts non-zero, cleanup ALWAYS in `finally`, a
+   cleanup failure upgrading to non-zero, and `process.exitCode` set once (via the
+   pure `computeExit`) AFTER cleanup. Exit 0 requires gate PASS **and** a clean
+   workspace removal. Proven by an exhaustive `computeExit` matrix + real-CLI
+   spawns (usage, fetch-throws, forced-cleanup-failure → all non-zero, no `PASS`,
+   no secret) + a real success→0 run in the Postgres/MinIO E2E.
+2. **NCA-17-002 — `ops:smoke` cleanup failure-safe + provable.** The smoke's own
+   synthetic account now has an explicit lifecycle recorded before signup, a
+   `try/finally` that ALWAYS cleans up (lost signup response, login failure,
+   network exception, mid-smoke throw, deletion failure), and PROVES the account
+   dead — deleted via the real flow AND token no-auth (exact 401) AND credentials
+   no-login (exact 401). HTTP 200 from delete is not proof; an unprovable cleanup
+   FAILs (never "likely clean") → `ok:false` → non-zero exit. The E2E additionally
+   asserts the smoke account is ABSENT after the drill.
+3. **NCA-17-003 — DB identity + run-id hardening.** A shared `canonicalizeHost`
+   collapses trailing-dot / case / default-port / credential variants into ONE
+   identity across the target, expected, primary, and guard comparisons, so
+   `db.internal.` can no longer split from `db.internal`. The run-id contract is
+   strict + delimiter-bound: exactly 32 lowercase hex chars, and the scratch
+   database name must END WITH `_<run-id>` — weak words (`nova`), uppercase, or an
+   embedded-without-delimiter id are BLOCKED before `pg_restore`. Fingerprinting
+   is defence in depth, NOT a replacement for provider IAM: recovery credentials
+   must remain incapable of writing the primary database.
 
 ## 0.3. M18A.3 single executable recovery orchestration (this milestone)
 

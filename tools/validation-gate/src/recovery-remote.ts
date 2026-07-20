@@ -27,6 +27,18 @@ import { sanitize } from "./sanitization.js";
 const arg = (n: string) =>
   process.argv.find((a) => a.startsWith(`--${n}=`))?.split("=").slice(1).join("=");
 
+/**
+ * NCA-17-001 terminal-exit rule, isolated + pure for exhaustive testing. The
+ * process may exit 0 ONLY when the recovery gate returned success (resultCode
+ * 0) AND the temporary workspace cleanup succeeded. Any non-zero gate outcome
+ * (FAIL/BLOCKED/fetch-failure) OR a cleanup failure yields a non-zero code; a
+ * zero result with a failed cleanup is forced to 1.
+ */
+export function computeExit(resultCode: number, cleanupOk: boolean): number {
+  if (!cleanupOk) return resultCode === 0 ? 1 : resultCode;
+  return resultCode === 0 ? 0 : resultCode || 1;
+}
+
 function run(cmd: string, args: string[]): Promise<number> {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, { stdio: "inherit", env: process.env });
@@ -40,7 +52,8 @@ async function main(): Promise<void> {
   const restoredBase = arg("restored-base-url");
   if (!stamp || !restoredBase) {
     console.error("usage: validate:recovery-remote -- --stamp=<s> --restored-base-url=<url> [--invite=<code>]");
-    process.exit(2);
+    process.exitCode = 2;
+    return;
   }
   const invite = arg("invite");
 
@@ -53,12 +66,24 @@ async function main(): Promise<void> {
   const st = lstatSync(ws);
   if (st.isSymbolicLink() || !st.isDirectory()) {
     console.error("  ✗ remote_workspace: refusing — workspace is not a real private directory");
-    rmSync(ws, { recursive: true, force: true });
-    process.exit(1);
+    try {
+      rmSync(ws, { recursive: true, force: true });
+    } catch {
+      /* best-effort — refuse regardless */
+    }
+    process.exitCode = 1;
+    return;
   }
   console.log("  ✓ remote_workspace: created a new private 0700 recovery directory");
 
-  let gateCode = 1;
+  // NCA-17-001 (M18A.4 P1-1): a SINGLE terminal exit path. `resultCode` starts
+  // at a FAILURE value; the process may end with 0 ONLY after (a) the recovery
+  // gate returned success AND (b) the temporary workspace cleanup succeeded.
+  // There is NO `return` inside the orchestration try — every branch (fetch
+  // non-zero, fetch throw, gate FAIL/BLOCKED, any exception) leaves `resultCode`
+  // non-zero, the finally ALWAYS runs cleanup, a cleanup failure UPGRADES the
+  // result to non-zero, and process.exitCode is set exactly once after cleanup.
+  let resultCode = 1;
   let cleanupOk = false;
   try {
     // (2) Fetch the committed sealed set (marker auth + per-artifact verify +
@@ -75,38 +100,55 @@ async function main(): Promise<void> {
     ]);
     if (fetchCode !== 0) {
       console.error("  ✗ remote_fetch FAILED — refusing recovery against an unavailable/uncommitted set");
-      gateCode = fetchCode;
-      return;
-    }
-    console.log("  ✓ remote_fetch: committed set fetched + verified");
+      resultCode = fetchCode || 1; // guaranteed non-zero; NO early return
+    } else {
+      console.log("  ✓ remote_fetch: committed set fetched + verified");
 
-    // (3) Invoke the Validation Gate recovery mode against the fetched dir.
-    const gateArgs = [
-      join(import.meta.dirname, "cli.ts"),
-      "recovery",
-      `--backup-dir=${ws}`,
-      `--stamp=${stamp}`,
-      `--restored-base-url=${restoredBase}`,
-    ];
-    if (invite) gateArgs.push(`--invite=${invite}`);
-    gateCode = await run("tsx", gateArgs);
+      // (3) Invoke the Validation Gate recovery mode against the fetched dir.
+      const gateArgs = [
+        join(import.meta.dirname, "cli.ts"),
+        "recovery",
+        `--backup-dir=${ws}`,
+        `--stamp=${stamp}`,
+        `--restored-base-url=${restoredBase}`,
+      ];
+      if (invite) gateArgs.push(`--invite=${invite}`);
+      // The gate's own exit code carries PASS (0) / FAIL / BLOCKED (non-zero).
+      resultCode = await run("tsx", gateArgs);
+    }
+  } catch (err) {
+    // (4) A thrown exception anywhere in orchestration is sanitized and becomes
+    // a non-zero result — it can never fall through to a zero exit.
+    console.error(`  ✗ remote_recovery error: ${sanitize((err as Error).message)}`);
+    resultCode = 1;
   } finally {
     // (5) ALWAYS remove the temporary workspace; report cleanup failure loudly.
     try {
       rmSync(ws, { recursive: true, force: true });
+      // TEST-ONLY, FAIL-SAFE-ONLY affordance: the real rmSync above ALWAYS runs
+      // first (so no plaintext is ever left behind); this hook can then force
+      // the cleanup-failure branch so the terminal invariant is exercisable by
+      // the real CLI process. It can only UPGRADE the outcome to non-zero — it
+      // can never weaken a guard or produce a false success/exit-0.
+      if (process.env.NOVA_RECOVERY_REMOTE_FORCE_CLEANUP_FAILURE === "1") {
+        throw new Error("forced cleanup failure (test hook)");
+      }
       cleanupOk = true;
       console.log("  ✓ remote_workspace_cleanup: temporary recovery workspace removed");
     } catch (err) {
+      cleanupOk = false;
       console.error(`  ✗ remote_workspace_cleanup FAILED: ${sanitize((err as Error).message)}`);
     }
   }
 
-  // (6) Non-zero on gate FAIL/BLOCKED (its exit code) OR a cleanup failure.
-  if (!cleanupOk) process.exit(1);
-  process.exit(gateCode);
+  // (6) SINGLE terminal exit, set exactly once AFTER cleanup, via the pure rule.
+  process.exitCode = computeExit(resultCode, cleanupOk);
 }
 
-main().catch((err) => {
+// Only auto-run as the CLI entrypoint (not when imported for unit tests).
+const isEntry = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+if (isEntry) main().catch((err) => {
+  // Defence in depth: any escape from main() is a non-zero failure, never 0.
   console.error(`validate:recovery-remote crashed: ${sanitize((err as Error).message)}`);
-  process.exit(1);
+  process.exitCode = 1;
 });

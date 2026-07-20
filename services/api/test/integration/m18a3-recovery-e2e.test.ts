@@ -319,5 +319,50 @@ describe.skipIf(!databaseUrl || !s3Available)("M18A.3 §6: real recovery orchest
     const failed = steps.filter((s) => s.status === "fail").map((s) => s.step);
     expect(failed, `failed smoke steps: ${failed.join(", ")}`).toEqual([]);
     expect(ok).toBe(true);
+    // M18A.4 P1-2: the smoke's own synthetic account must be ABSENT afterward —
+    // it deletes itself through the real flow and proves the credentials dead.
+    const smokeAccounts = await scratchDb!.query(
+      "SELECT count(*)::int AS n FROM users WHERE email LIKE '%@alpha.local'",
+    );
+    expect(smokeAccounts.rows[0].n).toBe(0);
   }, 180_000);
+
+  it("M18A.4 P1-1: the single `validate:recovery-remote` entrypoint runs green → exit 0, workspace removed", async () => {
+    // The full off-box drill through ONE command against the committed set + the
+    // already-restored+booted scratch stack. A successful gate + clean workspace
+    // cleanup is the ONLY way this exits 0 (NCA-17-001).
+    const addr = scratchApp!.server.address() as { port: number };
+    const { stdout, stderr, code } = await execFileAsync(
+      "pnpm",
+      [
+        "--filter",
+        "@nova/validation-gate",
+        "--silent",
+        "recovery-remote",
+        "--",
+        `--stamp=${stamp}`,
+        `--restored-base-url=http://127.0.0.1:${addr.port}`,
+        "--invite=synthetic-recovery-invite",
+      ],
+      {
+        cwd: repoRoot,
+        env: s3Env({
+          DATABASE_URL: scratchUrl,
+          NOVA_MEDIA_S3_BUCKET: SCRATCH,
+          NOVA_BACKUP_S3_BUCKET: BACKUP,
+          NOVA_SMOKE_INVITE: "synthetic-recovery-invite",
+        }),
+      },
+    )
+      .then((r) => ({ ...r, code: 0 }))
+      .catch((e: { code?: number; stdout?: string; stderr?: string }) => ({
+        stdout: e.stdout ?? "",
+        stderr: e.stderr ?? "",
+        code: e.code ?? 1,
+      }));
+    const log = `${stdout}\n${stderr}`;
+    expect(log, log).toContain("remote_fetch: committed set fetched + verified");
+    expect(log).toContain("remote_workspace_cleanup: temporary recovery workspace removed");
+    expect(code).toBe(0);
+  }, 300_000);
 });

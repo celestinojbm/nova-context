@@ -80,5 +80,5 @@ describe.skipIf(!databaseUrl)("M13: ops:smoke against a live instance", () => {
 
     expect(steps.every((s) => s.status !== "fail")).toBe(true);
     expect(ok).toBe(true);
-  });
+  }, 30_000);
 });
