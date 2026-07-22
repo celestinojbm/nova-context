@@ -325,6 +325,22 @@ describe.skipIf(!databaseUrl || !s3Available)("M18A.3 §6: real recovery orchest
       "SELECT count(*)::int AS n FROM users WHERE email LIKE '%@alpha.local'",
     );
     expect(smokeAccounts.rows[0].n).toBe(0);
+    // M18A.5 (NCA-17-002): no web OR extension/device session and no pairing
+    // code survives the smoke — neither attached to a smoke user nor orphaned.
+    const smokeSessions = await scratchDb!.query(
+      `SELECT count(*)::int AS n FROM sessions s
+         LEFT JOIN users u ON u.id = s.user_id
+        WHERE u.id IS NULL OR u.email LIKE '%@alpha.local'`,
+    );
+    expect(smokeSessions.rows[0].n).toBe(0);
+    const smokePairing = await scratchDb!.query(
+      `SELECT count(*)::int AS n FROM pairing_codes p
+         LEFT JOIN users u ON u.id = p.user_id
+        WHERE u.id IS NULL OR u.email LIKE '%@alpha.local'`,
+    );
+    expect(smokePairing.rows[0].n).toBe(0);
+    // No token-like secret in the smoke's reported output.
+    expect(JSON.stringify(steps)).not.toMatch(/[A-Za-z0-9_-]{40,}/);
   }, 180_000);
 
   it("M18A.4 P1-1: the single `validate:recovery-remote` entrypoint runs green → exit 0, workspace removed", async () => {

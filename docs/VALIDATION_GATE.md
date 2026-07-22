@@ -241,6 +241,12 @@ destructive restore step; raw DSNs and keys are never printed.
   longer log in (exact 401). HTTP 200 from delete is NOT proof; an unprovable
   cleanup is a `fail` (never "likely clean") → `ok:false` → the command exits
   non-zero. Mirrors the gate's `syntheticSessionCleanup` contract.
+  **M18A.5:** the device/extension token minted via pairing is a THIRD
+  credential — it is retained until verification and must ALSO return exactly
+  HTTP 401 on the extension's authenticated surface (`/v1/context/moments`);
+  any other result (2xx/3xx/4xx/5xx, timeout, network failure, inaccessible
+  probe) FAILs. The device token is on every redaction/secret-clearing path and
+  is cleared only after the cleanup result is finalized.
 - **NCA-17-003 — DB target identity + strong run-id.** One `canonicalizeHost`
   (lowercase + strip DNS trailing dot) feeds the target fingerprint, the expected
   fingerprint, the primary fingerprint, and the guard's host comparison — so

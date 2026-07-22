@@ -4,6 +4,7 @@ import type { FastifyInstance } from "fastify";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../../src/app.js";
 import { migrate } from "../../src/db/migrate.js";
@@ -51,8 +52,35 @@ describe.skipIf(!databaseUrl)("M13: ops:smoke against a live instance", () => {
   });
 
   it("walks the full product surface: nothing fails, degradations are honest", async () => {
+    // M18A.5 (NCA-17-002): snapshot smoke-account/session/pairing counts so we
+    // can prove the run leaves NOTHING new behind in the real database.
+    const db = new pg.Pool({ connectionString: databaseUrl, max: 2 });
+    const counts = async () => {
+      const q = async (sql: string) => (await db.query(sql)).rows[0].n as number;
+      return {
+        users: await q("SELECT count(*)::int AS n FROM users WHERE email LIKE '%@alpha.local'"),
+        sessions: await q(
+          `SELECT count(*)::int AS n FROM sessions s JOIN users u ON u.id = s.user_id
+            WHERE u.email LIKE '%@alpha.local' AND s.revoked_at IS NULL`,
+        ),
+        pairing: await q(
+          `SELECT count(*)::int AS n FROM pairing_codes p JOIN users u ON u.id = p.user_id
+            WHERE u.email LIKE '%@alpha.local'`,
+        ),
+      };
+    };
+    const before = await counts();
+
     const { ok, steps } = await runSmoke(baseUrl, { enrichmentWaitMs: 1000 });
     const byName = Object.fromEntries(steps.map((s) => [s.step, s]));
+
+    // The smoke account, its web + extension/device sessions, and its pairing
+    // codes are all gone — the run added nothing to the real database.
+    const after = await counts();
+    await db.end();
+    expect(after).toEqual(before);
+    // No token-like secret (web/device token, password, invite) in the output.
+    expect(JSON.stringify(steps)).not.toMatch(/[A-Za-z0-9_-]{40,}/);
 
     expect(byName["readyz"]!.status).toBe("ok");
     expect(byName["signup"]!.status).toBe("ok");

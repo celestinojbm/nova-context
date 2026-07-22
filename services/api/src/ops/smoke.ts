@@ -18,6 +18,16 @@
  * This mirrors the Validation Gate's `syntheticSessionCleanup` contract (same
  * states, same exact-401 proof) so the two do not diverge.
  *
+ * M18A.5 (NCA-17-002 closure): the smoke ALSO mints a device/extension session
+ * via pairing. That already-issued device token is a THIRD credential — account
+ * deletion revoking the web session says nothing about it. Cleanup therefore
+ * retains the device token until verification and requires it to return exactly
+ * HTTP 401 on the extension's own authenticated surface (`/v1/context/moments`)
+ * alongside the web-token and credential probes. Any other outcome (2xx/3xx/
+ * 4xx/5xx, timeout, network failure, inaccessible probe) is NOT proof and
+ * FAILs. The device token is a secret on every redaction/cleanup path and is
+ * cleared only AFTER the cleanup result is finalized.
+ *
  * Step statuses:
  *   ok       — works
  *   degraded — works as configured (e.g. live Q&A 503 without a key,
@@ -105,10 +115,11 @@ export async function runSmoke(
   };
 
   /** Redact known secret references from a free-text detail (defence in depth;
-   * details are already written not to include secrets). */
+   * details are already written not to include secrets). M18A.5: the device
+   * token is a credential like the others — always on the redaction list. */
   const redact = (s: string): string => {
     let out = s;
-    for (const secret of [password, webToken, opts.inviteCode]) {
+    for (const secret of [password, webToken, deviceToken, opts.inviteCode]) {
       if (secret && secret.length >= 3) out = out.split(secret).join("[REDACTED]");
     }
     return out;
@@ -154,9 +165,13 @@ export async function runSmoke(
     return last;
   };
 
+  // M18A.5: clears EVERY credential reference — password, web token, AND the
+  // device token. Called only AFTER the cleanup result is finalized (the
+  // device token must survive until its post-delete 401 probe has run).
   const clearSecrets = () => {
     password = "";
     webToken = "";
+    deviceToken = "";
   };
 
   // -- The product-surface walk. Early `return;` on a hard failure still lets
@@ -467,13 +482,28 @@ export async function runSmoke(
       return;
     }
 
-    // Prove dead: BOTH the original token AND the credentials must now be
+    // Prove dead: the web token, the ALREADY-ISSUED device/extension token
+    // (M18A.5 / NCA-17-002), AND the credentials must ALL now be
     // UNAUTHENTICATED (exact 401). HTTP 200 from delete was not enough.
     let probeStatus: number | null = null;
     try {
       probeStatus = (await api("/v1/ops/status", { token })).status;
     } catch {
       probeStatus = null;
+    }
+    // The device token minted via pairing is a THIRD credential — retained
+    // (NOT cleared) until this probe. It is probed on the extension's own
+    // authenticated surface; a timeout / network failure / inaccessible probe
+    // is null → NOT proof → FAIL. If pairing never issued a token there is no
+    // third credential to prove (the extension_pairing step already failed).
+    const hadDevice = Boolean(deviceToken);
+    let deviceStatus: number | null = null;
+    if (hadDevice) {
+      try {
+        deviceStatus = (await api("/v1/context/moments?limit=1", { token: deviceToken })).status;
+      } catch {
+        deviceStatus = null;
+      }
     }
     let reloginStatus: number | null = null;
     try {
@@ -482,17 +512,28 @@ export async function runSmoke(
       reloginStatus = null;
     }
     const tokenDead = probeStatus === 401;
+    const deviceDead = !hadDevice || deviceStatus === 401;
     const credsDead = reloginStatus === 401;
+    // The cleanup result is now finalized — only NOW may the secret references
+    // (password, web token, device token) be cleared.
     clearSecrets();
-    if (tokenDead && credsDead) {
+    if (tokenDead && deviceDead && credsDead) {
       lifecycle = "cleaned";
-      add("account_delete", "ok", "deleted + proven dead (token probe 401, relogin 401)");
+      add(
+        "account_delete",
+        "ok",
+        hadDevice
+          ? "deleted + proven dead (token probe 401, device probe 401, relogin 401)"
+          : "deleted + proven dead (token probe 401, relogin 401)",
+      );
     } else {
       lifecycle = "cleanup_failed";
       add(
         "account_delete",
         "fail",
-        `deletion NOT proven — token probe HTTP ${probeStatus ?? "unreachable"}, relogin HTTP ${reloginStatus ?? "unreachable"} (only 401 proves a dead account/session); MANUAL verification required for ${handle}`,
+        `deletion NOT proven — token probe HTTP ${probeStatus ?? "unreachable"}, ` +
+          (hadDevice ? `device probe HTTP ${deviceStatus ?? "unreachable"}, ` : "") +
+          `relogin HTTP ${reloginStatus ?? "unreachable"} (only 401 proves a dead account/session); MANUAL verification required for ${handle}`,
       );
     }
   };
