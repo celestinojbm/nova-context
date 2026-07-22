@@ -42,11 +42,18 @@ export async function runGate(opts: RunOptions): Promise<RunReport> {
   const metrics: Record<string, number> = {};
   let cascadeFrom: { id: string; status: "failed" | "blocked" } | null = null;
 
+  // M18A: secrets minted during the run (in-gate synthetic session token /
+  // password) are redacted from EVERY string that can reach a report.
+  const san = (s: string): string =>
+    sanitize(s, { extraSecrets: ctx.runtime?.extraSecrets ?? [] });
+
   for (const spec of specs) {
     // M17B.1 finding 2: PURE checks (local config inspection only) always
     // run so unsafe supplied configuration is reported even when unrelated
     // prerequisites are missing. Only non-pure checks cascade-skip.
-    if (cascadeFrom && !spec.pure) {
+    // M18A: alwaysRun checks (synthetic-session cleanup) also never cascade-
+    // skip — once the gate created resources, cleanup must execute.
+    if (cascadeFrom && !spec.pure && !spec.alwaysRun) {
       results.push({
         ...identity(spec),
         status: "skipped",
@@ -86,8 +93,8 @@ export async function runGate(opts: RunOptions): Promise<RunReport> {
           ...identity(spec),
           status,
           duration_ms: res.durationMs,
-          summary: sanitize(summary),
-          evidence: status === "passed" ? tail(res.stdoutExcerpt) : `${tail(res.stdoutExcerpt)}\n${tail(res.stderrExcerpt)}`.trim(),
+          summary: san(summary),
+          evidence: san(status === "passed" ? tail(res.stdoutExcerpt) : `${tail(res.stdoutExcerpt)}\n${tail(res.stderrExcerpt)}`.trim()),
         };
         parseVitestTotals(res.stdoutExcerpt, spec.id, metrics);
         metrics[`${spec.id}_duration_ms`] = res.durationMs;
@@ -97,14 +104,14 @@ export async function runGate(opts: RunOptions): Promise<RunReport> {
           ...identity(spec),
           status: out.status,
           duration_ms: now() - started,
-          summary: sanitize(out.summary),
-          evidence: sanitize(out.evidence ?? ""),
+          summary: san(out.summary),
+          evidence: san(out.evidence ?? ""),
           ...(out.status === "skipped"
             ? { skip_reason: out.skipReason ?? "not_applicable" }
             : {}),
         };
-        for (const r of out.blockingReasons ?? []) blockingReasons.push(sanitize(r));
-        for (const w of out.warnings ?? []) warnings.push(sanitize(w));
+        for (const r of out.blockingReasons ?? []) blockingReasons.push(san(r));
+        for (const w of out.warnings ?? []) warnings.push(san(w));
         Object.assign(metrics, out.metrics);
       } else {
         result = {
@@ -120,7 +127,7 @@ export async function runGate(opts: RunOptions): Promise<RunReport> {
         ...identity(spec),
         status: "failed",
         duration_ms: now() - started,
-        summary: sanitize(`check threw: ${(err as Error).message}`),
+        summary: san(`check threw: ${(err as Error).message}`),
         evidence: "",
       };
     }
@@ -129,7 +136,7 @@ export async function runGate(opts: RunOptions): Promise<RunReport> {
     if (spec.required && (result.status === "failed" || result.status === "blocked")) {
       cascadeFrom = { id: spec.id, status: result.status };
       if (result.status === "blocked" && !hasReasonFor(blockingReasons, spec.id)) {
-        blockingReasons.push(sanitize(`${spec.id}: ${result.summary}`));
+        blockingReasons.push(san(`${spec.id}: ${result.summary}`));
       }
       if (result.status === "failed") {
         // failures are visible via the check itself; no blocking reason entry

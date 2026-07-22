@@ -272,6 +272,10 @@ importers:
         version: 2.1.9(@types/node@22.20.1)
 
   tools/validation-gate:
+    dependencies:
+      '@nova/context-engine':
+        specifier: workspace:*
+        version: link:../../packages/context-engine
     devDependencies:
       '@types/node':
         specifier: ^22.10.0

@@ -168,8 +168,75 @@ the fs media root. What each piece means:
 - **Postgres** — all metadata, moments, audit, encrypted tokens. Restore:
   `pg_restore --clean --dbname "$DATABASE_URL" nova-db-<stamp>.dump`.
 - **Media objects** — encrypted blobs. fs: untar back to
-  `NOVA_MEDIA_FS_ROOT`. s3: use bucket versioning/replication instead of
-  tar.
+  `NOVA_MEDIA_FS_ROOT`. s3/R2 (M18A / M18A.1): `scripts/backup.sh` runs
+  `media:backup-s3` automatically when `NOVA_MEDIA_STORE=s3`, and FAILS the
+  whole backup (non-zero, no "Backup complete") if `NOVA_BACKUP_S3_BUCKET`
+  is unset — an s3 deployment never produces a silent db-only backup. The
+  backup is two-phase and atomic: DB-referenced ciphertext blobs are copied
+  AS STORED into the separate backup bucket, every destination object is
+  re-verified, and an HMAC-authenticated inventory
+  (`media-inventory-<stamp>.json`) is published LAST as the commit marker;
+  `backup.sh` then runs `media:verify-backup-s3` before declaring
+  completion. Restore into an ISOLATED scratch store with `media:restore-s3`
+  (refuses the original primary), then prove decryptability with
+  `media:verify`. Never rely on unverified bucket versioning/replication.
+- **Sealed backup off-box (M18A.2 §3)** — a Render one-off job's local
+  sealed dir is ephemeral. Set `NOVA_BACKUP_PUBLISH_S3=yes` on the backup job
+  and `scripts/backup.sh` also runs `backup:publish-s3` (verify local →
+  upload + re-verify each object → HMAC-authenticated commit marker LAST) then
+  `backup:verify-s3`, publishing the COMPLETE sealed set to
+  `sealed-backups/<stamp>/` in `NOVA_BACKUP_S3_BUCKET` (no plaintext). The
+  recovery job runs `backup:fetch-s3 -- --stamp=<s> --out=<dir>` to fetch a
+  committed set into a private dir, which authenticates the marker + verifies
+  every hash + runs `backup:verify` BEFORE restore — so no persistent disk is
+  required.
+- **Completion semantics (M18A.3 §4)** — `scripts/backup.sh` never prints an
+  unqualified "Backup complete" before off-box durability is established. A
+  successful local seal prints "Local sealed backup prepared"; only after
+  `backup:publish-s3` + `backup:verify-s3` succeed does it print "Backup
+  complete and durable off-box". A local-only seal (no publish) prints
+  "Local-only backup complete; off-box durability not established". On a backup
+  job whose disk is ephemeral, set `NOVA_BACKUP_REQUIRE_OFFBOX=yes` so the
+  script FAILS closed unless the set was published + verified off-box.
+- **Single off-box recovery drill (M18A.3 §3)** — the whole drill is ONE
+  command: `pnpm validate:recovery-remote -- --stamp=<s> --restored-base-url=<url>
+  [--invite=<code>]`. It creates a new private 0700 workspace, fetches the
+  committed set into it, runs the gate `recovery` mode, and ALWAYS removes the
+  workspace (non-zero on gate FAIL/BLOCKED or a cleanup failure). Do NOT
+  hand-compose `backup:fetch-s3 && mkdir && validate:recovery && rm`.
+- **Restore-script authorization + order (M18A.3 §1/§2)** — run the destructive
+  `scripts/restore.sh <dir> <stamp>` with `NOVA_RESTORE_MODE=authorized-scratch`
+  for the automated drill: it uses the SAME `backup:scratch-guard` decision the
+  gate validated (re-checked immediately before `pg_restore`) and the manual
+  `NOVA_RESTORE_ALLOW_PRODUCTION=yes` override is inaccessible. The script does
+  guard → verify → unseal (`backup:unseal-file`) → restore only; post-restore
+  migration, **S3 media restore, then `media:verify`** (in that order), and smoke
+  are owned by the gate — the script no longer runs `media:verify` before the
+  media exists. Leave `NOVA_RESTORE_MODE` empty for the hands-on `manual` path.
+- **Recovery scratch target (M18A.2 §1; hardened M18A.4 §P1-3)** — the recovery
+  gate's `backup:scratch-guard` accepts local loopback Postgres, OR a temporary
+  managed remote scratch when the full `NOVA_RESTORE_*` envelope matches
+  (allow-flag + `scratch` class + typed `NOVA_RESTORE_SCRATCH_CONFIRM` +
+  expected host/database/fingerprint + `NOVA_RECOVERY_RUN_ID` marker +
+  fingerprint proven ≠ the primary). **`NOVA_RECOVERY_RUN_ID` must be exactly 32
+  lowercase hex chars (`openssl rand -hex 16`) and the scratch database name must
+  END WITH `_<run-id>`** — a substring/weak/uppercase/undelimited id is BLOCKED
+  before `pg_restore` (NCA-17-003). Host identity is canonicalized (trailing dot,
+  case, default port collapse to one fingerprint). Compute a target's
+  credential-free fingerprint with `backup:scratch-guard -- --fingerprint`. Any
+  mismatch BLOCKS before mutation; the raw DSN is never printed. This is defence
+  in depth, NOT a replacement for provider IAM — the recovery credential must be
+  unable to write the primary database.
+- **Recovery-remote exit codes (M18A.4 §P1-1)** — `validate:recovery-remote`
+  exits 0 ONLY when the recovery gate returned PASS AND the temporary workspace
+  was removed. A missing marker, unreachable/mis-credentialed bucket, network or
+  verification failure, a thrown exception, gate FAIL/BLOCKED, or a workspace
+  cleanup failure all exit non-zero — a failed drill can never look successful.
+- **Deploy pre-flight** — the Render pre-deploy hook runs `pnpm
+  validate:deploy` (M18A.1): config-safety → prerequisites → `db:migrate`
+  (once) → `ops:preflight` → `db:migrate:status`. Migrations are applied by
+  this single orchestration, never a separate `db:migrate &&` command, and
+  never under an unsafe configuration.
 - **Encryption key** — NOT in any backup, deliberately. Keep
   `NOVA_ENCRYPTION_KEY` (+ previous keys during rotation) in a secret
   store. **Without the key, a restore recovers metadata only**: media

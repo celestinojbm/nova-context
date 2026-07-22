@@ -59,12 +59,45 @@ trap cleanup EXIT INT TERM
 echo "→ Postgres dump (private workspace)"
 pg_dump --format=custom --file="$WORK/nova-db-$STAMP.dump" "$DATABASE_URL"
 
-if [ -n "${NOVA_MEDIA_FS_ROOT:-}" ] && [ -d "${NOVA_MEDIA_FS_ROOT}" ]; then
+# M18A.1: media backup is FAIL-CLOSED for s3 stores. The final "Backup
+# complete" line is printed ONLY on the branch that actually backed media up
+# (fs tar or committed s3 inventory) or on an explicitly fs-less non-s3 store.
+# M18A.1: the media store TYPE is decided by NOVA_MEDIA_STORE, NOT by whether
+# a local fs root happens to exist. NOVA_MEDIA_FS_ROOT has a non-empty default
+# (./var/media) and is often present in shared env files, so testing the fs
+# branch first would let an s3 deployment tar an empty/stale local dir and
+# report "complete" while the real s3 media is never backed up. Dispatch on
+# NOVA_MEDIA_STORE so the s3 fail-closed guard can never be shadowed.
+MEDIA_MODE="none"
+if [ "${NOVA_MEDIA_STORE:-fs}" = "s3" ]; then
+  # An s3 media store MUST have a configured, separate backup bucket (+
+  # credentials). A missing backup bucket terminates the whole backup with
+  # non-zero status — it must NEVER silently produce a db-only "complete"
+  # backup for an s3 deployment.
+  if [ -z "${NOVA_BACKUP_S3_BUCKET:-}" ]; then
+    echo "ERROR: NOVA_MEDIA_STORE=s3 but NOVA_BACKUP_S3_BUCKET is not set." >&2
+    echo "  Media cannot be backed up. Refusing to publish a db-only backup." >&2
+    exit 1
+  fi
+  echo "→ Media store: s3 — media:backup-s3 into NOVA_BACKUP_S3_BUCKET (two-phase, fail-closed)"
+  MEDIA_INV="$WORK/media-inv"
+  mkdir -p "$MEDIA_INV"; chmod 700 "$MEDIA_INV"
+  # media:backup-s3 fails closed on any missing source / destination-verify
+  # failure and only writes the inventory as the committed commit marker.
+  ( cd "$REPO_ROOT" && pnpm --filter @nova/api --silent media:backup-s3 -- \
+      --stamp="$STAMP" --out="$MEDIA_INV" --apply ) || {
+        echo "ERROR: media:backup-s3 did not commit — backup INCOMPLETE. Refusing to complete." >&2
+        exit 1; }
+  MEDIA_MODE="s3"
+elif [ -n "${NOVA_MEDIA_FS_ROOT:-}" ] && [ -d "${NOVA_MEDIA_FS_ROOT}" ]; then
   echo "→ Media store tar (private workspace)"
   tar -czf "$WORK/nova-media-$STAMP.tar.gz" -C "$NOVA_MEDIA_FS_ROOT" .
+  MEDIA_MODE="fs"
 else
-  echo "→ Media store: NOVA_MEDIA_FS_ROOT not set or missing — skipping"
-  echo "  (s3 store: rely on bucket versioning/replication + SSE instead)"
+  # fs store with no populated root (nothing captured yet): media backup is a
+  # genuine no-op, and this is NOT an s3 store, so it is safe to continue.
+  echo "→ Media store: fs root absent/empty — no media to back up"
+  MEDIA_MODE="empty"
 fi
 
 # Seal FROM the private workspace INTO a staging dir inside it. Only sealed
@@ -78,6 +111,66 @@ mkdir -p "$SEALED"; chmod 700 "$SEALED"
 # Publish ONLY sealed artifacts + manifest into the final dir. If anything
 # above failed, we never reach here and the final dir stays plaintext-free.
 mv "$SEALED"/*.enc "$SEALED"/manifest-"$STAMP".json "$DEST"/
+# M18A: publish the media-backup inventory too (HMAC-authenticated; contains
+# object keys + ciphertext hashes only — no secrets, no content).
+if [ "$MEDIA_MODE" = "s3" ]; then
+  if [ ! -f "$WORK/media-inv/media-inventory-$STAMP.json" ]; then
+    echo "ERROR: media inventory missing after media:backup-s3 — backup NOT complete." >&2
+    exit 1
+  fi
+  mv "$WORK/media-inv/media-inventory-$STAMP.json" "$DEST"/
+  # M18A.1: verify the committed media backup BEFORE declaring completion.
+  echo "→ Verifying committed media backup (inventory MAC + object hashes)"
+  ( cd "$REPO_ROOT" && pnpm --filter @nova/api --silent media:verify-backup-s3 -- \
+      --stamp="$STAMP" --dir="$DEST" ) || {
+        echo "ERROR: media backup verification FAILED — backup NOT trustworthy." >&2
+        exit 1; }
+fi
 
-echo "Backup complete: $DEST (sealed db + media as of $STAMP)"
+# M18A.3 §4: completion semantics are STAGED. The local sealed set is only
+# "prepared"; a durability claim is made ONLY after off-box publish + remote
+# verification succeed. Every stage fails CLOSED (set -e + explicit exits), so
+# no completion line is ever printed after a failure.
+case "$MEDIA_MODE" in
+  fs)    echo "Local sealed backup prepared: $DEST (sealed db + fs media tar as of $STAMP)" ;;
+  s3)    echo "Local sealed backup prepared: $DEST (sealed db + verified s3 media backup as of $STAMP)" ;;
+  empty) echo "Local sealed backup prepared: $DEST (sealed db; no media present as of $STAMP)" ;;
+  *)     echo "Local sealed backup prepared: $DEST (sealed db as of $STAMP)" ;;
+esac
+
+# Optionally PUBLISH the complete sealed set off-box (NOVA_BACKUP_PUBLISH_S3=yes;
+# M18A.2 §3) so an ephemeral (e.g. Render one-off) job's local artifacts survive
+# teardown. backup:publish-s3 verifies the local set, uploads + re-verifies
+# every object, and commits the authenticated marker LAST; backup:verify-s3 then
+# re-authenticates the remote set. No plaintext is uploaded.
+if [ "${NOVA_BACKUP_PUBLISH_S3:-no}" = "yes" ]; then
+  if [ -z "${NOVA_BACKUP_S3_BUCKET:-}" ]; then
+    echo "ERROR: NOVA_BACKUP_PUBLISH_S3=yes but NOVA_BACKUP_S3_BUCKET is not set." >&2
+    echo "  Cannot publish the sealed backup off-box. Refusing." >&2
+    exit 1
+  fi
+  echo "Publishing off-box (sealed-backups/$STAMP/)"
+  ( cd "$REPO_ROOT" && pnpm --filter @nova/api --silent backup:publish-s3 -- \
+      --dir="$DEST" --stamp="$STAMP" --created-at="$CREATED_AT" --apply ) || {
+        echo "ERROR: remote sealed-backup publish failed — backup is NOT durable off-box." >&2
+        exit 1; }
+  ( cd "$REPO_ROOT" && pnpm --filter @nova/api --silent backup:verify-s3 -- \
+      --stamp="$STAMP" ) || {
+        echo "ERROR: remote sealed-backup verification failed — publish NOT trustworthy." >&2
+        exit 1; }
+  echo "Remote verification passed"
+  echo "Backup complete and durable off-box: $DEST -> sealed-backups/$STAMP/ (as of $STAMP)"
+else
+  # Off-box publishing disabled. A local-only backup on an EPHEMERAL job's
+  # discarded filesystem is not durable — fail CLOSED when the operator has
+  # declared the job ephemeral (NOVA_BACKUP_REQUIRE_OFFBOX=yes). Otherwise state
+  # plainly that off-box durability was NOT established.
+  if [ "${NOVA_BACKUP_REQUIRE_OFFBOX:-no}" = "yes" ]; then
+    echo "ERROR: NOVA_BACKUP_REQUIRE_OFFBOX=yes but off-box publish is not enabled" >&2
+    echo "  (NOVA_BACKUP_PUBLISH_S3 != yes). A local-only backup on an ephemeral" >&2
+    echo "  job's filesystem is not durable. Refusing (invalid configuration)." >&2
+    exit 1
+  fi
+  echo "Local-only backup complete; off-box durability not established: $DEST (as of $STAMP)"
+fi
 echo "REMINDER: NOVA_BACKUP_KEY and NOVA_ENCRYPTION_KEY live in your secret store, NOT here."

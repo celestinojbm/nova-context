@@ -7,7 +7,7 @@
  * semantics + reports; it reimplements no product or test logic.
  */
 
-export type Mode = "pr" | "predeploy" | "postdeploy" | "recovery";
+export type Mode = "pr" | "predeploy" | "deploy" | "postdeploy" | "recovery";
 
 export type CheckStatus = "passed" | "failed" | "blocked" | "skipped" | "degraded";
 
@@ -108,10 +108,45 @@ export interface CheckSpec {
    * unrelated prerequisites are missing. Cascade-skipping applies only to
    * non-pure checks. */
   pure?: boolean;
+  /** M18A: an alwaysRun check executes even after an earlier required check
+   * failed/blocked (like `pure`, but for cleanup with side effects — e.g.
+   * revoking the in-gate synthetic session). Cleanup must never be
+   * cascade-skipped once resources exist. */
+  alwaysRun?: boolean;
   /** Either a child-process command… */
   command?: CommandSpec;
   /** …or an in-process function (prerequisite/posture/http checks). */
   fn?: (ctx: RunContext) => Promise<CheckOutcome>;
+}
+
+/** M18A / M18A.1: mutable per-run state for the in-gate synthetic session.
+ * Values live ONLY in process memory; `extraSecrets` feeds the sanitizer so a
+ * minted token/password can never reach a report even by accident.
+ *
+ * The lifecycle state is EXPLICIT (M18A.1 finding 4) so cleanup can recover
+ * from a bootstrap that created the account but failed to authenticate: the
+ * account is recorded the instant signup succeeds, before login is attempted.
+ */
+export type SessionState =
+  | "not_started"
+  | "account_state_unknown" // signup SENT; response lost/non-definitive — account MAY exist
+  | "account_created" // signup confirmed 201; login not yet proven — MUST be cleaned
+  | "authenticated" // have a live token
+  | "deletion_attempted"
+  | "cleaned"
+  | "cleanup_failed";
+
+export interface GateRuntime {
+  extraSecrets: string[];
+  session?: {
+    state: SessionState;
+    email: string;
+    password: string;
+    token?: string;
+    /** true = the gate created this account (approach B) and must DELETE it;
+     * false = a pre-supplied token (approach A) that must be REVOKED. */
+    bootstrapped: boolean;
+  };
 }
 
 export interface RunContext {
@@ -121,6 +156,8 @@ export interface RunContext {
   flags: Record<string, string>;
   env: NodeJS.ProcessEnv;
   runCommand: CommandRunner;
+  /** M18A in-memory runtime state (synthetic session, minted secrets). */
+  runtime: GateRuntime;
 }
 
 export interface CommandResult {

@@ -34,11 +34,36 @@ jobs:
     env:
       DATABASE_URL: postgres://nova:nova@localhost:5432/nova
       REDIS_URL: redis://localhost:6379
+      # M18A: local MinIO (started below — service containers can't override
+      # the image command) lets the S3 media backup/recovery drill run against
+      # a REAL S3 API in CI. Dev-stack credentials only; no cloud, no cost.
+      NOVA_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+      NOVA_TEST_S3_ACCESS_KEY_ID: nova
+      NOVA_TEST_S3_SECRET_ACCESS_KEY: nova-minio-secret
+      # M18A.1 finding 5: in CI the MinIO drill is MANDATORY — the S3 media
+      # recovery suite must RUN, never silently skip. If MinIO is unavailable
+      # the suite fails loudly (see the test's required-mode guard).
+      NOVA_TEST_S3_REQUIRED: "yes"
       # M12: the browser-shell spike's tests are pure Node — CI never runs
       # the Electron binary, so skip the ~100MB download.
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
       - uses: actions/checkout@v4
+      # M18A / M18A.1 finding 5: MinIO for the S3 media backup/recovery drill.
+      # The step MUST fail if MinIO does not become healthy — the drill is
+      # mandatory in CI, so a broken MinIO can never let the suite silently
+      # skip.
+      - name: Start MinIO (local S3 for the media recovery drill)
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=nova -e MINIO_ROOT_PASSWORD=nova-minio-secret \
+            minio/minio server /data
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:9000/minio/health/live; then ready=1; break; fi
+            sleep 2
+          done
+          # Final REQUIRED health gate — fail the job if MinIO never came up.
+          curl --fail --silent --show-error http://127.0.0.1:9000/minio/health/live
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:

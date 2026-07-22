@@ -13,6 +13,9 @@ const HELP = `nova validation gate v0 (M17B)
 Usage:
   pnpm validate:pr
   pnpm validate:predeploy
+  pnpm validate:deploy       (Render pre-deploy hook: config-safety → prereqs →
+                              db:migrate → ops:preflight → 0-pending confirm;
+                              unsafe config FAILs BEFORE any migration runs)
   pnpm validate:postdeploy -- --base-url=https://api.example.com [--invite=<code>]
                               (NOVA_VALIDATE_SESSION_TOKEN required — the
                                authenticated /v1/ops/status check is mandatory)
@@ -61,7 +64,8 @@ function parseArgs(argv: string[]): { mode: Mode | null; flags: Record<string, s
   const flags: Record<string, string> = {};
   let mode: Mode | null = null;
   for (const a of argv) {
-    if (a === "pr" || a === "predeploy" || a === "postdeploy" || a === "recovery") mode = a;
+    if (a === "pr" || a === "predeploy" || a === "deploy" || a === "postdeploy" || a === "recovery")
+      mode = a;
     else if (a.startsWith("--")) {
       const [k, ...rest] = a.slice(2).split("=");
       if (k) flags[k] = rest.length ? rest.join("=") : "true";
@@ -83,7 +87,14 @@ async function main(): Promise<void> {
     console.error("--debug is refused in CI (verbose local-only mode; output stays sanitized regardless).");
   }
 
-  const ctx: RunContext = { repoRoot, mode, flags, env: process.env, runCommand };
+  const ctx: RunContext = {
+    repoRoot,
+    mode,
+    flags,
+    env: process.env,
+    runCommand,
+    runtime: { extraSecrets: [] },
+  };
   console.log(`validation-gate: mode=${mode} (see --help for outcome semantics; no real user data, ever)`);
   const report = await runGate({ mode, ctx });
 
@@ -95,9 +106,64 @@ async function main(): Promise<void> {
   const mdPath = join(runDir, "report.md");
   writeFileSync(jsonPath, toJson(report));
   writeFileSync(mdPath, toMarkdown(report));
-  writeFileSync(join(runDir, "junit.xml"), toJUnit(report));
+  const junitPath = join(runDir, "junit.xml");
+  writeFileSync(junitPath, toJUnit(report));
   copyFileSync(jsonPath, join(outRoot, "latest.json"));
   copyFileSync(mdPath, join(outRoot, "latest.md"));
+
+  // M18A §4: retain sanitized evidence in the operator's PRIVATE evidence
+  // store (ephemeral Render jobs lose their filesystem). Upload failure is
+  // loud and never silently claimed as retained.
+  let evidenceExit = 0;
+  if (process.env.NOVA_VALIDATE_EVIDENCE_S3_BUCKET) {
+    const { S3ObjectStore } = await import("@nova/context-engine/object-store");
+    const { retainEvidence } = await import("./evidence.js");
+    const store = new S3ObjectStore({
+      bucket: process.env.NOVA_VALIDATE_EVIDENCE_S3_BUCKET,
+      region: process.env.NOVA_VALIDATE_EVIDENCE_S3_REGION ?? "us-east-1",
+      endpoint: process.env.NOVA_VALIDATE_EVIDENCE_S3_ENDPOINT,
+      accessKeyId: process.env.NOVA_VALIDATE_EVIDENCE_S3_ACCESS_KEY_ID ?? "",
+      secretAccessKey: process.env.NOVA_VALIDATE_EVIDENCE_S3_SECRET_ACCESS_KEY ?? "",
+    });
+    const retained = await retainEvidence({
+      store,
+      mode,
+      runId: report.run_id,
+      outcome: report.outcome,
+      gitSha: report.git_sha,
+      uploadedAt: report.finished_at,
+      files: [{ path: jsonPath }, { path: mdPath }, { path: junitPath }],
+      // Scrub the run's minted synthetic secrets AND the evidence
+      // endpoint/bucket from any (already sanitized) upload error. The endpoint
+      // is registered as the full URL AND its bare host / host:port variants
+      // (M18A.1 review): an S3/DNS/socket error renders the host WITHOUT the
+      // scheme (e.g. "getaddrinfo ENOTFOUND minio.internal") so the full-URL
+      // literal alone would not match. A private resolved IP:port is caught by
+      // the sanitizer's private-IP pattern.
+      extraSecrets: [
+        ...ctx.runtime.extraSecrets,
+        ...endpointSecretVariants(process.env.NOVA_VALIDATE_EVIDENCE_S3_ENDPOINT),
+        process.env.NOVA_VALIDATE_EVIDENCE_S3_BUCKET,
+      ].filter((v): v is string => !!v),
+      backupKey: parseBackupKeyLoose(process.env.NOVA_BACKUP_KEY),
+      env: process.env,
+    });
+    if (retained.ok) {
+      console.log(
+        `evidence retained: ${retained.prefix} (${retained.uploaded.length} files, ${retained.authenticated ? "HMAC-authenticated meta" : "integrity hashes only — NOVA_BACKUP_KEY unset"})`,
+      );
+      for (const [name, hash] of Object.entries(retained.hashes)) {
+        console.log(`  sha256 ${name}: ${hash}`);
+      }
+    } else {
+      // retained.error is already sanitized by retainEvidence.
+      console.error(`EVIDENCE RETENTION FAILED: ${retained.error ?? "unknown error"}`);
+      console.error("  reports exist ONLY on this (possibly ephemeral) filesystem — do NOT claim full evidence retention.");
+      if (process.env.NOVA_VALIDATE_EVIDENCE_REQUIRED === "yes") evidenceExit = 1;
+    }
+  } else {
+    console.log("evidence retention: not configured (NOVA_VALIDATE_EVIDENCE_S3_BUCKET unset) — reports are local only");
+  }
 
   // Console summary (sanitized fields only).
   for (const c of report.checks) {
@@ -116,7 +182,41 @@ async function main(): Promise<void> {
   if (report.outcome === "BLOCKED") {
     console.log("note: BLOCKED is not a pass — supply the missing operator prerequisites and re-run.");
   }
-  process.exit(exitCodeFor(report.outcome, mode));
+  process.exit(Math.max(exitCodeFor(report.outcome, mode), evidenceExit));
+}
+
+/** Parse a 32-byte NOVA_BACKUP_KEY (hex or base64) for evidence-meta HMAC.
+ * Returns undefined if absent/invalid — retention then falls back to
+ * integrity-hash-only meta (honestly marked). */
+function parseBackupKeyLoose(value: string | undefined): Buffer | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  const key = /^[0-9a-fA-F]{64}$/.test(trimmed)
+    ? Buffer.from(trimmed, "hex")
+    : Buffer.from(trimmed, "base64");
+  return key.length === 32 ? key : undefined;
+}
+
+/** Every literal spelling of an endpoint that an S3/DNS/socket error might
+ * echo: the full URL, the bare host, and host:port. Registering all three as
+ * sanitizer extra-secrets means a "getaddrinfo ENOTFOUND <host>" or a
+ * "<host>:<port>" error cannot leak the private evidence endpoint (M18A.1
+ * review). Returns [] for an unset endpoint. */
+function endpointSecretVariants(endpoint: string | undefined): string[] {
+  if (!endpoint) return [];
+  const out = new Set<string>([endpoint]);
+  try {
+    const u = new URL(endpoint);
+    if (u.hostname) out.add(u.hostname);
+    if (u.host) out.add(u.host); // host[:port]
+  } catch {
+    const bare = endpoint.replace(/^[a-z0-9+.-]+:\/\//i, "").replace(/\/.*$/, "");
+    if (bare) {
+      out.add(bare);
+      out.add(bare.split(":")[0] ?? bare);
+    }
+  }
+  return [...out];
 }
 
 main().catch((err) => {

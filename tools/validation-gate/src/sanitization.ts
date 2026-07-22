@@ -27,6 +27,10 @@ export const SECRET_ENV_NAMES = [
   "NOVA_ALPHA_INVITE_CODE",
   "NOVA_MEDIA_S3_ACCESS_KEY_ID",
   "NOVA_MEDIA_S3_SECRET_ACCESS_KEY",
+  "NOVA_BACKUP_S3_ACCESS_KEY_ID",
+  "NOVA_BACKUP_S3_SECRET_ACCESS_KEY",
+  "NOVA_VALIDATE_EVIDENCE_S3_ACCESS_KEY_ID",
+  "NOVA_VALIDATE_EVIDENCE_S3_SECRET_ACCESS_KEY",
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
   "NOTION_CLIENT_SECRET",
@@ -54,6 +58,16 @@ const PATTERNS: Array<[RegExp, string]> = [
   [/\bAKIA[0-9A-Z]{16}\b/g, REDACTED],
   // 32-byte hex keys (NOVA_ENCRYPTION_KEY / NOVA_BACKUP_KEY shape).
   [/\b[0-9a-fA-F]{64}\b/g, REDACTED],
+  // Private-range IPv4 (+ optional :port). Infra error strings such as
+  // "connect ECONNREFUSED 10.0.3.4:9000" leak the private endpoint IP the
+  // evidence/media store lives behind, which the full-URL literal never
+  // matches (M18A.1 review). Only RFC1918 / link-local / CGNAT ranges are
+  // redacted — loopback (127.x) is not sensitive and a full dotted quad never
+  // collides with a semver (3 parts) or a port.
+  [
+    /\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|169\.254\.\d{1,3}\.\d{1,3}|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3})(?::\d{1,5})?\b/g,
+    REDACTED,
+  ],
   // Bearer / auth headers / cookies.
   [/\b(bearer)\s+[A-Za-z0-9._~+/=-]{6,}/gi, `$1 ${REDACTED}`],
   [/\b((?:authorization|proxy-authorization|cookie|set-cookie)\s*[:=]\s*)[^\r\n]+/gi, `$1${REDACTED}`],
@@ -83,7 +97,12 @@ export function sanitize(text: string, opts: SanitizeOptions = {}): string {
     if (v && v.length >= 6) literals.push(v);
   }
   for (const v of opts.extraSecrets ?? []) {
-    if (v && v.length >= 6) literals.push(v);
+    // Caller-supplied extraSecrets are EXPLICITLY declared secrets (a minted
+    // token/password, or the private evidence bucket/endpoint host). Redact
+    // them below the 6-char auto-detect floor too — an S3 bucket name may be
+    // as short as 3 chars (M18A.1 review). Floor at 3 so a 1-2 char value
+    // cannot shred ordinary output.
+    if (v && v.length >= 3) literals.push(v);
   }
   // Longest first so substrings of other secrets don't leave fragments.
   literals.sort((a, b) => b.length - a.length);

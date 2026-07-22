@@ -4,8 +4,20 @@ import {
   predeployFeaturePosture,
   predeployPrerequisites,
 } from "./checks/prerequisites.js";
-import { opsStatusAuthed, postdeployPrerequisites, readyz } from "./checks/postdeploy.js";
-import { recoveryPrerequisites, scratchTargetGuard, wrongBackupKey } from "./checks/recovery.js";
+import {
+  opsStatusAuthed,
+  postdeployPrerequisites,
+  readyz,
+  syntheticSessionBootstrap,
+  syntheticSessionCleanup,
+} from "./checks/postdeploy.js";
+import {
+  isS3Media,
+  recoveryPrerequisites,
+  s3RecoveryPrerequisites,
+  scratchTargetGuard,
+  wrongBackupKey,
+} from "./checks/recovery.js";
 import type { CheckSpec, Mode, RunContext } from "./types.js";
 
 /**
@@ -136,6 +148,88 @@ function predeployChecks(): CheckSpec[] {
   ];
 }
 
+/**
+ * Deploy orchestration (M18A.1 finding 3). The single command Render's
+ * pre-deploy hook runs. It fixes the migration/config ordering bug: config
+ * safety is a PURE check that runs FIRST, so an unsafe production config
+ * FAILs and cascade-skips the non-pure db:migrate — migrations are NEVER
+ * applied before unsafe config is rejected. Order:
+ *   1. config safety (pure)      → unsafe config FAILs here, before migrate
+ *   2. feature posture (pure)    → informational
+ *   3. operator prerequisites (pure)
+ *   4. db:migrate                → applies pending migrations exactly once
+ *                                  (also proves DB connectivity)
+ *   5. ops:preflight             → connectivity + keys + store + zero-pending
+ *   6. db:migrate:status         → explicit "0 pending" confirmation
+ * Reuses existing checks + the existing migration command; no migration
+ * logic is duplicated. BLOCKED/FAIL → non-zero exit → Render aborts the
+ * deploy (operator mode: FAIL=1, BLOCKED=2). */
+function deployChecks(): CheckSpec[] {
+  return [
+    {
+      id: "config_safety",
+      name: "Production configuration safety (invite-only, redaction on, no unsafe override, keys distinct)",
+      category: "security",
+      severity: "P0",
+      required: true,
+      pure: true,
+      timeoutMs: 10_000,
+      fn: predeployConfigSafety,
+    },
+    {
+      id: "feature_posture",
+      name: "First-deploy feature posture (Notion/cloud/live-QA/transcription OFF)",
+      category: "operations",
+      severity: "P3",
+      required: false,
+      pure: true,
+      timeoutMs: 10_000,
+      fn: predeployFeaturePosture,
+    },
+    {
+      id: "predeploy_prerequisites",
+      name: "Operator prerequisites present (names checked, values never printed)",
+      category: "operations",
+      severity: "P0",
+      required: true,
+      pure: true,
+      timeoutMs: 10_000,
+      fn: predeployPrerequisites,
+    },
+    {
+      // Applies pending migrations exactly once AND proves DB connectivity.
+      // Non-pure: a prior config-safety FAIL cascade-skips this — migrations
+      // are never applied under an unsafe configuration.
+      id: "migrate",
+      name: "db:migrate — apply pending migrations (once) against the target database",
+      category: "integration",
+      severity: "P0",
+      required: true,
+      timeoutMs: 10 * MIN,
+      command: { cmd: "pnpm", args: ["db:migrate"] },
+    },
+    {
+      id: "preflight",
+      name: "ops:preflight — connectivity, keys, media store, zero pending migrations, config",
+      category: "operations",
+      severity: "P0",
+      required: true,
+      timeoutMs: 10 * MIN,
+      command: { cmd: "pnpm", args: ["--filter", "@nova/api", "ops:preflight"] },
+    },
+    {
+      // Explicit, distinct "no pending migrations" confirmation AFTER migrate.
+      id: "migrations_current",
+      name: "db:migrate:status — confirm zero pending migrations",
+      category: "integration",
+      severity: "P0",
+      required: true,
+      timeoutMs: 5 * MIN,
+      command: { cmd: "pnpm", args: ["--filter", "@nova/api", "db:migrate:status"] },
+    },
+  ];
+}
+
 /** Post-deploy gate: /readyz + authed status + synthetic ops:smoke (which
  * itself walks capture → OCR/redaction → media → worker → search → task →
  * export → delete with a self-deleting synthetic account). */
@@ -162,8 +256,22 @@ function postdeployChecks(ctx: RunContext): CheckSpec[] {
       fn: readyz,
     },
     {
+      // M18A §5 (approach B): the authenticated checks use an in-gate
+      // synthetic session — created here, held only in memory, destroyed by
+      // synthetic_session_cleanup below. A pre-supplied
+      // NOVA_VALIDATE_SESSION_TOKEN (approach A) is used as-is instead.
+      id: "synthetic_session_bootstrap",
+      name: "Synthetic validation session (in-memory bootstrap via invite, or pre-supplied token)",
+      category: "security",
+      severity: "P1",
+      required: true,
+      timeoutMs: 60_000,
+      fn: syntheticSessionBootstrap,
+    },
+    {
       // M17B.1 finding 3: MANDATORY — a post-deploy PASS must validate the
-      // authenticated status endpoint (token is a hard prerequisite above).
+      // authenticated status endpoint (an authentication path is a hard
+      // prerequisite above; the token itself is bootstrapped in-gate).
       id: "ops_status_authed",
       name: "Authenticated /v1/ops/status (JSON contract + raw-error/leak detection)",
       category: "privacy",
@@ -185,6 +293,20 @@ function postdeployChecks(ctx: RunContext): CheckSpec[] {
         env: invite ? { NOVA_SMOKE_INVITE: invite } : undefined,
       },
     },
+    {
+      // M18A §5: cleanup ALWAYS runs (never cascade-skipped) so a failure
+      // mid-validation cannot leak the synthetic account. Deleting the
+      // account revokes its sessions; the check proves post-delete login
+      // fails. Required: a leftover synthetic account is a hygiene failure.
+      id: "synthetic_session_cleanup",
+      name: "Synthetic session destroyed (account deleted, session revoked, cleanup proven)",
+      category: "privacy",
+      severity: "P1",
+      required: true,
+      alwaysRun: true,
+      timeoutMs: 60_000,
+      fn: syntheticSessionCleanup,
+    },
   ];
 }
 
@@ -202,7 +324,12 @@ function recoveryChecks(ctx: RunContext): CheckSpec[] {
   // env — never as an argv (command descriptions stay invite-free), and the
   // sanitizer treats child-env values + NOVA_SMOKE_INVITE as secrets.
   const invite = ctx.flags.invite ?? ctx.env.NOVA_SMOKE_INVITE ?? "";
-  return [
+  // M18A.1 finding 2: the S3 media path is wired INTO the gate for s3 stores.
+  // fs stores keep the tar-based path (media rides inside the sealed backup,
+  // restored by restore.sh; media:verify covers it).
+  const s3 = isS3Media(ctx.env);
+
+  const checks: CheckSpec[] = [
     {
       id: "recovery_prerequisites",
       name: "Sealed backup + keys + scratch target configured",
@@ -212,9 +339,26 @@ function recoveryChecks(ctx: RunContext): CheckSpec[] {
       timeoutMs: 10_000,
       fn: recoveryPrerequisites,
     },
+  ];
+
+  if (s3) {
+    checks.push({
+      // Blocks BEFORE any mutation if the s3 backup/scratch config is missing
+      // or the scratch store aliases the backup store.
+      id: "s3_recovery_prerequisites",
+      name: "S3 media backup store + a SEPARATE scratch media destination",
+      category: "backup",
+      severity: "P0",
+      required: true,
+      timeoutMs: 10_000,
+      fn: s3RecoveryPrerequisites,
+    });
+  }
+
+  checks.push(
     {
       id: "scratch_guard",
-      name: "Restore target classifies as LOCAL SCRATCH (never production)",
+      name: "Restore target classifies as SAFE SCRATCH (local loopback OR authorized remote scratch)",
       category: "recovery",
       severity: "P0",
       required: true,
@@ -247,9 +391,47 @@ function recoveryChecks(ctx: RunContext): CheckSpec[] {
         expectFailure: true,
       },
     },
+  );
+
+  if (s3) {
+    checks.push(
+      {
+        // S3 media inventory verification (HMAC + object hashes) against the
+        // backup store — a missing/incomplete/altered backup is a FAIL.
+        id: "media_backup_verify",
+        name: "media:verify-backup-s3 — inventory MAC + completeness + object hashes",
+        category: "backup",
+        severity: "P0",
+        required: true,
+        timeoutMs: 10 * MIN,
+        command: {
+          cmd: "pnpm",
+          args: ["--filter", "@nova/api", "media:verify-backup-s3", "--", `--stamp=${stamp}`, `--dir=${dir}`],
+        },
+      },
+      {
+        // Expected-failure: a WRONG backup key must fail media inventory
+        // verification (unexpected success FAILS the gate).
+        id: "media_backup_verify_wrong_key",
+        name: "media:verify-backup-s3 with a WRONG key must fail (expected failure)",
+        category: "backup",
+        severity: "P0",
+        required: true,
+        timeoutMs: 10 * MIN,
+        command: {
+          cmd: "pnpm",
+          args: ["--filter", "@nova/api", "media:verify-backup-s3", "--", `--stamp=${stamp}`, `--dir=${dir}`],
+          env: { NOVA_BACKUP_KEY: wrongBackupKey() },
+          expectFailure: true,
+        },
+      },
+    );
+  }
+
+  checks.push(
     {
       id: "restore_scratch",
-      name: "scripts/restore.sh into the scratch target (guarded, verified-first)",
+      name: "scripts/restore.sh into the scratch target (authorized-scratch guard, verified-first)",
       category: "recovery",
       severity: "P0",
       required: true,
@@ -257,7 +439,10 @@ function recoveryChecks(ctx: RunContext): CheckSpec[] {
       command: {
         cmd: "bash",
         args: ["scripts/restore.sh", dir, stamp],
-        env: { NOVA_RESTORE_CONFIRM: "RESTORE" },
+        // M18A.3 §1: the destructive restore uses the SAME authorization the
+        // gate validated (backup:scratch-guard, re-checked before pg_restore) —
+        // the production override is inaccessible in this mode.
+        env: { NOVA_RESTORE_CONFIRM: "RESTORE", NOVA_RESTORE_MODE: "authorized-scratch" },
       },
     },
     {
@@ -269,9 +454,29 @@ function recoveryChecks(ctx: RunContext): CheckSpec[] {
       timeoutMs: 10 * MIN,
       command: { cmd: "pnpm", args: ["db:migrate"] },
     },
+  );
+
+  if (s3) {
+    checks.push({
+      // S3 media restore into the CONFIGURED scratch store (--apply). Verifies
+      // the inventory first and refuses the ORIGINAL primary destination.
+      id: "media_restore_s3",
+      name: "media:restore-s3 --apply — restore encrypted blobs into the scratch bucket",
+      category: "recovery",
+      severity: "P1",
+      required: true,
+      timeoutMs: 20 * MIN,
+      command: {
+        cmd: "pnpm",
+        args: ["--filter", "@nova/api", "media:restore-s3", "--", `--stamp=${stamp}`, `--dir=${dir}`, "--apply"],
+      },
+    });
+  }
+
+  checks.push(
     {
       id: "media_verify",
-      name: "media:verify — every blob present AND decryptable with the data key",
+      name: "media:verify — every blob present AND decryptable with the data key (scratch DB + scratch bucket)",
       category: "media",
       severity: "P1",
       required: true,
@@ -295,7 +500,9 @@ function recoveryChecks(ctx: RunContext): CheckSpec[] {
         env: invite ? { NOVA_SMOKE_INVITE: invite } : undefined,
       },
     },
-  ];
+  );
+
+  return checks;
 }
 
 export function checksForMode(mode: Mode, ctx: RunContext): CheckSpec[] {
@@ -304,6 +511,8 @@ export function checksForMode(mode: Mode, ctx: RunContext): CheckSpec[] {
       return prChecks();
     case "predeploy":
       return predeployChecks();
+    case "deploy":
+      return deployChecks();
     case "postdeploy":
       return postdeployChecks(ctx);
     case "recovery":

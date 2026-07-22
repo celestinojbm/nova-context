@@ -15,15 +15,16 @@ export async function postdeployPrerequisites(ctx: RunContext): Promise<CheckOut
   } else if (!/^https?:\/\//.test(ctx.flags["base-url"])) {
     return { status: "failed", summary: "--base-url must be an http(s) URL" };
   }
+  // The invite is MANDATORY: it feeds BOTH the ops:smoke synthetic account and
+  // (M17B.1 finding 3 / M18A approach B) the in-gate synthetic-session
+  // bootstrap that provides the mandatory authenticated /v1/ops/status check.
+  // Without it the gate cannot authenticate and is BLOCKED — never a quiet
+  // skip. A pre-supplied NOVA_VALIDATE_SESSION_TOKEN (approach A) is an
+  // OPTIONAL override for the authed check; it does not remove the invite need
+  // (ops:smoke still creates its own synthetic account).
   if (!ctx.flags.invite && !ctx.env.NOVA_SMOKE_INVITE) {
-    reasons.push("missing invite code (--invite or NOVA_SMOKE_INVITE) for the synthetic smoke account");
-  }
-  // M17B.1 finding 3: a post-deploy PASS must validate the AUTHENTICATED
-  // /v1/ops/status endpoint, so the operator session credential is a hard
-  // prerequisite — without it the gate is BLOCKED, never a quiet skip.
-  if (!ctx.env.NOVA_VALIDATE_SESSION_TOKEN) {
     reasons.push(
-      "missing env: NOVA_VALIDATE_SESSION_TOKEN (operator session required for the mandatory authenticated /v1/ops/status check)",
+      "missing invite (--invite or NOVA_SMOKE_INVITE) — required for the synthetic smoke account AND the in-gate authenticated session",
     );
   }
   if (reasons.length) {
@@ -35,8 +36,315 @@ export async function postdeployPrerequisites(ctx: RunContext): Promise<CheckOut
   }
   return {
     status: "passed",
-    summary: "deployment URL + synthetic-account invite + operator session available (values not printed)",
+    summary: ctx.env.NOVA_VALIDATE_SESSION_TOKEN
+      ? "deployment URL + invite available; authenticated checks use the pre-supplied operator session (revoked by cleanup)"
+      : "deployment URL + invite available; authenticated checks use an in-gate synthetic session (created, used in memory, then destroyed)",
   };
+}
+
+/** Minimal in-gate API helper (bootstrap/cleanup only). */
+async function apiCall(
+  base: string,
+  path: string,
+  init: { method?: string; token?: string; body?: unknown },
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const res = await fetch(new URL(path, base), {
+    method: init.method ?? "GET",
+    headers: {
+      "content-type": "application/json",
+      ...(init.token ? { authorization: `Bearer ${init.token}` } : {}),
+    },
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    signal: AbortSignal.timeout(15_000),
+  });
+  const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  return { status: res.status, body };
+}
+
+const CLEANUP_ATTEMPTS = 3;
+const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** A synthetic account handle is safe to print for operator cleanup — it is a
+ * generated `@nova-validate.invalid` address, never a secret. The password,
+ * token, and invite never appear anywhere (they are sanitizer extra-secrets). */
+function syntheticHandle(email: string): string {
+  return email || "(unknown synthetic account)";
+}
+
+/**
+ * M18A §5 / M18A.1 finding 4: create the synthetic validation session INSIDE
+ * the gate. The account is recorded (state `account_created`) the INSTANT
+ * signup succeeds — BEFORE login is attempted — so a login/network failure
+ * still leaves an explicit handle for `synthetic_session_cleanup` to recover
+ * and delete. Token/password live only in process memory and are sanitizer
+ * extra-secrets, so they can never reach argv, reports, or logs.
+ *
+ * Approach A (pre-supplied NOVA_VALIDATE_SESSION_TOKEN): the token is used
+ * as-is, but it is NOT a free pass — cleanup REVOKES it (POST /v1/auth/logout)
+ * and proves it is dead, so a supplied live session can never be left active.
+ */
+export async function syntheticSessionBootstrap(ctx: RunContext): Promise<CheckOutcome> {
+  const supplied = ctx.env.NOVA_VALIDATE_SESSION_TOKEN;
+  if (supplied) {
+    ctx.runtime.session = {
+      state: "authenticated",
+      email: "",
+      password: "",
+      token: supplied,
+      bootstrapped: false,
+    };
+    ctx.runtime.extraSecrets.push(supplied);
+    return {
+      status: "passed",
+      summary: "using pre-supplied operator session (approach A); it will be REVOKED + proven dead by cleanup",
+    };
+  }
+  const base = ctx.flags["base-url"];
+  const invite = ctx.flags.invite ?? ctx.env.NOVA_SMOKE_INVITE;
+  if (!base || !invite) {
+    return { status: "failed", summary: "bootstrap prerequisites absent at check time (prerequisite bypass?)" };
+  }
+  // Unique per run → reruns are idempotent (no email collision with a
+  // previous run's leftover account, which cleanup should have removed).
+  const email = `validate-${Date.now().toString(36)}-${randomHex(6)}@nova-validate.invalid`;
+  const password = `Vg1-${randomHex(24)}`;
+  // The password AND the invite are sanitizer extra-secrets (M18A.1 review P3).
+  ctx.runtime.extraSecrets.push(password, invite);
+
+  // Record the INTENT before calling signup (M18A.1 review P2 / M18A.2 §2): the
+  // instant the request is transmitted the account MAY exist, so the state is
+  // `account_state_unknown` until a definitive 201 confirms it. Cleanup must
+  // then attempt recovery and PROVE the account is gone — never assume "nothing
+  // to clean".
+  ctx.runtime.session = { state: "account_state_unknown", email, password, bootstrapped: true };
+
+  let signupStatus: number;
+  try {
+    const signup = await apiCall(base, "/v1/auth/signup", {
+      method: "POST",
+      body: { email, password, invite_code: invite },
+    });
+    signupStatus = signup.status;
+  } catch (err) {
+    // Timeout / network loss / any non-definitive response → account_state_unknown.
+    return {
+      status: "failed",
+      summary: sanitize(`synthetic signup response lost: ${(err as Error).message}; cleanup must recover + delete or FAIL`),
+    };
+  }
+  if (signupStatus !== 201) {
+    // A non-201 (5xx / malformed / anything non-definitive) could still be a
+    // committed-then-error account; stays account_state_unknown so cleanup
+    // recovers-and-proves rather than assuming.
+    return {
+      status: "failed",
+      summary: `synthetic signup returned HTTP ${signupStatus}; cleanup must recover + delete or FAIL`,
+    };
+  }
+  // Signup CONFIRMED — the account definitely exists now.
+  ctx.runtime.session.state = "account_created";
+
+  try {
+    const login = await apiCall(base, "/v1/auth/login", { method: "POST", body: { email, password } });
+    const token = typeof login.body.token === "string" ? login.body.token : null;
+    if (login.status !== 200 || !token) {
+      // Account exists but we could not authenticate. Cleanup recovers it.
+      return {
+        status: "failed",
+        summary: `synthetic login failed (HTTP ${login.status}); account recorded — cleanup will recover + delete it`,
+      };
+    }
+    ctx.runtime.session.token = token;
+    ctx.runtime.session.state = "authenticated";
+    ctx.runtime.extraSecrets.push(token);
+    return {
+      status: "passed",
+      summary: "in-gate synthetic session created (token in memory only; account deleted by cleanup)",
+    };
+  } catch (err) {
+    // Network failure AFTER signup — the account exists; cleanup recovers it.
+    return {
+      status: "failed",
+      summary: sanitize(`synthetic login unreachable after signup: ${(err as Error).message}; cleanup will recover + delete`),
+    };
+  }
+}
+
+/** Try to (re)obtain a token for the synthetic account, bounded retries. */
+async function recoverToken(base: string, email: string, password: string): Promise<string | null> {
+  for (let attempt = 0; attempt < CLEANUP_ATTEMPTS; attempt++) {
+    try {
+      const login = await apiCall(base, "/v1/auth/login", { method: "POST", body: { email, password } });
+      if (login.status === 200 && typeof login.body.token === "string") return login.body.token;
+    } catch {
+      // fall through to retry
+    }
+    await delay(500 * (attempt + 1));
+  }
+  return null;
+}
+
+/** Delete the synthetic account (real flow: password + typed DELETE), bounded
+ * retries against transient network failures. Returns the last HTTP status, or
+ * null if every attempt threw. */
+async function deleteAccount(
+  base: string,
+  token: string,
+  password: string,
+): Promise<number | null> {
+  let last: number | null = null;
+  for (let attempt = 0; attempt < CLEANUP_ATTEMPTS; attempt++) {
+    try {
+      const del = await apiCall(base, "/v1/auth/account/delete", {
+        method: "POST",
+        token,
+        body: { password, confirm: "DELETE" },
+      });
+      last = del.status;
+      if (del.status === 200) return 200;
+    } catch {
+      last = null;
+    }
+    await delay(500 * (attempt + 1));
+  }
+  return last;
+}
+
+/**
+ * M18A §5 / M18A.1 finding 4 / M18A.2 §2: destroy the synthetic session —
+ * ALWAYS runs (never cascade-skipped), so a failure anywhere after signup
+ * cannot leak a synthetic account.
+ *
+ * INVARIANT (M18A.2 §2): a cleanup check may PASS only with AFFIRMATIVE
+ * evidence that no synthetic account or live session remains. Ambiguity is
+ * never a pass.
+ *   - approach A (supplied token): REVOKE via /v1/auth/logout, then prove the
+ *     token is dead — ONLY a literal 401 proves it; 403 / 5xx / unreachable
+ *     are all FAIL;
+ *   - authenticated (approach B): delete via the real flow, then prove dead;
+ *   - account_state_unknown / account_created: RECOVER a token via bounded
+ *     re-login, then delete + prove. If a token cannot be recovered, FAIL
+ *     (never "likely no orphan") with a sanitized synthetic handle and a
+ *     manual-verification instruction — postdeploy approval stops.
+ *   - post-delete proof: the deleted account's credentials must return exactly
+ *     HTTP 401 on login; 200 / 403 / 4xx / 5xx / timeout are all FAIL.
+ * In-memory secret references are cleared on every terminal path.
+ */
+export async function syntheticSessionCleanup(ctx: RunContext): Promise<CheckOutcome> {
+  const s = ctx.runtime.session;
+  const base = ctx.flags["base-url"];
+  if (!s || s.state === "not_started") {
+    // Bootstrap never created anything (e.g. signup itself failed).
+    return { status: "passed", summary: "no synthetic account was created — nothing to clean" };
+  }
+
+  // Approach A: revoke the supplied session and prove it is dead.
+  if (!s.bootstrapped) {
+    try {
+      const logout = await apiCall(base!, "/v1/auth/logout", { method: "POST", token: s.token });
+      // Prove revoked: an authed call must now be UNAUTHENTICATED (401).
+      // 403 = authenticated-but-forbidden → the session is STILL LIVE (it
+      // proves identity was accepted), the opposite of revocation — so only
+      // 401 counts as dead (M18A.1 review P1).
+      const probe = await apiCall(base!, "/v1/ops/status", { token: s.token });
+      const dead = probe.status === 401;
+      clearSessionSecrets(ctx);
+      s.state = dead ? "cleaned" : "cleanup_failed";
+      return dead
+        ? { status: "passed", summary: `pre-supplied session REVOKED + proven dead (logout HTTP ${logout.status}, probe HTTP 401)` }
+        : {
+            status: "failed",
+            summary: `pre-supplied session NOT proven revoked (logout HTTP ${logout.status}, probe HTTP ${probe.status}; only 401 proves a dead session) — revoke it manually`,
+          };
+    } catch (err) {
+      clearSessionSecrets(ctx);
+      s.state = "cleanup_failed";
+      return { status: "failed", summary: sanitize(`approach-A revoke unreachable: ${(err as Error).message}`) };
+    }
+  }
+
+  // Approach B: recover a token if login had failed, then delete + prove.
+  let token = s.token;
+  if (!token) {
+    token = (await recoverToken(base!, s.email, s.password)) ?? undefined;
+    if (token) {
+      s.token = token;
+      ctx.runtime.extraSecrets.push(token);
+      s.state = "authenticated";
+    }
+  }
+  if (!token) {
+    // No recoverable token. Whether the account is CONFIRMED (account_created)
+    // or only POSSIBLE (account_state_unknown), we cannot PROVE it is gone, so
+    // both FAIL (M18A.2 §2 — no more "likely no orphan" pass). The synthetic
+    // handle is emitted for manual verification; postdeploy approval stops.
+    const handle = syntheticHandle(s.email);
+    const kind = s.state === "account_created" ? "CONFIRMED" : "possible (signup response was non-definitive)";
+    clearSessionSecrets(ctx);
+    s.state = "cleanup_failed";
+    return {
+      status: "failed",
+      summary: `could not authenticate to delete the ${kind} synthetic account after ${CLEANUP_ATTEMPTS} attempts — MANUAL cleanup/verification required for synthetic handle ${handle}`,
+    };
+  }
+
+  s.state = "deletion_attempted";
+  const delStatus = await deleteAccount(base!, token, s.password);
+  if (delStatus !== 200) {
+    const handle = syntheticHandle(s.email);
+    clearSessionSecrets(ctx);
+    s.state = "cleanup_failed";
+    return {
+      status: "failed",
+      summary: `synthetic account deletion failed (HTTP ${delStatus ?? "network error"}) after ${CLEANUP_ATTEMPTS} attempts — MANUAL cleanup required for synthetic handle ${handle}`,
+    };
+  }
+  // Prove cleanup: the deleted account's credentials must return EXACTLY 401
+  // (credential rejected). Anything else — 200 (still live), 403 (still
+  // authenticated), 4xx/5xx (indeterminate), or an unreachable proof — is NOT
+  // affirmative evidence and FAILs (M18A.2 §2).
+  let reloginStatus: number | null = null;
+  try {
+    const relogin = await apiCall(base!, "/v1/auth/login", {
+      method: "POST",
+      body: { email: s.email, password: s.password },
+    });
+    reloginStatus = relogin.status;
+  } catch {
+    reloginStatus = null; // unreachable at prove-time → cleanup NOT proven.
+  }
+  if (reloginStatus !== 401) {
+    const handle = syntheticHandle(s.email);
+    clearSessionSecrets(ctx);
+    s.state = "cleanup_failed";
+    return {
+      status: "failed",
+      summary: `synthetic account deletion NOT proven — post-delete login returned HTTP ${reloginStatus ?? "unreachable"} (only 401 proves dead credentials); MANUAL verification required for synthetic handle ${handle}`,
+    };
+  }
+  // Affirmative evidence: credentials rejected (401). Clear secret references.
+  clearSessionSecrets(ctx);
+  s.state = "cleaned";
+  return {
+    status: "passed",
+    summary: "synthetic account deleted + sessions revoked (post-delete login HTTP 401 — cleanup proven)",
+  };
+}
+
+/** Clear in-memory secret references once a cleanup path is terminal. The
+ * email (a safe synthetic handle) is kept for the report; token/password are
+ * wiped. Extra-secrets already registered stay registered (sanitizer safety). */
+function clearSessionSecrets(ctx: RunContext): void {
+  if (ctx.runtime.session) {
+    ctx.runtime.session.token = undefined;
+    ctx.runtime.session.password = "";
+  }
+}
+
+function randomHex(bytes: number): string {
+  const buf = new Uint8Array(bytes);
+  crypto.getRandomValues(buf);
+  return [...buf].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 /** Public /readyz: must return HTTP success AND ready:true (booleans-only
@@ -93,11 +401,14 @@ const RAW_ERROR_PATTERNS: RegExp[] = [
  *   3. sanitizer diff (DSNs, keys, tokens, data: URLs).
  */
 export async function opsStatusAuthed(ctx: RunContext): Promise<CheckOutcome> {
-  const token = ctx.env.NOVA_VALIDATE_SESSION_TOKEN;
+  // M18A: the token comes from the in-memory runtime session (in-gate
+  // bootstrap, approach B) or the pre-supplied env token (approach A) —
+  // never from argv, never persisted.
+  const token = ctx.runtime.session?.token ?? ctx.env.NOVA_VALIDATE_SESSION_TOKEN;
   if (!token) {
-    // Defence in depth: prerequisites already block on a missing token; a
-    // required check must still never self-skip into a PASS.
-    return { status: "failed", summary: "operator session token absent at check time (prerequisite bypass?)" };
+    // Defence in depth: prerequisites/bootstrap already fail without an
+    // authentication path; a required check must still never self-skip.
+    return { status: "failed", summary: "no session token available at check time (prerequisite bypass?)" };
   }
   const started = Date.now();
   try {

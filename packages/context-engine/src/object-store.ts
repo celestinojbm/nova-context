@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, normalize, relative, sep } from "node:path";
 
@@ -205,4 +206,101 @@ export class S3ObjectStore implements ObjectStore {
     } while (continuationToken);
     return out;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Object-store identity guards (M18A.1).
+//
+// A "store identity" is a stable string describing WHERE a store points:
+//   s3|<endpoint>|<bucket>   or   fs|<physical-path>
+// Its sha256 fingerprint is a SAFETY GUARD used to refuse source/backup/
+// scratch ALIASING (e.g. backing up onto the same bucket, or restoring over
+// the primary). It is NOT proof of provider-account identity or ownership —
+// two configs that canonicalize to the same string are treated as the same
+// physical store so trailing-slash / port / casing variants cannot bypass the
+// separation checks.
+// ---------------------------------------------------------------------------
+
+/**
+ * An AWS S3 endpoint host, in EVERY spelling that addresses the same bucket:
+ * path-style (`s3.amazonaws.com`, `s3.<region>.amazonaws.com`,
+ * `s3-<region>.amazonaws.com`, `s3.dualstack.<region>...`, `s3-fips...`) and
+ * virtual-hosted (`<bucket>.s3.<region>.amazonaws.com`), including the China
+ * (`.amazonaws.com.cn`) partition. On AWS the bucket NAME is the global
+ * identity, so region / dualstack / fips / virtual-host spellings all denote
+ * the SAME physical store — and, critically, the same store as an UNSET
+ * endpoint, which the SDK resolves to AWS. Collapsing them all to the "aws"
+ * token (below) is what makes `s3|aws|b` (endpoint unset) equal
+ * `s3|https://s3.us-east-1.amazonaws.com|b`, so the source/backup/primary
+ * aliasing guard cannot be evaded by simply respelling the endpoint
+ * (M18A.1 review). Collapsing the China/GovCloud partitions to "aws" as well
+ * is fail-SAFE: it can only make the guard refuse MORE (a theoretical
+ * cross-partition same-name backup), never less.
+ */
+function isAwsS3Host(host: string): boolean {
+  const h = host.toLowerCase();
+  if (!(h.endsWith(".amazonaws.com") || h.endsWith(".amazonaws.com.cn"))) return false;
+  return h.split(".").some((label) => label === "s3" || label.startsWith("s3-"));
+}
+
+/** Normalize an S3 endpoint: lowercase scheme+host, drop default ports, strip
+ * trailing slashes. `aws`/empty (no explicit endpoint) AND any AWS S3 endpoint
+ * spelling (regional, dualstack, fips, virtual-hosted) canonicalize to the
+ * single "aws" token, so respelling an AWS endpoint cannot bypass the aliasing
+ * guard. Non-AWS endpoints (MinIO, R2, other S3-compatible) keep their
+ * normalized URL — there the endpoint genuinely distinguishes stores. */
+export function canonicalizeEndpoint(endpoint: string | undefined): string {
+  const raw = (endpoint ?? "").trim();
+  if (!raw || raw.toLowerCase() === "aws") return "aws";
+  try {
+    const u = new URL(raw);
+    const host = u.hostname.toLowerCase();
+    if (isAwsS3Host(host)) return "aws";
+    const scheme = u.protocol.toLowerCase(); // includes trailing ':'
+    const isDefaultPort =
+      (scheme === "https:" && (u.port === "443" || u.port === "")) ||
+      (scheme === "http:" && (u.port === "80" || u.port === ""));
+    const portPart = u.port && !isDefaultPort ? `:${u.port}` : "";
+    const path = u.pathname.replace(/\/+$/, "");
+    return `${scheme}//${host}${portPart}${path}`;
+  } catch {
+    // Tolerate a scheme-less host (config validation normally requires a URL).
+    const bare = raw.replace(/\/+$/, "").toLowerCase();
+    const host = (bare.split("/")[0] ?? "").split(":")[0] ?? "";
+    if (isAwsS3Host(host)) return "aws";
+    return bare;
+  }
+}
+
+/** Build an s3 store identity string from endpoint + bucket. */
+export function s3Identity(endpoint: string | undefined, bucket: string): string {
+  return `s3|${endpoint ?? "aws"}|${bucket}`;
+}
+
+/** Build an fs store identity string from a (ideally physical) path. */
+export function fsIdentity(path: string): string {
+  return `fs|${path}`;
+}
+
+/** Canonical form of a store identity string. Endpoint is normalized; a
+ * trailing slash on the fs path is dropped; the bucket is trimmed (bucket
+ * names are case-sensitive so casing is preserved). Unknown shapes pass
+ * through unchanged. */
+export function canonicalizeIdentity(identity: string): string {
+  const parts = identity.split("|");
+  if (parts[0] === "s3" && parts.length >= 3) {
+    const endpoint = canonicalizeEndpoint(parts[1]);
+    const bucket = parts.slice(2).join("|").trim().replace(/\/+$/, "");
+    return `s3|${endpoint}|${bucket}`;
+  }
+  if (parts[0] === "fs" && parts.length >= 2) {
+    const path = parts.slice(1).join("|").replace(/\/+$/, "") || "/";
+    return `fs|${path}`;
+  }
+  return identity;
+}
+
+/** sha256 of the CANONICAL identity — the aliasing-guard fingerprint. */
+export function fingerprintIdentity(identity: string): string {
+  return createHash("sha256").update(canonicalizeIdentity(identity)).digest("hex");
 }
