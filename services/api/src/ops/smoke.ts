@@ -1,7 +1,7 @@
 /**
  * M13 post-deploy smoke suite — walks the whole product surface against a
  * RUNNING deployment over plain HTTP, as a real client would, using ONLY
- * synthetic content (a generated nonce, a 1×1 white PNG). Nothing sensitive
+ * synthetic content (a generated nonce, a blank white canvas). Nothing sensitive
  * is sent, stored, or printed; the synthetic account it creates deletes itself
  * at the end through the real account-deletion flow.
  *
@@ -35,6 +35,9 @@
  *   fail     — broken; the command exits 1
  */
 
+import { MIN_ANALYSIS_HEIGHT, MIN_ANALYSIS_WIDTH } from "@nova/context-engine/visual-redaction";
+import { Jimp, JimpMime } from "jimp";
+
 export interface SmokeStep {
   step: string;
   status: "ok" | "degraded" | "fail";
@@ -59,8 +62,26 @@ type LifecycleState =
   | "cleaned"
   | "cleanup_failed";
 
-const TINY_PNG =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+/**
+ * M19A: the smoke's synthetic screenshot must CLEAR the analysis-resolution
+ * floor. It used to be a 1×1 PNG, which the visual-redaction gate now
+ * (correctly) refuses to certify — the smoke would report `visual_redaction:
+ * degraded` on every run of a perfectly healthy deployment, and would never
+ * exercise the masking or media-storage path it exists to check. A blank
+ * canvas at the floor carries no content and still proves the pipeline ran.
+ */
+let syntheticScreenshot: string | null = null;
+async function screenshotDataUrl(): Promise<string> {
+  if (syntheticScreenshot) return syntheticScreenshot;
+  const img = new Jimp({
+    width: MIN_ANALYSIS_WIDTH,
+    height: MIN_ANALYSIS_HEIGHT,
+    color: 0xffffffff,
+  });
+  const buf = await img.getBuffer(JimpMime.png);
+  syntheticScreenshot = `data:image/png;base64,${buf.toString("base64")}`;
+  return syntheticScreenshot;
+}
 
 const CLEANUP_ATTEMPTS = 3;
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -256,7 +277,7 @@ export async function runSmoke(
           source_meta: { url: `https://alpha.local/${nonce}`, title: `Smoke ${nonce}` },
           payload: {
             dom_extract: { main_text: `synthetic smoke page about ${nonce}` },
-            screenshot_data_url: TINY_PNG,
+            screenshot_data_url: await screenshotDataUrl(),
           },
           extracted_text: `Smoke ${nonce}. synthetic smoke page about ${nonce}`,
           intent_text: `remind me to review the ${nonce} dashboard`,

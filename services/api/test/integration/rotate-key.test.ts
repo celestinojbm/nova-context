@@ -13,6 +13,7 @@ import { buildApp } from "../../src/app.js";
 import { migrate } from "../../src/db/migrate.js";
 import { loadEnv } from "../../src/env.js";
 import { createUser, type TestUser } from "./helpers.js";
+import { MIN_ANALYSIS_HEIGHT, MIN_ANALYSIS_WIDTH } from "@nova/context-engine/visual-redaction";
 
 /**
  * M9 key rotation v0: the real `media:rotate-key` command run as a child
@@ -81,7 +82,7 @@ describe.skipIf(!databaseUrl)("M9: key rotation", () => {
     await db.connect();
     user = await createUser(app, `rotate-${Date.now()}@test.local`);
 
-    const img = new Jimp({ width: 400, height: 120, color: 0xffffffff });
+    const img = new Jimp({ width: MIN_ANALYSIS_WIDTH, height: MIN_ANALYSIS_HEIGHT, color: 0xffffffff });
     const png = `data:image/png;base64,${(await img.getBuffer(JimpMime.png)).toString("base64")}`;
     const res = await user.inject({
       method: "POST",

@@ -16,6 +16,7 @@ import { buildApp } from "../../src/app.js";
 import { migrate } from "../../src/db/migrate.js";
 import { loadEnv } from "../../src/env.js";
 import { createUser, type TestUser } from "./helpers.js";
+import { MIN_ANALYSIS_HEIGHT, MIN_ANALYSIS_WIDTH } from "@nova/context-engine/visual-redaction";
 
 /**
  * M11 suite: multi-key read mode — the zero-downtime rotation story.
@@ -39,7 +40,7 @@ class CleanOcr implements OcrEngine {
 }
 
 async function whitePng(): Promise<string> {
-  const img = new Jimp({ width: 400, height: 120, color: 0xffffffff });
+  const img = new Jimp({ width: MIN_ANALYSIS_WIDTH, height: MIN_ANALYSIS_HEIGHT, color: 0xffffffff });
   return `data:image/png;base64,${(await img.getBuffer(JimpMime.png)).toString("base64")}`;
 }
 

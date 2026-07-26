@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   classifySensitiveWords,
   ImageRedactionError,
+  MIN_ANALYSIS_HEIGHT,
+  MIN_ANALYSIS_WIDTH,
   parseDataUrl,
   redactImageDataUrl,
   type OcrEngine,
@@ -24,7 +26,14 @@ function fakeEngine(words: OcrWord[]): OcrEngine {
   return { name: "fake", recognize: async () => ({ words }) };
 }
 
-async function whiteImageDataUrl(w = 800, h = 200): Promise<string> {
+/** M19A: the default size clears the analysis-resolution floor. Below it
+ * `redactImageDataUrl` refuses to certify and never calls OCR, so a smaller
+ * canvas would silently stop exercising the masking path these tests are
+ * about (the floor itself is covered in visual-redaction-coverage.test.ts). */
+async function whiteImageDataUrl(
+  w = MIN_ANALYSIS_WIDTH,
+  h = MIN_ANALYSIS_HEIGHT,
+): Promise<string> {
   const img = new Jimp({ width: w, height: h, color: 0xffffffff });
   const buf = await img.getBuffer(JimpMime.png);
   return `data:image/png;base64,${buf.toString("base64")}`;
@@ -78,6 +87,7 @@ describe("redactImageDataUrl", () => {
   it("paints sensitive word boxes black and leaves the rest intact", async () => {
     const words = line(["email", "alice@example.com"], 40);
     const result = await redactImageDataUrl(fakeEngine(words), await whiteImageDataUrl());
+    expect(result.coverage).toBe("certified");
     expect(result.masked).toBe(1);
     expect(result.tally["email"]).toBe(1);
 
@@ -92,11 +102,12 @@ describe("redactImageDataUrl", () => {
   });
 
   it("returns the original data URL untouched when nothing is sensitive", async () => {
-    const original = await whiteImageDataUrl(100, 50);
+    const original = await whiteImageDataUrl();
     const result = await redactImageDataUrl(
       fakeEngine(line(["hello", "world"])),
       original,
     );
+    expect(result.coverage).toBe("certified"); // genuinely clean, not unscanned
     expect(result.masked).toBe(0);
     expect(result.dataUrl).toBe(original);
   });
@@ -109,7 +120,7 @@ describe("redactImageDataUrl", () => {
       },
     };
     await expect(
-      redactImageDataUrl(failing, await whiteImageDataUrl(50, 50)),
+      redactImageDataUrl(failing, await whiteImageDataUrl()),
     ).rejects.toThrow(ImageRedactionError);
   });
 

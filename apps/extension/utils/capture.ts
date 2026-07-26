@@ -38,11 +38,44 @@ export function extractPageContext() {
 
 export type PageContext = ReturnType<typeof extractPageContext>;
 
+/**
+ * M19A (Hermes D-10) analysis-resolution floor, mirrored from
+ * `@nova/context-engine/visual-redaction` (MIN_ANALYSIS_WIDTH/HEIGHT). The
+ * extension bundle must not import the Node-only jimp module, so the value is
+ * duplicated here and pinned by a test that asserts the two agree.
+ *
+ * The server REFUSES to certify redaction below this size, so a capture
+ * downscaled under it can never be stored as 'applied'. Keep captures above
+ * the floor or they will be dropped by strict mode.
+ */
+export const MIN_CAPTURE_WIDTH = 1280;
+export const MIN_CAPTURE_HEIGHT = 600;
+
+/**
+ * Upload cap for a capture. 1920px wide at JPEG q0.8 stays well inside the
+ * schema's 1.5MB base64 limit for `screenshot_data_url` while preserving
+ * enough glyph height for server-side OCR to actually read body text.
+ *
+ * Was 800px/q0.75 before M19A: that destroyed ~14px text (it became ~5.8px)
+ * and made the server's OCR return zero boxes on legible screens.
+ */
+export const CAPTURE_MAX_WIDTH = 1920;
+export const CAPTURE_QUALITY = 0.8;
+
+/**
+ * Live-session frames. Was 640px/q0.6 before M19A — far below the analysis
+ * floor, so every frame would now be dropped by `redactFrames` and live Q&A
+ * would silently lose all visual grounding. 1280px is the floor exactly; the
+ * lower quality keeps the in-memory buffer budget (LIVE_LIMITS) realistic.
+ */
+export const LIVE_FRAME_MAX_WIDTH = 1280;
+export const LIVE_FRAME_QUALITY = 0.6;
+
 /** Downscale (and optionally blur — M4 visual safeguard) the screenshot. */
 export async function downscaleDataUrl(
   dataUrl: string,
-  maxWidth = 800,
-  quality = 0.75,
+  maxWidth = CAPTURE_MAX_WIDTH,
+  quality = CAPTURE_QUALITY,
   blur = false,
 ): Promise<string> {
   const img = new Image();
@@ -96,7 +129,14 @@ export async function captureActiveTab(
         format: "jpeg",
         quality: 85,
       });
-      screenshotDataUrl = await downscaleDataUrl(raw, 800, 0.75, captureMode === "blurred");
+      // M19A: keep the upload above the server's analysis floor so OCR-box
+      // masking can actually run. Anything smaller is refused certification.
+      screenshotDataUrl = await downscaleDataUrl(
+        raw,
+        CAPTURE_MAX_WIDTH,
+        CAPTURE_QUALITY,
+        captureMode === "blurred",
+      );
     }
   } catch {
     // Screenshot can fail on protected pages; DOM extract alone still makes
