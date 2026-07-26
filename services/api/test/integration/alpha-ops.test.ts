@@ -13,6 +13,7 @@ import { loadEnv } from "../../src/env.js";
 import { runPreflight } from "../../src/ops/preflight.js";
 import { runAlphaReport } from "../../src/ops/report.js";
 import { createUser, type TestUser } from "./helpers.js";
+import { MIN_ANALYSIS_HEIGHT, MIN_ANALYSIS_WIDTH } from "@nova/context-engine/visual-redaction";
 
 /**
  * M13: production preflight, the alpha usage report, and the cost/guardrail
@@ -128,7 +129,7 @@ describe.skipIf(!databaseUrl)("M13: preflight / report / status guardrails", () 
     it("aggregates events, friction, usage, feedback — counts and excerpts only", async () => {
       // Seed one capture WITH media (usage + storage numbers), one failed
       // capture event, and one feedback item.
-      const img = new Jimp({ width: 64, height: 32, color: 0xffffffff });
+      const img = new Jimp({ width: MIN_ANALYSIS_WIDTH, height: MIN_ANALYSIS_HEIGHT, color: 0xffffffff });
       const png = `data:image/png;base64,${(await img.getBuffer(JimpMime.png)).toString("base64")}`;
       const captured = await user.inject({
         method: "POST",

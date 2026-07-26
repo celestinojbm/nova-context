@@ -86,17 +86,27 @@ export type CreateContextMomentRequest = z.input<
 >;
 
 /** M7 visual-redaction report stored with each moment. States:
- * 'applied' (masked), 'none' (no image), 'skipped' (redaction off),
- * 'failed' (OCR failed, image kept per non-strict setting),
- * 'blocked_strict' (OCR failed, image dropped), 'storage_disabled'
- * (server-side screenshot kill switch stripped the image). Tally counts
- * by type only — never values. */
+ * 'applied' (OCR ran at a certified analysis resolution and every detected
+ * sensitive box was masked into the artifact that gets persisted — this is
+ * the ONLY state that asserts a redaction guarantee), 'none' (no image),
+ * 'skipped' (redaction off), 'failed' (OCR failed, image kept per non-strict
+ * setting), 'coverage_insufficient' (M19A: OCR could not be trusted for this
+ * artifact — see below), 'blocked_strict' (unsafe outcome, image dropped),
+ * 'storage_disabled' (server-side screenshot kill switch stripped the image).
+ * Tally counts by type only — never values. */
 export const imageRedactionReportSchema = z.object({
   state: z.enum([
     "applied",
     "none",
     "skipped",
     "failed",
+    // M19A (Hermes D-10): the analyzed artifact was below the resolution floor
+    // at which OCR-box masking is credible, so "no sensitive boxes found" is
+    // indistinguishable from "nothing could be read". Claiming 'applied' here
+    // would be a FALSE redaction guarantee — an image whose text is plainly
+    // legible to a human can yield zero OCR boxes after a client-side
+    // downscale. This state means: NOT certified, treat the pixels as unsafe.
+    "coverage_insufficient",
     "blocked_strict",
     "storage_disabled",
     // M8: the media pipeline is unavailable (no encryption key/store) —
@@ -113,15 +123,18 @@ export type ImageRedactionReport = z.infer<typeof imageRedactionReportSchema>;
  * states are safe to STORE, READ back, or EXPORT as pixels.
  *
  * Safe:
- *   - 'applied'  — visual redaction provably ran and masked the image.
+ *   - 'applied'  — visual redaction provably ran AT A CERTIFIED ANALYSIS
+ *                  RESOLUTION (M19A) and masked the artifact that was stored.
  *   - 'none'     — the image genuinely carried no maskable visual content
  *                  (in practice a media row never gets 'none' — no image is
  *                  extracted for it — but reads/exports accept it as a
  *                  no-op-safe value for parity with the adapter gate).
  *
  * Every other state is UNSAFE and pixels must never leave storage:
- *   'failed' (OCR failed), 'skipped' (redaction disabled), 'blocked_strict',
- *   'storage_disabled', 'media_unavailable', unknown, or null.
+ *   'failed' (OCR failed), 'coverage_insufficient' (M19A — OCR not credible
+ *   at the analyzed resolution), 'skipped' (redaction disabled),
+ *   'blocked_strict', 'storage_disabled', 'media_unavailable', unknown, or
+ *   null.
  *
  * This is enforced in three independent places (defence in depth):
  *   1. MediaService.storeMomentImages — refuses to persist a non-safe blob;

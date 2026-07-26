@@ -12,6 +12,7 @@ import { migrate } from "../../src/db/migrate.js";
 import { loadEnv } from "../../src/env.js";
 import type { NotionOAuthClient } from "../../src/integrations/notion-oauth.js";
 import { createUser, type TestUser } from "./helpers.js";
+import { MIN_ANALYSIS_HEIGHT, MIN_ANALYSIS_WIDTH } from "@nova/context-engine/visual-redaction";
 
 /**
  * M10 suite (API side): Notion media CONSENT. The preview exposes per-media
@@ -57,7 +58,7 @@ describe.skipIf(!databaseUrl || !redisUrl)("M10: Notion media consent (API)", ()
     redactionState: string;
   }> {
     ocr.mode = mode;
-    const img = new Jimp({ width: 400, height: 120, color: 0xffffffff });
+    const img = new Jimp({ width: MIN_ANALYSIS_WIDTH, height: MIN_ANALYSIS_HEIGHT, color: 0xffffffff });
     const png = `data:image/png;base64,${(await img.getBuffer(JimpMime.png)).toString("base64")}`;
     const res = await user.inject({
       method: "POST",
@@ -219,7 +220,7 @@ describe.skipIf(!databaseUrl || !redisUrl)("M10: Notion media consent (API)", ()
     const other = await createUser(app, `consent-b-${Date.now()}@test.local`);
     const otherCapture = await (async () => {
       ocr.mode = "clean";
-      const img = new Jimp({ width: 400, height: 120, color: 0xffffffff });
+      const img = new Jimp({ width: MIN_ANALYSIS_WIDTH, height: MIN_ANALYSIS_HEIGHT, color: 0xffffffff });
       const png = `data:image/png;base64,${(await img.getBuffer(JimpMime.png)).toString("base64")}`;
       const res = await other.inject({
         method: "POST",

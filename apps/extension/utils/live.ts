@@ -1,7 +1,13 @@
 import { framesAllowed, LiveBuffer, type CaptureMode } from "@nova/context-engine";
 import { LIVE_LIMITS, type LiveAnswerResponse, type LiveQaExchange } from "@nova/schema";
 import type { CreateContextMomentRequest } from "@nova/schema";
-import { extractPageContext, downscaleDataUrl, type PageContext } from "./capture.js";
+import {
+  extractPageContext,
+  downscaleDataUrl,
+  LIVE_FRAME_MAX_WIDTH,
+  LIVE_FRAME_QUALITY,
+  type PageContext,
+} from "./capture.js";
 import { authFetch, type ExtensionSettings } from "./api.js";
 
 /**
@@ -104,7 +110,17 @@ export class LiveSession {
         format: "jpeg",
         quality: 60,
       });
-      const small = await downscaleDataUrl(raw, 640, 0.6, this.captureMode === "blurred");
+      // M19A (D-10): frames must also clear the server's analysis floor. A
+      // frame the server cannot certify is DROPPED before reaching the model
+      // (redactFrames), so a 640px frame would silently remove all visual
+      // context from live Q&A. LIVE_FRAME_MAX_WIDTH keeps frames scannable;
+      // the buffer's own byte budget still bounds memory.
+      const small = await downscaleDataUrl(
+        raw,
+        LIVE_FRAME_MAX_WIDTH,
+        LIVE_FRAME_QUALITY,
+        this.captureMode === "blurred",
+      );
       this.buffer.addFrame(small, Date.now());
       this.lastError = null;
     } catch {

@@ -186,6 +186,107 @@ belt-and-braces for high-risk screens. The real-OCR path is proven by a
 gated e2e test (`NOVA_OCR_E2E=1`) that renders sensitive text, masks it,
 and re-OCRs to confirm removal; CI uses deterministic fake engines.
 
+## Visual Redaction Integrity (M19A — implemented)
+
+M7 produced a report on every image. It did not check whether OCR had
+anything readable to work with. That gap (audit finding **D-10**) is closed
+here.
+
+**The defect.** The extension downscaled captures to 800px wide before
+upload. At that size a 14px line of body text becomes roughly 5.8px and
+Tesseract reads nothing. Zero words ⇒ zero sensitive boxes ⇒ zero masks ⇒
+the image was stored, unmasked, as `redaction_state: 'applied'`. The
+secrets stayed legible to a human; the record said they had been removed.
+Reproduced against real Tesseract on this repo: of six sampled
+resolution/font combinations, five went from 1–5 detected boxes at native
+resolution to **zero boxes and `applied`** after the downscale.
+
+**The invariant.** `applied` now means: OCR ran at a resolution where its
+output is meaningful, and every sensitive box it produced was masked. An
+image that cannot meet that bar is never reported as `applied`, in any mode.
+
+**Analysis-resolution floor.** `MIN_ANALYSIS_WIDTH` × `MIN_ANALYSIS_HEIGHT`
+(1280×600), enforced server-side in `@nova/context-engine/visual-redaction`.
+Width is the load-bearing check — the defect is a width-driven downscale, and
+height follows by aspect ratio. The height minimum only rejects degenerate
+slivers; it is deliberately below 720 so that ordinary full-fidelity viewports
+(a 1366×768 laptop's browser viewport is roughly 1366×625) are not silently
+stripped of every screenshot for no safety gain.
+Below it, `redactImageDataUrl` returns `coverage: 'insufficient_resolution'`
+**without calling OCR at all** — a result we would not trust is not worth
+producing, and not producing it removes any temptation to count it. The
+floor lives on the server precisely so no client, old or hostile, can
+bypass it by claiming to have redacted something.
+
+**Pipeline order (M19A refinement).** decode → coverage check → OCR →
+classify → mask into the decoded bitmap → re-encode. Decoding moved to the
+front: dimensions must be known before OCR is worth running.
+
+**States.** `image_redaction.state` gains one value:
+
+| State | Meaning | Safe to store/read/export? |
+|---|---|---|
+| `applied` | OCR ran above the floor; all detected sensitive boxes masked | Yes |
+| `none` | No image in the payload | Yes |
+| `coverage_insufficient` | **M19A** — the artifact was below the analysis floor, so no redaction guarantee exists | **No** |
+| `failed` | OCR itself errored | No |
+| `blocked_strict` | Unsafe outcome in strict mode; image dropped | No |
+| `skipped` / `storage_disabled` / `media_unavailable` | Redaction off / kill switch / no media pipeline | No |
+
+`isSafeMediaRedactionState` is unchanged: `applied` and `none` only.
+`coverage_insufficient` therefore fails closed everywhere it matters — no
+`moment_media` row is written, no blob reaches object storage, direct media
+reads 404, exports withhold the pixels with
+`excluded_reason: 'redaction_not_applied'`, and the adapter gate refuses it.
+
+**Strict vs non-strict.** `strict_image_redaction` defaults to **true** in
+the request schema and is forced on in production, so the default outcome
+for an uncertifiable capture is `blocked_strict` — the image is dropped
+before the media pipeline. `coverage_insufficient` is only reachable when a
+client explicitly opts out of strict mode; the image is still never stored,
+but the moment records honestly *why* the guarantee is missing. `failed`
+outranks `coverage_insufficient` when both occurred (the harder failure).
+
+**Live Q&A.** A frame below the floor is DROPPED, exactly like an OCR
+failure. Sending pixels we could not scan to a cloud model is the same
+privacy defect as storing them.
+
+**Client capture resolution.** Because the floor is a hard gate, the
+extension had to stop destroying its own captures: `CAPTURE_MAX_WIDTH`
+1920 at q0.8 (was 800 at q0.75) and `LIVE_FRAME_MAX_WIDTH` 1280 at q0.6
+(was 640). A 2560×1440 screen uploads at ~79KB base64 — comfortably inside
+the schema's 1.5MB `screenshot_data_url` cap.
+
+**Backward compatibility.** The floor gates *new* analysis. Media already
+stored as `applied` keeps its state and stays readable and exportable, even
+when its recorded dimensions are below today's floor; M19A changes what
+Nova accepts, not what it already promised about data the user has.
+
+**Limitations (still honest).** The floor makes the `applied` claim
+truthful; it does not make OCR complete. Recall above the floor is good but
+not 100% — stylized fonts, rotated text, and non-text sensitive pixels
+remain undetected, so blur/text-only modes are still the right tool for
+high-risk screens. The check also reads pixel *dimensions*, not legibility:
+an artifact downscaled and then upscaled back over the floor would pass it.
+And a genuinely small source (a narrow window, a <1280px-wide display) is
+refused rather than guessed at — the moment is still captured, only its
+pixels are dropped. What M19A guarantees is that when Nova *says* redaction
+was applied, a scan at a credible resolution actually happened.
+
+**Proof.** Real-Tesseract matrix (gated, ~41s):
+
+```
+NOVA_OCR_E2E=1 pnpm --filter @nova/api vitest run \
+  test/integration/m19a-visual-redaction-ocr.test.ts
+```
+
+It sweeps 1366×768 / 1920×1080 / 2560×1440 and font sizes 12–48px, and
+asserts that no downscaled artifact reaches `applied` at any combination
+while native-resolution captures still detect and mask. Deterministic
+suites (`visual-redaction-coverage.test.ts`, `image-redaction-coverage.test.ts`,
+`m19a-redaction-persistence.test.ts`) cover the gate, the state resolution,
+and end-to-end persistence without needing OCR.
+
 ## Auth hardening (M7)
 
 - `POST /v1/auth/password` (web sessions only, rate-limited): verifies the
@@ -294,6 +395,11 @@ downstream ever sees unmasked pixels. M7's fail-safes carry over intact:
 strict-mode redaction failure blocks the image (`blocked_strict`),
 `NOVA_SCREENSHOT_STORAGE=off` strips it (`storage_disabled`), and live
 frames that fail redaction are dropped, all before the storage step.
+M19A adds one step at the front of the visual stage — decode and check the
+analysis-resolution floor before OCR — and one more way to fail closed:
+an image below the floor is `coverage_insufficient`, which
+`isSafeMediaRedactionState` rejects, so no row and no blob are ever written
+for it.
 
 **Object storage abstraction.** A three-method `ObjectStore` interface
 (`put`/`get`/`delete`) with two implementations: `FsObjectStore` (default,
