@@ -1,5 +1,6 @@
 import type { OcrEngine, OcrWord } from "@nova/context-engine/visual-redaction";
 import { execFile } from "node:child_process";
+import { s3Disponible } from "./s3-readiness.js";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,13 +35,7 @@ const S3_KEY = process.env.NOVA_TEST_S3_ACCESS_KEY_ID ?? "nova";
 const S3_SECRET = process.env.NOVA_TEST_S3_SECRET_ACCESS_KEY ?? "nova-minio-secret";
 
 const s3Required = process.env.NOVA_TEST_S3_REQUIRED === "yes";
-const s3Available = await (async () => {
-  try {
-    return (await fetch(`${S3_ENDPOINT}/minio/health/live`, { signal: AbortSignal.timeout(2000) })).ok;
-  } catch {
-    return false;
-  }
-})();
+const s3Available = await s3Disponible(S3_ENDPOINT, S3_KEY, S3_SECRET);
 if (s3Required && (!databaseUrl || !s3Available)) {
   describe("M18A.3 §6: real recovery e2e (REQUIRED)", () => {
     it("Postgres + MinIO must be available when NOVA_TEST_S3_REQUIRED=yes", () => {

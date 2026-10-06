@@ -84,6 +84,23 @@ jobs:
       # Exit: PASS/CONDITIONAL_PASS → 0; FAIL → 1; BLOCKED → 1 (a gate that
       # could not run must not let a PR merge).
       - run: pnpm validate:pr
+      # Evidencia EXPLÍCITA del drill de integración S3: no basta con que el gate pase.
+      # Si el servicio S3 no funciona, o si el drill se omite, este paso FALLA.
+      - name: Evidencia del drill de integración S3 (no puede omitirse)
+        run: |
+          set -o pipefail
+          pnpm --filter @nova/api exec vitest run             test/integration/m18-media-recovery-s3.test.ts             test/integration/m18a2-sealed-backup-s3.test.ts             test/integration/m18a3-recovery-e2e.test.ts             --reporter=verbose 2>&1 | tee "$RUNNER_TEMP/drill.log"
+          echo "--- resumen del drill ---"
+          grep -E "Test Files|Tests " "$RUNNER_TEMP/drill.log" | tail -4
+          echo "--- ficheros de drill cargados: $(grep -c '\.test\.ts' "$RUNNER_TEMP/drill.log") referencias ---"
+          if grep -q "skipped" "$RUNNER_TEMP/drill.log"; then
+            echo "::error::el drill de integración S3 se OMITIÓ: no puede quedar verde"; exit 1
+          fi
+          if ! grep -q "m18" "$RUNNER_TEMP/drill.log"; then
+            echo "::error::no consta la ejecución del drill S3"; exit 1
+          fi
+          echo "--- peticiones servidas por el servicio S3 (evidencia de operaciones reales) ---"
+          docker logs s3 2>&1 | tail -15
       # Reports (JSON + Markdown + JUnit; sanitized, no secrets/content) are
       # uploaded even when the gate fails, so the failing checks are visible.
       - uses: actions/upload-artifact@v4
