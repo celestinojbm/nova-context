@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { s3Disponible } from "./s3-readiness.js";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -30,13 +31,7 @@ const S3_SECRET = process.env.NOVA_TEST_S3_SECRET_ACCESS_KEY ?? "nova-minio-secr
 const repoRoot = join(import.meta.dirname, "..", "..", "..", "..");
 
 const s3Required = process.env.NOVA_TEST_S3_REQUIRED === "yes";
-const s3Available = await (async () => {
-  try {
-    return (await fetch(`${S3_ENDPOINT}/minio/health/live`, { signal: AbortSignal.timeout(2000) })).ok;
-  } catch {
-    return false;
-  }
-})();
+const s3Available = await s3Disponible(S3_ENDPOINT, S3_KEY, S3_SECRET);
 
 if (s3Required && !s3Available) {
   describe("M18A.2 §3: sealed backup publish/fetch (REQUIRED)", () => {
