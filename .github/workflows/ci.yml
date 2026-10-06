@@ -50,20 +50,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # M18A / M18A.1 finding 5: MinIO for the S3 media backup/recovery drill.
-      # The step MUST fail if MinIO does not become healthy — the drill is
-      # mandatory in CI, so a broken MinIO can never let the suite silently
+      # The step MUST fail if the S3 endpoint does not become healthy — the drill is
+      # mandatory in CI, so a broken S3 can never let the suite silently
       # skip.
-      - name: Start MinIO (local S3 for the media recovery drill)
+      - name: Start S3 (local, for the media recovery drill)
         run: |
-          docker run -d --name minio -p 9000:9000 \
-            -e MINIO_ROOT_USER=nova -e MINIO_ROOT_PASSWORD=nova-minio-secret \
-            minio/minio server /data
+          # CAUSA: `minio/minio` dejó de ser descargable sin autenticación
+          #   docker: pull access denied for minio/minio ... denied
+          #   -> este paso fallaba y OMITÍA pnpm install y pnpm validate:pr.
+          # ARREGLO: SeaweedFS (Apache-2.0, API S3 compatible) en el MISMO endpoint,
+          #   puerto y credenciales, para que el drill siga ejecutándose de verdad.
+          docker run -d --name s3 -p 9000:8333 \
+            -e AWS_ACCESS_KEY_ID=nova -e AWS_SECRET_ACCESS_KEY=nova-minio-secret \
+            chrislusf/seaweedfs:latest server -dir=/data -s3 -s3.port=8333
           for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:9000/minio/health/live; then ready=1; break; fi
+            if curl -s -o /dev/null --max-time 3 http://127.0.0.1:9000/; then ready=1; break; fi
             sleep 2
           done
-          # Final REQUIRED health gate — fail the job if MinIO never came up.
-          curl --fail --silent --show-error http://127.0.0.1:9000/minio/health/live
+          # Final REQUIRED health gate — fail the job if the S3 endpoint never came up.
+          # (sin autenticar, el endpoint responde 403: prueba que está vivo y que exige credenciales)
+          curl --silent --show-error --max-time 5 -o /dev/null -w 'S3 endpoint HTTP %{http_code}\n' http://127.0.0.1:9000/
+          timeout 5 bash -c '</dev/tcp/127.0.0.1/9000'
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
