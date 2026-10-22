@@ -20,8 +20,19 @@ export const memorySearchRequestSchema = z
     // M8: filter by media presence and/or the visual-redaction outcome the
     // media was stored under.
     has_media: z.boolean().optional(),
+    // M19A: 'coverage_insufficient' is filterable too — an operator auditing
+    // which captures lost their redaction guarantee needs to be able to ask.
     image_redaction_state: z
-      .enum(["applied", "failed", "skipped", "blocked_strict", "storage_disabled", "media_unavailable", "none"])
+      .enum([
+        "applied",
+        "failed",
+        "coverage_insufficient",
+        "skipped",
+        "blocked_strict",
+        "storage_disabled",
+        "media_unavailable",
+        "none",
+      ])
       .optional(),
     limit: z.number().int().min(1).max(50).default(20),
     // M9: include per-item ranking diagnostics (raw leg scores). The user's

@@ -17,6 +17,7 @@ import { buildApp } from "../../src/app.js";
 import { migrate } from "../../src/db/migrate.js";
 import { loadEnv } from "../../src/env.js";
 import { createUser, type TestUser } from "./helpers.js";
+import { MIN_ANALYSIS_HEIGHT, MIN_ANALYSIS_WIDTH } from "@nova/context-engine/visual-redaction";
 
 /**
  * M12: the browser-shell spike is a SECOND CLIENT of the existing API — its
@@ -46,7 +47,15 @@ class FakeOcr implements OcrEngine {
   }
 }
 
-async function whitePng(w = 400, h = 120): Promise<string> {
+/** M19A: fixtures must clear the analysis-resolution floor, or visual
+ * redaction refuses to certify them and the pipeline correctly drops the
+ * image — which is what these suites' assertions would then be measuring
+ * instead of what they are about. The floor itself is covered by the M19A
+ * suites. */
+async function whitePng(
+  w = MIN_ANALYSIS_WIDTH,
+  h = MIN_ANALYSIS_HEIGHT,
+): Promise<string> {
   const img = new Jimp({ width: w, height: h, color: 0xffffffff });
   return `data:image/png;base64,${(await img.getBuffer(JimpMime.png)).toString("base64")}`;
 }

@@ -8,6 +8,7 @@ import { join } from "node:path";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate } from "../../src/db/migrate.js";
+import { MIN_ANALYSIS_HEIGHT, MIN_ANALYSIS_WIDTH } from "@nova/context-engine/visual-redaction";
 
 /**
  * M8 legacy-media backfill behavior. Runs the real operator command
@@ -56,7 +57,7 @@ describe.skipIf(!databaseUrl)("M8: legacy media backfill", () => {
     db = new pg.Client({ connectionString: databaseUrl });
     await db.connect();
 
-    const img = new Jimp({ width: 320, height: 100, color: 0xffffffff });
+    const img = new Jimp({ width: MIN_ANALYSIS_WIDTH, height: MIN_ANALYSIS_HEIGHT, color: 0xffffffff });
     inlinePng = `data:image/png;base64,${(await img.getBuffer(JimpMime.png)).toString("base64")}`;
 
     const u = await db.query<{ id: string }>(

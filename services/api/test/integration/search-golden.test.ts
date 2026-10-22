@@ -9,6 +9,7 @@ import { buildApp } from "../../src/app.js";
 import { migrate } from "../../src/db/migrate.js";
 import { loadEnv } from "../../src/env.js";
 import { createUser, type TestUser } from "./helpers.js";
+import { MIN_ANALYSIS_HEIGHT, MIN_ANALYSIS_WIDTH } from "@nova/context-engine/visual-redaction";
 
 /**
  * M8 search-quality pass: a small golden fixture set with expected top
@@ -59,7 +60,7 @@ describe.skipIf(!databaseUrl)("M8: golden search fixtures", () => {
     let screenshot: string | null = null;
     if (opts.ocrTexts) {
       ocr.words = ocrWords(opts.ocrTexts);
-      const img = new Jimp({ width: 500, height: 120, color: 0xffffffff });
+      const img = new Jimp({ width: MIN_ANALYSIS_WIDTH, height: MIN_ANALYSIS_HEIGHT, color: 0xffffffff });
       screenshot = `data:image/png;base64,${(await img.getBuffer(JimpMime.png)).toString("base64")}`;
     }
     const res = await user.inject({

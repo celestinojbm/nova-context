@@ -14,6 +14,7 @@ import { loadEnv } from "../../src/env.js";
 import { runMediaCleanup } from "../../src/media/cleanup.js";
 import { FsObjectStore } from "../../src/media/object-store.js";
 import { createUser, type TestUser } from "./helpers.js";
+import { MIN_ANALYSIS_HEIGHT, MIN_ANALYSIS_WIDTH } from "@nova/context-engine/visual-redaction";
 
 /**
  * M10 suite: account data lifecycle. Full export (everything, no secrets),
@@ -49,7 +50,7 @@ describe.skipIf(!databaseUrl)("M10: account data lifecycle", () => {
   let store: FlakyStore;
 
   async function seedAccount(user: TestUser): Promise<{ momentId: string; storageKey: string }> {
-    const img = new Jimp({ width: 400, height: 120, color: 0xffffffff });
+    const img = new Jimp({ width: MIN_ANALYSIS_WIDTH, height: MIN_ANALYSIS_HEIGHT, color: 0xffffffff });
     const png = `data:image/png;base64,${(await img.getBuffer(JimpMime.png)).toString("base64")}`;
     const capture = await user.inject({
       method: "POST",

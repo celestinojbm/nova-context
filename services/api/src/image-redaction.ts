@@ -71,6 +71,11 @@ export async function redactPayloadImages<T>(
   // Collect image locations first so failures can strip them all at once.
   let seen = 0;
   let failed = false;
+  // M19A (D-10): at least one image could not be CERTIFIED — OCR was not
+  // credible at the analyzed resolution, so its zero/partial box result
+  // proves nothing. Tracked separately from `failed` so the state stays
+  // honest about WHY the guarantee is missing.
+  let uncertified = false;
   const walk = async (v: unknown): Promise<unknown> => {
     if (isImageDataUrl(v)) {
       seen += 1;
@@ -81,6 +86,12 @@ export async function redactPayloadImages<T>(
       if (!opts.ocr) return v;
       try {
         const result = await redactImageDataUrl(opts.ocr, v);
+        if (result.coverage !== "certified") {
+          // Never merge counts from an uncertified analysis into the report,
+          // and never index its OCR text — both would imply a scan happened.
+          uncertified = true;
+          return v;
+        }
         report.masked += result.masked;
         for (const [type, n] of Object.entries(result.tally)) {
           report.tally[type] = (report.tally[type] ?? 0) + n;
@@ -114,12 +125,17 @@ export async function redactPayloadImages<T>(
     report.state = "skipped";
     return { payload: next, report, ocrText };
   }
-  if (failed) {
+  // M19A: both failure classes are UNSAFE and both fail closed under strict
+  // mode. They differ only in the honest reason reported in non-strict mode:
+  //   failed                -> OCR itself errored / the image was never scanned
+  //   coverage_insufficient -> OCR could not be trusted at that resolution
+  // `failed` wins when both occurred (the harder failure).
+  if (failed || uncertified) {
     if (opts.strict) {
       next = stripImages(next).value;
       report.state = "blocked_strict";
     } else {
-      report.state = "failed";
+      report.state = failed ? "failed" : "coverage_insufficient";
     }
     return { payload: next, report, ocrText };
   }
@@ -157,7 +173,12 @@ export function extractPayloadImages<T>(payload: T): {
 }
 
 /** Live Q&A frames: mask each; a frame that cannot be redacted is dropped —
- * unredacted pixels never reach the model. */
+ * unredacted pixels never reach the model.
+ *
+ * M19A (D-10): "cannot be redacted" now includes "could not be CERTIFIED".
+ * A frame below the analysis floor is dropped exactly like an OCR failure:
+ * sending pixels we were unable to scan to a cloud model is the same privacy
+ * defect as storing them, so this path is always fail-closed. */
 export async function redactFrames(
   frames: string[],
   ocr: OcrEngine | null,
@@ -169,6 +190,10 @@ export async function redactFrames(
   for (const frame of frames) {
     try {
       const result = await redactImageDataUrl(ocr, frame);
+      if (result.coverage !== "certified") {
+        dropped += 1;
+        continue;
+      }
       masked += result.masked;
       out.push(result.dataUrl);
     } catch (err) {

@@ -167,6 +167,20 @@ export function parseDataUrl(dataUrl: string): { mime: string; buffer: Buffer } 
   return { mime: match[1]!.toLowerCase(), buffer: Buffer.from(match[2]!, "base64") };
 }
 
+/**
+ * M19A (Hermes D-10). Whether the analyzed artifact was large enough for
+ * OCR-box masking to mean anything.
+ *
+ *   'certified'               — analysis ran at/above the resolution floor;
+ *                               a zero-box result is a real "nothing
+ *                               sensitive was found", not "nothing could be
+ *                               read". Only this value may lead to 'applied'.
+ *   'insufficient_resolution' — the artifact was below the floor. OCR output
+ *                               (including an empty one) proves nothing here,
+ *                               so the caller MUST fail closed.
+ */
+export type RedactionCoverage = "certified" | "insufficient_resolution";
+
 export interface RedactImageResult {
   dataUrl: string;
   masked: number;
@@ -174,20 +188,100 @@ export interface RedactImageResult {
   /** M8: OCR text with every sensitive word REMOVED (never redact-marked —
    * plain omission), for search indexing. Empty when OCR found nothing. */
   safeText: string;
+  /** M19A: does this result carry a redaction guarantee at all? */
+  coverage: RedactionCoverage;
+  /** Analyzed pixel dimensions — counts only, never content. */
+  width: number;
+  height: number;
 }
 
 const BOX_PADDING = 3;
 
 /**
+ * M19A analysis-resolution floor.
+ *
+ * WHY A FLOOR AT ALL: OCR-box masking can only mask what OCR can read. The
+ * capture client historically downscaled a 1920x1080 viewport to 800px wide
+ * before upload; 14px body text became ~5.8px and Tesseract returned ZERO
+ * words. Zero words means zero boxes, and the pipeline then reported the
+ * unmasked image as 'applied' — a redaction guarantee over an image whose
+ * secrets a human can still read (Hermes D-10, reproduced at 1366/1920/2560).
+ *
+ * WHY THESE NUMBERS: measured against real Tesseract with synthetic screens.
+ * At 800x450 the sensitive-box count collapsed to 0 in 5 of 6 sampled
+ * resolution/font combinations while the same screens at 1366x768, 1920x1080
+ * and 2560x1440 detected every planted secret. 1280 is the conservative width
+ * floor just below the smallest verified-good width.
+ *
+ * WHY WIDTH IS THE LOAD-BEARING CHECK: the defect is a WIDTH-driven downscale
+ * — the client scaled to `maxWidth` and height followed by aspect ratio, so
+ * width is the axis that determines the surviving glyph height. The height
+ * minimum only rejects degenerate slivers (a "screenshot" that is not a
+ * screen). It is deliberately NOT 720: a very common 1366x768 laptop has a
+ * browser VIEWPORT of roughly 1366x625 after browser chrome, and a 720 floor
+ * would silently drop every screenshot from that whole class of machine while
+ * protecting against nothing — those captures are full-fidelity, never
+ * downscaled. Failing closed is right; failing closed on healthy input is not.
+ *
+ * WHAT THIS IS NOT: not a recall guarantee. Above the floor OCR still misses
+ * unusual fonts, low contrast, non-English text, and rendered-in-canvas text
+ * (see docs/SECURITY_PRIVACY_GOVERNANCE.md). Nor is it a defence against an
+ * artifact that was downscaled and then UPSCALED back over the floor — the
+ * check reads pixel dimensions, not legibility. The floor removes a specific,
+ * reproducible FALSE guarantee; it does not promise every secret is found.
+ */
+export const MIN_ANALYSIS_WIDTH = 1280;
+export const MIN_ANALYSIS_HEIGHT = 600;
+
+export function meetsAnalysisFloor(width: number, height: number): boolean {
+  return width >= MIN_ANALYSIS_WIDTH && height >= MIN_ANALYSIS_HEIGHT;
+}
+
+/**
  * OCR the image, mask every sensitive word box, return the re-encoded image.
  * Throws ImageRedactionError when the image can't be decoded or OCR fails —
  * the caller decides the fail-safe (strict mode drops the image entirely).
+ *
+ * M19A ORDER (Hermes D-10): the image is DECODED FIRST so its true pixel
+ * dimensions gate everything that follows. Below the analysis floor the
+ * function returns `coverage: 'insufficient_resolution'` and does NOT run
+ * OCR at all — an empty OCR result from an unreadable artifact must never be
+ * mistaken for "nothing sensitive here". Masks are always painted into the
+ * SAME decoded bitmap that is re-encoded and returned, so the artifact the
+ * caller persists is the artifact that was analyzed.
  */
 export async function redactImageDataUrl(
   engine: OcrEngine,
   dataUrl: string,
 ): Promise<RedactImageResult> {
   const { mime, buffer } = parseDataUrl(dataUrl);
+
+  // 1. Decode first — dimensions decide whether any guarantee is possible.
+  let image: Awaited<ReturnType<typeof Jimp.fromBuffer>>;
+  try {
+    image = await Jimp.fromBuffer(buffer);
+  } catch (err) {
+    throw new ImageRedactionError(`image decode failed: ${(err as Error).message.slice(0, 120)}`);
+  }
+  const w = image.bitmap.width;
+  const h = image.bitmap.height;
+
+  // 2. Resolution floor. Fail closed WITHOUT running OCR: at this size an
+  //    empty result is uninformative, so there is nothing to learn and
+  //    nothing we may certify.
+  if (!meetsAnalysisFloor(w, h)) {
+    return {
+      dataUrl,
+      masked: 0,
+      tally: {},
+      safeText: "",
+      coverage: "insufficient_resolution",
+      width: w,
+      height: h,
+    };
+  }
+
+  // 3. OCR the certified-resolution artifact.
   let ocr: OcrResult;
   try {
     ocr = await engine.recognize(buffer);
@@ -197,17 +291,11 @@ export async function redactImageDataUrl(
   const { boxes, tally } = classifySensitiveWords(ocr.words);
   const safeText = safeOcrText(ocr.words, boxes);
   if (!boxes.length) {
-    return { dataUrl, masked: 0, tally: {}, safeText };
+    // Certified resolution + successful OCR + no sensitive ranges = the image
+    // genuinely carries nothing to mask. Safe to return as-is.
+    return { dataUrl, masked: 0, tally: {}, safeText, coverage: "certified", width: w, height: h };
   }
 
-  let image: Awaited<ReturnType<typeof Jimp.fromBuffer>>;
-  try {
-    image = await Jimp.fromBuffer(buffer);
-  } catch (err) {
-    throw new ImageRedactionError(`image decode failed: ${(err as Error).message.slice(0, 120)}`);
-  }
-  const w = image.bitmap.width;
-  const h = image.bitmap.height;
   for (const box of boxes) {
     const x = Math.max(0, Math.floor(box.x0) - BOX_PADDING);
     const y = Math.max(0, Math.floor(box.y0) - BOX_PADDING);
@@ -229,6 +317,9 @@ export async function redactImageDataUrl(
     masked: boxes.length,
     tally,
     safeText,
+    coverage: "certified",
+    width: w,
+    height: h,
   };
 }
 

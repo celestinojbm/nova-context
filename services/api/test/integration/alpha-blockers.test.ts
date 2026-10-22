@@ -13,6 +13,7 @@ import { migrate } from "../../src/db/migrate.js";
 import { loadEnv } from "../../src/env.js";
 import { storeFromEnv } from "../../src/media/object-store.js";
 import { createUser, type TestUser } from "./helpers.js";
+import { MIN_ANALYSIS_HEIGHT, MIN_ANALYSIS_WIDTH } from "@nova/context-engine/visual-redaction";
 
 /**
  * M15 — Hermes P1 alpha-blocker regressions: visual media is fail-safe.
@@ -34,7 +35,7 @@ class SwitchOcr implements OcrEngine {
 }
 
 async function png(): Promise<string> {
-  const img = new Jimp({ width: 400, height: 120, color: 0xffffffff });
+  const img = new Jimp({ width: MIN_ANALYSIS_WIDTH, height: MIN_ANALYSIS_HEIGHT, color: 0xffffffff });
   return `data:image/png;base64,${(await img.getBuffer(JimpMime.png)).toString("base64")}`;
 }
 
