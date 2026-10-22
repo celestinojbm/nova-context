@@ -1,0 +1,207 @@
+@import "tailwindcss";
+
+/*
+ * Guía final: monocromo de retícula. Fondo oscuro por defecto.
+ * Sin color de acento. Jerarquía por brillo.
+ */
+:root {
+  color-scheme: dark;
+  --background: #000000;
+  --foreground: #ededed;
+  --card: #0a0a0a;
+  --card-foreground: #ededed;
+  --muted: #0a0a0a;
+  --muted-foreground: #a1a1a1;
+  --dim: #8f8f8f;
+  --border: rgba(255, 255, 255, 0.1);
+  --input: rgba(255, 255, 255, 0.1);
+  --ring: #ededed;
+  --primary: #ededed;
+  --primary-foreground: #000000;
+  --destructive: #ffffff;
+  --destructive-foreground: #000000;
+  --radius: 0.375rem;
+  --font-sans: var(--font-geist), "Geist", sans-serif;
+  --font-mono: var(--font-geist-mono), "Geist Mono", ui-monospace, monospace;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-dim: var(--dim);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --font-sans: var(--font-geist), "Geist", sans-serif;
+  --font-mono: var(--font-geist-mono), "Geist Mono", ui-monospace, monospace;
+}
+
+body {
+  background: #000000;
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+/* Figuras anatomy en la misma tinta. El kit ya es gris; aquí solo se
+   alinean el papel y los acentos cromáticos a la paleta, sin índigo. */
+.iso {
+  --anatomy-page: #000000;
+  --anatomy-card: #0a0a0a;
+  --anatomy-text: #a1a1a1;
+  --anatomy-strong: #ededed;
+  --anatomy-muted: #8f8f8f;
+  --anatomy-hi: #ededed;
+  --anatomy-lit: #ffffff;
+  --anatomy-dot: #ededed;
+  --anatomy-red: #ededed;
+  --anatomy-green: #a1a1a1;
+  --anatomy-blue: #8f8f8f;
+  --anatomy-mono: var(--font-geist-mono), ui-monospace, monospace;
+}
+
+.hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100svh - 76px);
+  overflow: hidden;
+}
+
+.hero-top,
+.hero-foot {
+  position: relative;
+  z-index: 3;
+}
+
+.hero-top {
+  padding: 3rem 1.25rem 0;
+  text-align: center;
+}
+
+.hero-stage {
+  position: relative;
+  z-index: 1;
+  height: min(480px, 70vw);
+  margin-top: -4.5rem;
+}
+
+.hero-foot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 0.5rem 1.25rem 4rem;
+  text-align: center;
+  background: linear-gradient(to bottom, transparent, #000 28%);
+}
+
+.hero-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+  background-size: 80px 80px;
+  -webkit-mask-image: radial-gradient(ellipse at 50% 55%, #000 30%, transparent 75%);
+  mask-image: radial-gradient(ellipse at 50% 55%, #000 30%, transparent 75%);
+  pointer-events: none;
+}
+
+.hero-halo {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(640px, 78%);
+  height: 118%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(closest-side, rgba(255, 255, 255, 0.1), transparent);
+  pointer-events: none;
+}
+
+.hero-star {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(480px, 70vw);
+  height: min(480px, 70vw);
+  transform: translate(-50%, -50%);
+  opacity: 0.9;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.hero-grain {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0.04;
+  mix-blend-mode: overlay;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.hero-tag {
+  position: absolute;
+  z-index: 3;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #0a0a0a;
+  color: #a1a1a1;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+
+h1.hero-title {
+  font-weight: 600;
+  letter-spacing: -0.045em;
+  line-height: 1;
+  font-size: clamp(34px, 5vw, 72px);
+  color: #ededed;
+  text-shadow: 0 0 40px #000;
+}
+
+@media (max-width: 720px) {
+  .hero-top {
+    padding-top: 2.75rem;
+  }
+  .hero-stage {
+    height: 250px;
+    margin-top: 0;
+  }
+  .hero-star {
+    width: 250px;
+    height: 250px;
+  }
+  .hero-halo {
+    width: min(320px, 86vw);
+    height: min(320px, 86vw);
+  }
+  .hero-foot {
+    padding-top: 0.25rem;
+    padding-bottom: 2.75rem;
+  }
+  h1.hero-title {
+    font-size: 34px;
+    line-height: 1.02;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .iso-line[data-flow],
+  .iso-dots circle[data-pulse] {
+    animation: none;
+  }
+}
