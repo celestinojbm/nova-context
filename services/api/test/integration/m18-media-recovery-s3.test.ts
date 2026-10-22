@@ -3,6 +3,7 @@ import { decryptBytesWithAny, parseEncryptionKey } from "@nova/context-engine/se
 import type { FastifyInstance } from "fastify";
 import { Jimp, JimpMime } from "jimp";
 import { randomBytes } from "node:crypto";
+import { s3Disponible } from "./s3-readiness.js";
 import { join } from "node:path";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -45,16 +46,7 @@ const S3_KEY = process.env.NOVA_TEST_S3_ACCESS_KEY_ID ?? "nova";
 const S3_SECRET = process.env.NOVA_TEST_S3_SECRET_ACCESS_KEY ?? "nova-minio-secret";
 
 const s3Required = process.env.NOVA_TEST_S3_REQUIRED === "yes";
-const s3Available = await (async () => {
-  try {
-    const res = await fetch(`${S3_ENDPOINT}/minio/health/live`, {
-      signal: AbortSignal.timeout(2000),
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
-})();
+const s3Available = await s3Disponible(S3_ENDPOINT, S3_KEY, S3_SECRET);
 
 // M18A.1 finding 5: when the drill is REQUIRED (CI), an unavailable MinIO
 // must FAIL the suite loudly — never a silent skip. Local dev may still skip
