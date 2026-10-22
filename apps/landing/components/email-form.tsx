@@ -14,7 +14,7 @@ export function EmailForm() {
   const invalid = state.status === "invalid";
 
   return (
-    <form action={action} noValidate className="max-w-md">
+    <form action={action} noValidate className="w-full max-w-md text-left">
       <FieldGroup>
         <Field data-invalid={invalid || undefined}>
           <FieldLabel htmlFor={id}>Correo</FieldLabel>

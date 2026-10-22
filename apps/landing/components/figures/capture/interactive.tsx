@@ -66,7 +66,7 @@ export default function CaptureInteractive() {
   };
 
   return (
-    <div className="iso" data-theme="light">
+    <div className="iso">
       <Plate
         fig="Fig 1"
         title="Banco de captura"

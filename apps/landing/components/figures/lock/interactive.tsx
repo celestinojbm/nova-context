@@ -61,7 +61,7 @@ export default function LockInteractive() {
   };
 
   return (
-    <div className="iso" data-theme="light">
+    <div className="iso">
       <Plate fig="Fig 2" title="Caja de salida" hint="Abre el cajón · mete la llave" readout={REST_LOCK_READOUT} keys={LOCK_KEYS} caption={LOCK_CAPTION}>
         <div
           ref={anchor}
