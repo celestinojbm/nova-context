@@ -1,3 +1,83 @@
+# M19 — Demo para mostrar (plan en borrador)
+
+> Sección añadida para M19. El resto de este documento (horizontes a largo plazo, en inglés) no cambia.
+> Fuentes: [README](../README.md), [HANDOFF.md](../HANDOFF.md), `docs/` y el código en `main` (`553a73a`).
+> Regla: nada de lo que aparece aquí se da por hecho si no está en el código. Lo dudoso está marcado **por verificar**.
+
+## Objetivo
+
+El objetivo de M19 es **una demo para mostrar**: enseñar en 3–5 minutos el bucle central de Nova (capturar lo que hay en pantalla con una instrucción, que quede como Context Moment redactado y buscable, vinculado a un proyecto y convertido en una acción aprobada por el usuario).
+
+No es el lanzamiento ni la alpha real: según `HANDOFF.md` y `docs/ALPHA_RUN.md`, la alpha con datos reales sigue **bloqueada** hasta que el operador lo apruebe. La demo usa una cuenta y contenido **sintéticos**, en local.
+
+## Qué se muestra
+
+1. **Captura explícita** desde la extensión (MV3, panel lateral): pantalla visible + instrucción. Código: [`apps/extension`](../apps/extension).
+2. **Redacción visual honesta** (M7 + M19A): los datos sensibles se tapan antes de guardar, y si la imagen no se puede certificar no se guarda. Código: [`packages/context-engine/src/visual-redaction.ts`](../packages/context-engine/src/visual-redaction.ts), [`services/api/src/image-redaction.ts`](../services/api/src/image-redaction.ts), PR [#18](https://github.com/celestinojbm/nova-context/pull/18).
+3. **Memoria**: línea de tiempo y búsqueda híbrida (texto + vectores) en la web. Código: [`apps/web/app`](../apps/web/app), [`services/api/src/routes-m2.ts`](../services/api/src/routes-m2.ts).
+4. **Proyecto + acción con aprobación**: tarea de Nova y cola de aprobaciones. Código: [`apps/web/app/approvals`](../apps/web/app/approvals), [`apps/web/app/tasks`](../apps/web/app/tasks), [`services/worker`](../services/worker).
+5. **Control del usuario**: registro de auditoría y exportar/borrar. Código: [`apps/web/app/audit`](../apps/web/app/audit), [`apps/web/app/export`](../apps/web/app/export), [`services/api/src/routes-account.ts`](../services/api/src/routes-account.ts).
+
+## Flujo de 3–5 minutos, paso a paso
+
+| # | Tiempo | Paso | Qué se ve |
+|---|---|---|---|
+| 0 | antes | Preparar el entorno local (`pnpm db:up`, `db:migrate`, API, worker, web, extensión cargada y emparejada) con una cuenta sintética. | — |
+| 1 | 0:00–0:30 | Problema en una frase: una captura de pantalla pierde el significado, la intención y el proyecto. | Web vacía o con pocos momentos. |
+| 2 | 0:30–1:30 | En una página de ejemplo con texto sensible falso (email, tarjeta de prueba), abrir la extensión, capturar y dictar o escribir la instrucción ("añade esto como tarea del proyecto X"). | Panel lateral de la extensión. |
+| 3 | 1:30–2:15 | Abrir el momento en la web: imagen con las zonas sensibles tapadas, estado de redacción y proyecto sugerido. | Línea de tiempo + detalle. |
+| 4 | 2:15–3:00 | Buscar una palabra de la captura y encontrar el momento; buscar el dato sensible y **no** encontrarlo. | Búsqueda. |
+| 5 | 3:00–3:45 | Aprobar la acción propuesta y verla como tarea. | Aprobaciones + tareas. |
+| 6 | 3:45–4:30 | Cerrar con confianza: auditoría de lo ocurrido y exportar/borrar. | Auditoría, Ajustes. |
+| (opc.) | +1:00 | Live Context Mode: preguntar sobre una pestaña en directo. Requiere `NOVA_LIVE_QA` y una clave de proveedor; **por verificar**. | Panel lateral. |
+
+## Qué ya funciona y qué falta
+
+### Ya funciona (según código, tests y `HANDOFF.md`)
+
+- Captura por extensión, voz push-to-talk + intención, sugerencia de proyecto, tareas (M0–M1). [`apps/extension`](../apps/extension), [`services/api/src/routes-m1.ts`](../services/api/src/routes-m1.ts).
+- Enriquecimiento asíncrono, búsqueda híbrida, páginas de proyecto, cola de aprobaciones (M2). [`services/worker`](../services/worker), [`services/api/src/routes-m2.ts`](../services/api/src/routes-m2.ts).
+- Redacción visual por OCR (M7), pipeline de medios cifrado (M8), auditoría y exportar/borrar (M4, M10).
+- Auth real y emparejamiento de la extensión (M5).
+- Smoke sintético del sistema completo: `ops:smoke` ([`services/api/src/ops/smoke.ts`](../services/api/src/ops/smoke.ts)).
+- CI verde en `main` tras los PRs [#19](https://github.com/celestinojbm/nova-context/pull/19) y [#20](https://github.com/celestinojbm/nova-context/pull/20).
+
+### Falta o está pendiente
+
+- **M19A (integridad de la redacción visual)**: en `main` una captura reducida a 800 px puede marcarse `applied` sin haberse leído. Está arreglado en el PR [#18](https://github.com/celestinojbm/nova-context/pull/18) (en borrador, sin fusionar). **Sin #18 el paso 3 de la demo no es honesto.**
+- **Guion y datos de demo**: página de ejemplo con datos sensibles falsos, cuenta sintética y semilla de momentos. No existe; hay que crearlo.
+- **Script de arranque de la demo** (un comando que levante todo): no existe; hoy son los pasos manuales del README.
+- **Prueba de la demo de punta a punta en una máquina limpia**: **por verificar**.
+- **Calidad visual de la web en pantalla grande y móvil** para mostrar: **por verificar** (#19 arregló filas en móvil).
+- **Voz**: depende de un proveedor de transcripción configurado; **por verificar** si se muestra o se usa texto.
+- **Notion**: el código existe (M6, M9, M10) pero no se ha probado en vivo con un workspace real (`HANDOFF.md`, "Known weaknesses"). Fuera de la demo salvo decisión contraria.
+- **Live Context Mode**: existe (M3) pero necesita configuración en la nube; opcional y **por verificar**.
+
+## Riesgos
+
+- Mostrar la redacción antes de fusionar #18 enseñaría un estado `applied` que puede ser falso.
+- El OCR no es completo: fuentes estilizadas, texto rotado o pequeño no se detectan (limitaciones documentadas en #18). La página de demo debe usar texto legible.
+- Dependencia de servicios externos (transcripción, LLM, Notion): si fallan en directo, la demo se rompe. Preferir el camino sin nube.
+- La demo corre en local, no hay despliegue real; no se debe presentar como producto en producción.
+- Docker/entorno: `HANDOFF.md` avisa de que a veces hay que arrancar `dockerd` a mano.
+
+## Decisiones abiertas (para Celestino)
+
+1. **Audiencia y formato**: ¿demo en vivo o vídeo grabado? ¿Para quién (inversores, compradores, usuarios)?
+2. **Fecha** objetivo de la demo.
+3. **Alcance**: ¿solo el bucle básico, o también voz, Live Context y/o Notion?
+4. **Superficie**: extensión (recomendado, es la superficie de alpha) o `apps/browser-shell` (spike).
+5. **#18**: ¿se fusiona antes de la demo? (recomendado).
+6. **Entorno**: ¿local en tu máquina o un entorno desplegado? Desplegar implica decisiones de infraestructura y coste que siguen bloqueadas.
+
+## Próximos pasos propuestos (sin empezar)
+
+1. Fusionar #18 tras revisión.
+2. Crear datos y página de demo sintéticos + script de arranque.
+3. Ensayo completo cronometrado y lista de comprobación.
+
+---
+
 # Roadmap
 
 **Why this document.** This roadmap exists to force sequencing discipline: Nova Context's vision spans every platform and a developer ecosystem, and the fastest way to ship none of it is to build toward all of it at once. Each horizon below states goals, deliverables, success metrics with numbers, team assumptions, risks, and — as importantly — explicit non-goals. The scope decisions referenced here are canonical in [MVP_SCOPE.md](./MVP_SCOPE.md); build order detail is in [BUILD_PLAN.md](./BUILD_PLAN.md); the revenue timing this enables is in [BUSINESS_MODEL.md](./BUSINESS_MODEL.md).
