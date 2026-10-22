@@ -44,7 +44,7 @@ export const en: LandingContent = {
     locale: "en",
     title: "Nova Context — A memory of your digital life",
     description:
-      "Human context infrastructure. An API and SDK any assistant can connect to. Fully exportable, fully deletable.",
+      "Human context infrastructure. Encrypted in transit and at rest. During enrichment, plaintext is read only in memory. Full export and deletion.",
   },
   skip: "Skip to content",
   brand: "nova context",
@@ -72,7 +72,7 @@ export const en: LandingContent = {
     eyebrow: "Human context infrastructure",
     lines: ["A memory of your digital life.", "That is yours."],
     lede: "An API/SDK platform any assistant connects to.",
-    promise: "Fully exportable, fully deletable.",
+    promise: "Fully exportable. Deletable, with backups gone within 35 days.",
     tags: ["perceived", "meant", "connects to", "to do"],
   },
   how: {
@@ -106,15 +106,15 @@ export const en: LandingContent = {
     index: "02",
     eyebrow: "Features",
     lines: ["Not a chatbot.", "The layer underneath."],
-    lede: "Memory any assistant can use, and that only you control.",
+    lede: "Memory any assistant can query, with a grant you can revoke.",
     items: [
       {
         title: "Yours by design",
-        body: "Export or delete everything. Context is never monetized.",
+        body: "Full export and deletion. No ads, no sale of your context, and no model training unless you opt in.",
       },
       {
         title: "Explicit capture",
-        body: "Nothing is stored without your gesture. No surveillance.",
+        body: "Saved only when you invoke it, and it is indicated. The on-device buffer is never uploaded whole.",
       },
       {
         title: "Context graph",
@@ -129,8 +129,8 @@ export const en: LandingContent = {
         body: "Return to the exact minute you saw it.",
       },
       {
-        title: "End-to-end encryption",
-        body: "Local keys; the server cannot read your memory.",
+        title: "Encrypted in transit and at rest",
+        body: "TLS 1.3 on the wire, encrypted at rest. Enrichment reads the plaintext in memory, on our server and on a model provider when one is called.",
       },
     ],
   },
@@ -153,13 +153,18 @@ export const en: LandingContent = {
     index: "04",
     eyebrow: "Privacy",
     title: "Is / is not.",
-    lede: "The rules are not a policy: they are in the code.",
+    lede: "The commitments are written into the architecture and the terms.",
     rows: [
       { label: "Nova is", value: "Human context infrastructure" },
       { label: "Nova is not", value: "A chatbot, a notes app, or another assistant" },
-      { label: "Your memory", value: "Fully exportable · fully deletable" },
-      { label: "Capture", value: "Explicit and indicated, never in the background" },
-      { label: "Context", value: "Never sold and never used for ads" },
+      { label: "Your memory", value: "Full export and deletion. Backups expire within 35 days." },
+      { label: "Capture", value: "On invocation and indicated, never in the background" },
+      { label: "Context", value: "Never sold, never used for ads, and not used to train models unless you opt in" },
+      {
+        label: "Encryption",
+        value:
+          "TLS 1.3 in transit and encrypted at rest. During enrichment, plaintext stays in memory only, including at a model provider when one is used.",
+      },
     ],
   },
   pricing: {
@@ -174,7 +179,7 @@ export const en: LandingContent = {
         period: "For individual use",
         cta: "Get started",
         variant: "secondary",
-        items: ["1,000 captures/month", "Full export", "SDK with 1 assistant"],
+        items: ["1,000 captures/month", "Full export", "SDK with 1 assistant", "Encrypted in transit and at rest"],
       },
       {
         name: "Pro",
@@ -187,7 +192,7 @@ export const en: LandingContent = {
           "Unlimited captures",
           "Unlimited assistants",
           "Search by meaning",
-          "Encrypted with your keys",
+          "Encrypted in transit and at rest",
         ],
       },
       {
@@ -196,7 +201,7 @@ export const en: LandingContent = {
         period: "/user/month",
         cta: "Get started",
         variant: "secondary",
-        items: ["Shared projects", "Permissions per person", "Audit log"],
+        items: ["Shared projects", "Permissions per person", "Audit log", "Encrypted in transit and at rest"],
       },
     ],
   },
@@ -217,11 +222,11 @@ export const en: LandingContent = {
       },
       {
         q: "Can I export my memory?",
-        a: "Yes. Full export from the first day, and full deletion. The archive is yours.",
+        a: "Yes. You can export moments, memory, and the audit log. Deletion removes content, embeddings, and links, and backups expire within 35 days.",
       },
       {
         q: "Where is my data stored?",
-        a: "On your device until you capture. What you choose to sync is stored encrypted, and a project can stay local-only. You can export or delete all of it.",
+        a: "The on-device buffer is not uploaded whole. A capture you keep is encrypted in transit and at rest. During enrichment the server processes the plaintext in memory and does not keep it after that step. The same window applies at a model provider when one is used. A project can stay on the device and never reach the cloud.",
       },
       {
         q: "Does it work offline?",

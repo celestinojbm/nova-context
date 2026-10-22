@@ -44,7 +44,7 @@ export const es: LandingContent = {
     locale: "es",
     title: "Nova Context — Una memoria de tu vida digital",
     description:
-      "Infraestructura de contexto humano. Una API y un SDK a los que cualquier asistente se conecta. Exportable por completo, borrable por completo.",
+      "Infraestructura de contexto humano. Cifrado en tránsito y en reposo. Durante el enriquecimiento, el texto en claro se lee solo en memoria. Exportación y borrado completos.",
   },
   skip: "Saltar al contenido",
   brand: "nova context",
@@ -72,7 +72,7 @@ export const es: LandingContent = {
     eyebrow: "Infraestructura de contexto humano",
     lines: ["Una memoria de tu vida digital.", "Que es tuya."],
     lede: "Una plataforma API/SDK a la que cualquier asistente se conecta.",
-    promise: "Exportable por completo, borrable por completo.",
+    promise: "Exportable por completo. Borrable, y las copias desaparecen en 35 días.",
     tags: ["percibido", "significado", "conecta con", "por hacer"],
   },
   how: {
@@ -106,15 +106,15 @@ export const es: LandingContent = {
     index: "02",
     eyebrow: "Funciones",
     lines: ["No es un chatbot.", "Es la capa de debajo."],
-    lede: "Memoria que cualquier asistente puede usar, y que solo tú controlas.",
+    lede: "Memoria que cualquier asistente consulta, con un permiso que puedes revocar.",
     items: [
       {
         title: "Tuya por diseño",
-        body: "Exporta o borra todo. El contexto nunca se monetiza.",
+        body: "Exportación y borrado completos. Sin anuncios, sin venta de tu contexto y sin entrenar modelos salvo que lo permitas.",
       },
       {
         title: "Captura explícita",
-        body: "Nada se guarda sin tu gesto. Sin vigilancia.",
+        body: "Se guarda solo cuando lo invocas, y se indica. La memoria temporal del dispositivo no se sube entera.",
       },
       {
         title: "Grafo de contexto",
@@ -129,8 +129,8 @@ export const es: LandingContent = {
         body: "Vuelve al minuto exacto en que lo viste.",
       },
       {
-        title: "Cifrado de extremo",
-        body: "Claves locales; el servidor no lee tu memoria.",
+        title: "Cifrado en tránsito y en reposo",
+        body: "TLS 1.3 en tránsito y cifrado en reposo. El enriquecimiento lee el texto en claro en memoria, en nuestro servidor y en un proveedor de modelos cuando se usa uno.",
       },
     ],
   },
@@ -153,13 +153,21 @@ export const es: LandingContent = {
     index: "04",
     eyebrow: "Privacidad",
     title: "Es / no es.",
-    lede: "Las reglas no son una política: están en el código.",
+    lede: "Los compromisos están escritos en la arquitectura y en los términos.",
     rows: [
       { label: "Nova es", value: "Infraestructura de contexto humano" },
       { label: "Nova no es", value: "Un chatbot, ni una app de notas, ni otro asistente" },
-      { label: "Tu memoria", value: "Exportable por completo · borrable por completo" },
-      { label: "La captura", value: "Explícita e indicada, nunca en segundo plano" },
-      { label: "El contexto", value: "Nunca se vende ni se usa para anuncios" },
+      { label: "Tu memoria", value: "Exportación y borrado completos. Las copias caducan en 35 días." },
+      { label: "La captura", value: "Al invocarla e indicada, nunca en segundo plano" },
+      {
+        label: "El contexto",
+        value: "Nunca se vende, nunca se usa para anuncios y no entrena modelos salvo que lo permitas",
+      },
+      {
+        label: "Cifrado",
+        value:
+          "TLS 1.3 en tránsito y cifrado en reposo. Durante el enriquecimiento, el texto en claro solo está en memoria, también en un proveedor de modelos cuando se usa uno.",
+      },
     ],
   },
   pricing: {
@@ -174,7 +182,7 @@ export const es: LandingContent = {
         period: "Para uso individual",
         cta: "Empezar",
         variant: "secondary",
-        items: ["1.000 capturas/mes", "Exportación completa", "SDK con 1 asistente"],
+        items: ["1.000 capturas/mes", "Exportación completa", "SDK con 1 asistente", "Cifrado en tránsito y en reposo"],
       },
       {
         name: "Pro",
@@ -187,7 +195,7 @@ export const es: LandingContent = {
           "Capturas ilimitadas",
           "Asistentes ilimitados",
           "Búsqueda por significado",
-          "Cifrado con tus claves",
+          "Cifrado en tránsito y en reposo",
         ],
       },
       {
@@ -196,7 +204,12 @@ export const es: LandingContent = {
         period: "/usuario/mes",
         cta: "Empezar",
         variant: "secondary",
-        items: ["Proyectos compartidos", "Permisos por persona", "Registro de auditoría"],
+        items: [
+          "Proyectos compartidos",
+          "Permisos por persona",
+          "Registro de auditoría",
+          "Cifrado en tránsito y en reposo",
+        ],
       },
     ],
   },
@@ -217,11 +230,11 @@ export const es: LandingContent = {
       },
       {
         q: "¿Puedo exportar mi memoria?",
-        a: "Sí. Exportación completa desde el primer día, y borrado completo. El archivo es tuyo.",
+        a: "Sí. Puedes exportar momentos, memoria y el registro de auditoría. El borrado elimina el contenido, los embeddings y los enlaces, y las copias caducan en 35 días.",
       },
       {
         q: "¿Dónde se guardan mis datos?",
-        a: "En tu dispositivo hasta que capturas. Lo que eliges sincronizar se guarda cifrado, y un proyecto puede quedarse solo en local. Puedes exportarlo todo o borrarlo todo.",
+        a: "La memoria temporal del dispositivo no se sube entera. Lo que decides conservar va cifrado en tránsito y en reposo. Durante el enriquecimiento el servidor procesa el texto en claro en memoria y no lo conserva después. La misma ventana aplica en un proveedor de modelos cuando se usa uno. Un proyecto puede quedarse en el dispositivo y no llegar nunca a la nube.",
       },
       {
         q: "¿Funciona sin conexión?",
