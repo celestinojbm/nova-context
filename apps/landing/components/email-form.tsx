@@ -16,7 +16,7 @@ export function EmailForm() {
   return (
     <form action={action} noValidate className="w-full max-w-md text-left">
       <FieldGroup>
-        <Field data-invalid={invalid || undefined}>
+        <Field className="relative" data-invalid={invalid || undefined}>
           <FieldLabel htmlFor={id}>Correo</FieldLabel>
           <Input
             id={id}
@@ -25,12 +25,23 @@ export function EmailForm() {
             autoComplete="email"
             inputMode="email"
             required
+            maxLength={254}
             aria-invalid={invalid || undefined}
             aria-describedby={`${id}-help`}
             placeholder="tu@correo"
           />
+          <div aria-hidden="true" className="pointer-events-none absolute -left-[9999px] h-px w-px overflow-hidden opacity-0">
+            <label htmlFor={`${id}-company`}>Empresa</label>
+            <input id={`${id}-company`} name="company" type="text" tabIndex={-1} autoComplete="off" defaultValue="" />
+          </div>
           <FieldDescription id={`${id}-help`}>Escríbenos. No abre una cuenta y no pasa por un pago.</FieldDescription>
-          {state.message ? <FieldError>{state.message}</FieldError> : null}
+          {state.status === "ok" ? (
+            <p role="status" className="text-sm text-foreground">
+              {state.message}
+            </p>
+          ) : state.message ? (
+            <FieldError>{state.message}</FieldError>
+          ) : null}
         </Field>
         <Button type="submit" disabled={pending}>
           Enviar correo
