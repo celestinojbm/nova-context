@@ -14,7 +14,7 @@ import {
 
 /**
  * M20b — memory namespaces, per-namespace tokens and Markdown export
- * (docs/design/memoria-m20.md §2, §2.4).
+ * (docs/design/m20-busqueda-fts.md §2, §2.4).
  *
  * Callers: a user session (full control of their own namespaces) or a
  * namespace token (`nvx_…`, only the memory/export routes, only granted
@@ -184,7 +184,7 @@ async function loadItems(
   }
   if (opts.q) {
     // BM25-style ranking: OR-query over non-stopword tokens, ts_rank with
-    // log-length normalisation (1); best config on LongMemEval (docs/design/memoria-m20.md). Trigram similarity / ILIKE only as
+    // log-length normalisation (1); best config on LongMemEval (docs/design/m20-busqueda-fts.md). Trigram similarity / ILIKE only as
     // fallback for typos and substrings that FTS cannot match.
     const terms = memoryQueryTerms(opts.q);
     params.push(terms.join(" | ") || "''");
