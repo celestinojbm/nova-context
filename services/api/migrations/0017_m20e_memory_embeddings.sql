@@ -1,4 +1,4 @@
--- M20e: local embeddings for consolidation candidates (docs/design/memoria-m20.md).
+-- M20e: local embeddings for consolidation candidates (docs/design/m20e-embeddings.md).
 -- 384 dims (all-MiniLM-L6-v2) ≠ the 1536-dim `embeddings` table, so a separate
 -- table keyed by (memory_item_id, model). Forward-only, additive. Numbered 0017
 -- so it does not collide with 0016 (memory FTS, sibling PR).

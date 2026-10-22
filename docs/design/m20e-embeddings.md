@@ -1,4 +1,3 @@
-
 ## M20e · Embeddings locales para candidatos de consolidación (22-oct-2026)
 
 - Modelo: `Xenova/all-MiniLM-L6-v2` (Apache-2.0, 384 dims, ONNX int8 vía `@huggingface/transformers`, dependencia opcional). Corre en la máquina; 0 gasto. Se descarga una vez a `.cache/models/` (gitignored) solo con `NOVA_MEMORY_EMBEDDINGS=local` (por defecto `off`); con `CI` definido se niega a cargarlo y los tests usan un embedder falso.
