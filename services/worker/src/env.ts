@@ -18,6 +18,11 @@ const envSchema = z.object({
   // M6: action-execution queue (approved external actions from the API).
   // M20a: heuristic fact extraction into memory_items (local, no LLM). Off by default.
   NOVA_MEMORY_FACTS: z.enum(["on", "off"]).default("off"),
+  // M20c: memory consolidation queue. dry-run (default) only records counts;
+  // apply changes statuses (reversible by run_id). Cron empty = no nightly job.
+  NOVA_CONSOLIDATION_QUEUE: z.string().default("memory-consolidation"),
+  NOVA_CONSOLIDATION_MODE: z.enum(["dry-run", "apply"]).default("dry-run"),
+  NOVA_CONSOLIDATION_CRON: z.string().optional().or(z.literal("").transform(() => undefined)),
   NOVA_ACTION_QUEUE: z.string().default("action-execution"),
   // M6: key for decrypting integration tokens (same value as the API's).
   // Without it, external actions fail closed with 'encryption_key_missing'.

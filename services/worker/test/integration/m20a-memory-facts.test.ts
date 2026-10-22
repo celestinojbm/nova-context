@@ -60,6 +60,22 @@ describe.skipIf(!databaseUrl)("M20a memory facts (integration)", () => {
     expect(rows).toEqual([{ local_only: true }]);
   });
 
+  it("M20c: assigns namespace_id (project namespace, else 'default')", async () => {
+    const p = await db.query(`INSERT INTO projects (user_id, name) VALUES ($1, 'M20c NS') RETURNING id`, [userId]);
+    const ns = await db.query(
+      `INSERT INTO memory_namespaces (user_id, slug, kind, project_id) VALUES ($1, $2, 'project', $3) RETURNING id`,
+      [userId, `proyecto/m20c-${Date.now()}`, p.rows[0].id]);
+    const inProject = await moment("Carlos trabaja en el equipo de datos.", "applied", p.rows[0].id);
+    await writeMomentFacts(db, inProject);
+    const a = await db.query("SELECT namespace_id FROM memory_items WHERE moment_id = $1", [inProject]);
+    expect(a.rows).toEqual([{ namespace_id: ns.rows[0].id }]);
+    const loose = await moment("Dona tiene 3 clientes piloto.", "applied");
+    await writeMomentFacts(db, loose);
+    const b = await db.query(
+      `SELECT n.slug FROM memory_items mi JOIN memory_namespaces n ON n.id = mi.namespace_id WHERE mi.moment_id = $1`, [loose]);
+    expect(b.rows).toEqual([{ slug: "default" }]);
+  });
+
   it("enrichment only writes facts when the flag is on; moment delete cascades", async () => {
     const off = await moment("Fluvia usa Supabase como backend.", "applied");
     await enrichMoment(db, { enricher: null, embedder: null, analytics: "off" }, off);
