@@ -41,12 +41,13 @@ export async function writeMomentFacts(db: pg.Pool, momentId: string): Promise<W
     return { written: 0, extracted: 0, skipped: "redaction_pending" };
   }
   const facts = extractFacts(m.intent_text, m.extracted_text);
+  const namespaceId = facts.length ? await resolveNamespace(db, m.user_id, momentId) : null;
   let written = 0;
   for (const f of facts) {
     const ins = await db.query<{ id: string }>(
       `INSERT INTO memory_items
-         (user_id, moment_id, layer, content, metadata, status, valid_from, author, content_hash, extractor, local_only)
-       VALUES ($1, $2, 'semantic', $3, $4, 'active', $5, 'model', $6, $7, $8)
+         (user_id, moment_id, layer, content, metadata, status, valid_from, author, content_hash, extractor, local_only, namespace_id)
+       VALUES ($1, $2, 'semantic', $3, $4, 'active', $5, 'model', $6, $7, $8, $9)
        ON CONFLICT (moment_id, content_hash) WHERE moment_id IS NOT NULL AND content_hash IS NOT NULL
        DO NOTHING
        RETURNING id`,
@@ -59,6 +60,7 @@ export async function writeMomentFacts(db: pg.Pool, momentId: string): Promise<W
         f.content_hash,
         EXTRACTOR_ID,
         Boolean(m.local_only),
+        namespaceId,
       ],
     );
     const id = ins.rows[0]?.id;
@@ -70,4 +72,24 @@ export async function writeMomentFacts(db: pg.Pool, momentId: string): Promise<W
     );
   }
   return { written, extracted: facts.length };
+}
+
+/**
+ * M20c: namespace for new facts — the moment's project namespace if it has
+ * one, else the user's 'default' namespace (created on demand).
+ */
+export async function resolveNamespace(db: pg.Pool, userId: string, momentId: string): Promise<string> {
+  const proj = await db.query<{ id: string }>(
+    `SELECT n.id FROM context_moments m JOIN memory_namespaces n
+       ON n.project_id = m.project_id AND n.user_id = m.user_id AND n.archived_at IS NULL
+     WHERE m.id = $1`,
+    [momentId],
+  );
+  if (proj.rows[0]) return proj.rows[0].id;
+  const def = await db.query<{ id: string }>(
+    `INSERT INTO memory_namespaces (user_id, slug, kind) VALUES ($1, 'default', 'default')
+     ON CONFLICT (user_id, slug) DO UPDATE SET slug = EXCLUDED.slug RETURNING id`,
+    [userId],
+  );
+  return def.rows[0]!.id;
 }
