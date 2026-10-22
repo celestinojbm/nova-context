@@ -393,3 +393,67 @@ h3 { margin: 26px 0 10px; }
   font-size: 0.8rem;
   margin-top: 0.25rem;
 }
+
+/* ============================================================
+   Responsive: hasta aquí el archivo no tenía NINGUNA @media, así que en
+   pantalla estrecha pasaban dos cosas medidas en la auditoría H-014:
+
+   V25 — la fila de tarea colapsaba a un carácter por línea.
+     `.task-row` es un flex y sus tres `.task-meta` van con
+     `white-space: nowrap`, así que no se encogen. El único que puede
+     encogerse es `.task-title`, que además tiene `overflow-wrap: anywhere`:
+     absorbe todo el déficit de ancho y acaba con una letra por renglón.
+
+   V24 — la cabecera forzaba el ancho del documento.
+     `.site-header` es un flex de una sola fila con marca, siete enlaces y el
+     bloque de usuario; sin `wrap` el documento se estiraba a 651 px sobre un
+     viewport de 390 px.
+
+   El arreglo no toca el marcado: solo da a la fila la posibilidad de envolver
+   y devuelve el ancho completo al título.
+   ============================================================ */
+@media (max-width: 720px) {
+  .site-header {
+    flex-wrap: wrap;
+    padding: 12px 16px;
+  }
+  /* Los enlaces envuelven en varias líneas en vez de estirar el documento.
+     Se evita el desplazamiento horizontal a propósito: una región desplazable
+     necesitaría foco por teclado para no fallar WCAG (sería el equivalente
+     local del hallazgo V26). */
+  .site-nav {
+    flex-wrap: wrap;
+    width: 100%;
+    row-gap: 6px;
+  }
+  main {
+    padding: 16px 14px;
+  }
+
+  /* El título recupera la línea completa y el resto se coloca debajo. */
+  .task-row {
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+  }
+  .task-title {
+    order: -1;
+    flex: 1 1 100%;
+  }
+  /* Las metadatos pueden partirse: son la razón de que la fila no encogiera. */
+  .task-meta {
+    white-space: normal;
+  }
+
+  /* La tabla de sesiones tampoco encogía: sus celdas llevan 12px de relleno a
+     cada lado y el contenido no partía, así que /settings seguía estirando el
+     documento (491 sobre 390). */
+  .sessions-table {
+    width: 100%;
+  }
+  .sessions-table th,
+  .sessions-table td {
+    padding: 6px 4px;
+    overflow-wrap: anywhere;
+  }
+}
