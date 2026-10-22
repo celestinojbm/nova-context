@@ -1,5 +1,6 @@
 import type pg from "pg";
 import { classifyPair, THRESHOLDS, type Thresholds } from "./consolidation-rules.js";
+import type { Embedder } from "./embeddings.js";
 
 /**
  * M20c: one consolidation run for one user (docs/design/memoria-m20.md §1.3).
@@ -12,7 +13,10 @@ import { classifyPair, THRESHOLDS, type Thresholds } from "./consolidation-rules
  *   marked 'contested' and the conflict stays 'open'. User facts are never
  *   modified. Every change is logged for revertConsolidationRun(run_id).
  * Pairs never cross namespaces. Candidates come from pg_trgm similarity().
- * Serialized per user with pg_advisory_xact_lock. No LLM, no embeddings.
+ * M20e: with an `Embedder` (local model, opt-in) missing vectors are stored in
+ * memory_item_embeddings (derived index data, also in dry-run) and pairs with
+ * cosine >= t.embedding become extra candidates. Without it: trigrams only.
+ * Serialized per user with pg_advisory_xact_lock. No LLM.
  */
 export type ConsolidationMode = "dry-run" | "apply";
 export const CONSOLIDATION_JOB = "memory-consolidation";
@@ -23,16 +27,18 @@ export interface ConsolidationReport {
   conflicts_newer_wins: number;
   conflicts_contested: number;
   skipped_user_merges: number;
+  embedding_candidates: number;
 }
 
 interface Item { id: string; content: string; author: string; valid_from: Date | null; created_at: Date }
-interface Pair { a: string; b: string; sim: number }
+interface Pair { a: string; b: string; sim: number; cos?: number }
 
 export async function runConsolidation(
   db: pg.Pool,
   userId: string,
   mode: ConsolidationMode = "dry-run",
   t: Thresholds = THRESHOLDS,
+  embedder?: Embedder,
 ): Promise<{ runId: string; report: ConsolidationReport }> {
   const c = await db.connect();
   try {
@@ -59,9 +65,47 @@ export async function runConsolidation(
         [userId, t.candidate],
       )
     ).rows;
+    let embeddingCandidates = 0;
+    if (embedder && t.embedding !== undefined) {
+      const missing = (
+        await c.query<{ id: string; content: string }>(
+          `SELECT mi.id, mi.content FROM memory_items mi
+           WHERE mi.user_id = $1 AND mi.status = 'active' AND mi.layer = 'semantic'
+             AND NOT EXISTS (SELECT 1 FROM memory_item_embeddings e WHERE e.memory_item_id = mi.id AND e.model = $2)`,
+          [userId, embedder.model],
+        )
+      ).rows;
+      if (missing.length) {
+        const vecs = await embedder.embed(missing.map((m) => m.content));
+        await c.query(
+          `INSERT INTO memory_item_embeddings (memory_item_id, model, embedding)
+           SELECT unnest($1::uuid[]), $2, unnest($3::text[])::vector ON CONFLICT DO NOTHING`,
+          [missing.map((m) => m.id), embedder.model, vecs.map((v) => `[${Array.from(v).join(",")}]`)],
+        );
+      }
+      const byKey = new Map(pairs.map((p) => [`${p.a}|${p.b}`, p]));
+      for (const r of (
+        await c.query<{ a: string; b: string; sim: number; cos: number }>(
+          `SELECT a.id AS a, b.id AS b, similarity(a.content, b.content) AS sim, 1 - (ea.embedding <=> eb.embedding) AS cos
+           FROM memory_items a JOIN memory_items b
+             ON b.user_id = a.user_id AND a.id < b.id AND a.namespace_id IS NOT DISTINCT FROM b.namespace_id
+           JOIN memory_item_embeddings ea ON ea.memory_item_id = a.id AND ea.model = $2
+           JOIN memory_item_embeddings eb ON eb.memory_item_id = b.id AND eb.model = $2
+           WHERE a.user_id = $1 AND a.status = 'active' AND b.status = 'active'
+             AND a.layer = 'semantic' AND b.layer = 'semantic'
+             AND 1 - (ea.embedding <=> eb.embedding) >= $3`,
+          [userId, embedder.model, t.embedding],
+        )
+      ).rows) {
+        const hit = byKey.get(`${r.a}|${r.b}`);
+        if (hit) hit.cos = Number(r.cos);
+        else { pairs.push({ a: r.a, b: r.b, sim: Number(r.sim), cos: Number(r.cos) }); embeddingCandidates++; }
+      }
+    }
 
     const report: ConsolidationReport = {
       candidates: pairs.length, merges: 0, conflicts_newer_wins: 0, conflicts_contested: 0, skipped_user_merges: 0,
+      embedding_candidates: embeddingCandidates,
     };
     const run = await c.query<{ id: string }>(
       `INSERT INTO ops_maintenance_runs (mode, report, job, user_id) VALUES ($1, '{}', $2, $3) RETURNING id`,
@@ -92,7 +136,7 @@ export async function runConsolidation(
       const B = items.get(p.b);
       if (!A || !B) continue;
       const [older, newer] = time(A) <= time(B) ? [A, B] : [B, A];
-      const d = classifyPair(older.content, newer.content, t, Number(p.sim));
+      const d = classifyPair(older.content, newer.content, t, Number(p.sim), p.cos);
       if (d.relation === "merge") {
         const userO = older.author === "user";
         const userN = newer.author === "user";
