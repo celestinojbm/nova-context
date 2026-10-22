@@ -213,4 +213,21 @@ M20 avanza **en paralelo con M19**; cada fase en su PR, sin gasto ni despliegue.
 
 ## 6. Pendiente
 - Umbrales de similitud (trigramas/coseno): se calibran con §3.
-- Verificar licencia de LongMemEval y de FrontierMemory antes de descargar datos.
+- ~~Verificar licencia de LongMemEval y de FrontierMemory antes de descargar datos.~~ Verificado el 22-oct-2026 con fuentes primarias:
+  - **LongMemEval** — código [MIT](https://github.com/xiaowu0162/LongMemEval/blob/main/LICENSE); datos
+    [`xiaowu0162/longmemeval-cleaned`](https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned) con `license:mit`,
+    sin gating (el dataset original `longmemeval` está deprecado). **Uso gratuito permitido.**
+    El script oficial de exactitud (`src/evaluation/evaluate_qa.py`) usa **GPT-4o como juez (de pago)** → no lo usamos.
+    Sí sirven sin juez: `answer_session_ids` y `has_answer` por turno permiten Recall@k/MRR de sesión y de turno,
+    más EM/F1 aproximado (§3.3). Ojo: las sesiones de relleno vienen de ShareGPT/UltraChat (licencias propias); solo
+    uso local de evaluación, sin redistribuir los datos en el repo.
+  - **FrontierMemory 1.0 (Letta, oct-2026)** — corpus
+    [`letta-ai/frontier-memory-corpus`](https://huggingface.co/datasets/letta-ai/frontier-memory-corpus): etiqueta
+    `license:cc-by-4.0`, pero **gated** (aceptar condiciones) con restricciones: solo evaluar memoria, no entrenar ni
+    republicar fuera de un repo gated; cada benchmark de origen mantiene su licencia (`THIRD_PARTY_NOTICES.md`).
+    No encontré repo público del paquete `frontier-memory` (p. ej. `github.com/letta-ai/frontier-memory` → 404), así que
+    su licencia de código **sigue sin verificar**. Según [frontiermemory.com](https://www.frontiermemory.com/) y el
+    [blog v1](https://www.frontiermemory.com/blog/v1/), no hay juez LLM, pero la **métrica exige agentes LLM**
+    (generación de memoria + agente de tareas con Opus 5.5/GPT-6 Sol, ~0,77–4 USD por tarea) y mide aprendizaje desde
+    trayectorias de código, no memoria personal. **Conclusión: no cumple "gratis"; queda fuera de M20d** salvo nueva
+    decisión de Celestino.
