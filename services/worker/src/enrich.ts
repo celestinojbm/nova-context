@@ -12,6 +12,7 @@ import type {
   ParsedIntent,
 } from "@nova/schema";
 import type pg from "pg";
+import { writeMomentFacts } from "./memory/write-facts.js";
 
 /**
  * Enrichment pipeline (M2). Status transitions on context_moments:
@@ -27,6 +28,8 @@ export interface EnrichDeps {
   embedder: EmbeddingProvider | null;
   /** 'local' stores product events; 'off' drops them (M4 analytics). */
   analytics?: "local" | "off";
+  /** M20a: write heuristic facts into memory_items (flag NOVA_MEMORY_FACTS). */
+  memoryFacts?: boolean;
 }
 
 function trackEvent(
@@ -210,6 +213,14 @@ export async function enrichMoment(
     projectHint: moment.intent_parsed?.project_hint ?? null,
     url: (moment.source_meta["url"] as string | undefined) ?? null,
   });
+
+  // 5b. M20a facts (flagged). Local heuristics only; never an LLM. Skips
+  //     moments whose redaction is still pending. Never fails enrichment.
+  if (deps.memoryFacts) {
+    try {
+      await writeMomentFacts(db, momentId);
+    } catch {/* memory extraction must not break enrichment */}
+  }
 
   // 6. Embedding (optional). One vector per moment; replaces prior versions.
   let embedded = false;
