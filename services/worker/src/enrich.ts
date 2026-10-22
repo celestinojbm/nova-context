@@ -219,7 +219,10 @@ export async function enrichMoment(
   if (deps.memoryFacts) {
     try {
       await writeMomentFacts(db, momentId);
-    } catch {/* memory extraction must not break enrichment */}
+    } catch (err) {
+      // memory extraction must not break enrichment, but log it (review #25)
+      console.warn("[m20a] writeMomentFacts failed", { momentId, err: (err as Error)?.message });
+    }
   }
 
   // 6. Embedding (optional). One vector per moment; replaces prior versions.
