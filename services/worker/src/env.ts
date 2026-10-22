@@ -16,6 +16,8 @@ const envSchema = z.object({
   // M4: same semantics as the API — 'local' stores product events, 'off' drops.
   NOVA_ANALYTICS: z.enum(["local", "off"]).default("local"),
   // M6: action-execution queue (approved external actions from the API).
+  // M20a: heuristic fact extraction into memory_items (local, no LLM). Off by default.
+  NOVA_MEMORY_FACTS: z.enum(["on", "off"]).default("off"),
   NOVA_ACTION_QUEUE: z.string().default("action-execution"),
   // M6: key for decrypting integration tokens (same value as the API's).
   // Without it, external actions fail closed with 'encryption_key_missing'.

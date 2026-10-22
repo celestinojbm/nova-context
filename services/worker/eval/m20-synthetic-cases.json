@@ -1,0 +1,1198 @@
+{
+  "version": "m20a-synthetic-v1",
+  "description": "50 casos sintéticos (datos inventados) para M20: extracción (M20a) y verdad conocida de fusión/conflicto (M20c). Ver docs/design/memoria-m20.md §3.2.",
+  "cases": [
+    {
+      "id": "m20-001",
+      "category": "duplicate_exact",
+      "moments": [
+        {
+          "captured_at": "2026-09-01T10:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Prefiero asientos de pasillo en vuelos largos.",
+          "expected_facts": [
+            "Prefiero asientos de pasillo en vuelos largos"
+          ]
+        },
+        {
+          "captured_at": "2026-09-15T10:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Prefiero asientos de pasillo en vuelos largos.",
+          "expected_facts": [
+            "Prefiero asientos de pasillo en vuelos largos"
+          ]
+        }
+      ],
+      "expected_relation": "merge",
+      "note": "mismo hecho capturado dos veces"
+    },
+    {
+      "id": "m20-002",
+      "category": "duplicate_exact",
+      "moments": [
+        {
+          "captured_at": "2026-09-01T10:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "La demo de Nova es el 6 de noviembre.",
+          "expected_facts": [
+            "La demo de Nova es el 6 de noviembre"
+          ]
+        },
+        {
+          "captured_at": "2026-09-15T10:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "La demo de Nova es el 6 de noviembre.",
+          "expected_facts": [
+            "La demo de Nova es el 6 de noviembre"
+          ]
+        }
+      ],
+      "expected_relation": "merge",
+      "note": "mismo hecho capturado dos veces"
+    },
+    {
+      "id": "m20-003",
+      "category": "duplicate_exact",
+      "moments": [
+        {
+          "captured_at": "2026-09-01T10:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "El repositorio usa pnpm y Turborepo.",
+          "expected_facts": [
+            "El repositorio usa pnpm y Turborepo"
+          ]
+        },
+        {
+          "captured_at": "2026-09-15T10:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "El repositorio usa pnpm y Turborepo.",
+          "expected_facts": [
+            "El repositorio usa pnpm y Turborepo"
+          ]
+        }
+      ],
+      "expected_relation": "merge",
+      "note": "mismo hecho capturado dos veces"
+    },
+    {
+      "id": "m20-004",
+      "category": "duplicate_exact",
+      "moments": [
+        {
+          "captured_at": "2026-09-01T10:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Carlos trabaja en el equipo de datos.",
+          "expected_facts": [
+            "Carlos trabaja en el equipo de datos"
+          ]
+        },
+        {
+          "captured_at": "2026-09-15T10:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Carlos trabaja en el equipo de datos.",
+          "expected_facts": [
+            "Carlos trabaja en el equipo de datos"
+          ]
+        }
+      ],
+      "expected_relation": "merge",
+      "note": "mismo hecho capturado dos veces"
+    },
+    {
+      "id": "m20-005",
+      "category": "duplicate_exact",
+      "moments": [
+        {
+          "captured_at": "2026-09-01T10:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "The staging database is hosted in Frankfurt.",
+          "expected_facts": [
+            "The staging database is hosted in Frankfurt"
+          ]
+        },
+        {
+          "captured_at": "2026-09-15T10:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "The staging database is hosted in Frankfurt.",
+          "expected_facts": [
+            "The staging database is hosted in Frankfurt"
+          ]
+        }
+      ],
+      "expected_relation": "merge",
+      "note": "mismo hecho capturado dos veces"
+    },
+    {
+      "id": "m20-006",
+      "category": "duplicate_exact",
+      "moments": [
+        {
+          "captured_at": "2026-09-01T10:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "La extensión de Chrome es la fuente principal de capturas.",
+          "expected_facts": [
+            "La extensión de Chrome es la fuente principal de capturas"
+          ]
+        },
+        {
+          "captured_at": "2026-09-15T10:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "La extensión de Chrome es la fuente principal de capturas.",
+          "expected_facts": [
+            "La extensión de Chrome es la fuente principal de capturas"
+          ]
+        }
+      ],
+      "expected_relation": "merge",
+      "note": "mismo hecho capturado dos veces"
+    },
+    {
+      "id": "m20-007",
+      "category": "duplicate_exact",
+      "moments": [
+        {
+          "captured_at": "2026-09-01T10:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Dona tiene 3 clientes piloto.",
+          "expected_facts": [
+            "Dona tiene 3 clientes piloto"
+          ]
+        },
+        {
+          "captured_at": "2026-09-15T10:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Dona tiene 3 clientes piloto.",
+          "expected_facts": [
+            "Dona tiene 3 clientes piloto"
+          ]
+        }
+      ],
+      "expected_relation": "merge",
+      "note": "mismo hecho capturado dos veces"
+    },
+    {
+      "id": "m20-008",
+      "category": "duplicate_exact",
+      "moments": [
+        {
+          "captured_at": "2026-09-01T10:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "I prefer dark mode in every editor.",
+          "expected_facts": [
+            "I prefer dark mode in every editor"
+          ]
+        },
+        {
+          "captured_at": "2026-09-15T10:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "I prefer dark mode in every editor.",
+          "expected_facts": [
+            "I prefer dark mode in every editor"
+          ]
+        }
+      ],
+      "expected_relation": "merge",
+      "note": "mismo hecho capturado dos veces"
+    },
+    {
+      "id": "m20-009",
+      "category": "duplicate_exact",
+      "moments": [
+        {
+          "captured_at": "2026-09-01T10:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Acordamos publicar la beta en diciembre.",
+          "expected_facts": [
+            "Acordamos publicar la beta en diciembre"
+          ]
+        },
+        {
+          "captured_at": "2026-09-15T10:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Acordamos publicar la beta en diciembre.",
+          "expected_facts": [
+            "Acordamos publicar la beta en diciembre"
+          ]
+        }
+      ],
+      "expected_relation": "merge",
+      "note": "mismo hecho capturado dos veces"
+    },
+    {
+      "id": "m20-010",
+      "category": "duplicate_exact",
+      "moments": [
+        {
+          "captured_at": "2026-09-01T10:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Lucía vive en Valencia.",
+          "expected_facts": [
+            "Lucía vive en Valencia"
+          ]
+        },
+        {
+          "captured_at": "2026-09-15T10:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Lucía vive en Valencia.",
+          "expected_facts": [
+            "Lucía vive en Valencia"
+          ]
+        }
+      ],
+      "expected_relation": "merge",
+      "note": "mismo hecho capturado dos veces"
+    },
+    {
+      "id": "m20-011",
+      "category": "duplicate_near",
+      "moments": [
+        {
+          "captured_at": "2026-08-01T09:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Prefiero asientos de pasillo en vuelos largos.",
+          "expected_facts": [
+            "Prefiero asientos de pasillo en vuelos largos"
+          ]
+        },
+        {
+          "captured_at": "2026-08-20T09:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "En vuelos largos prefiero asiento de pasillo.",
+          "expected_facts": [
+            "En vuelos largos prefiero asiento de pasillo"
+          ]
+        }
+      ],
+      "expected_relation": "merge",
+      "note": "paráfrasis del mismo hecho"
+    },
+    {
+      "id": "m20-012",
+      "category": "duplicate_near",
+      "moments": [
+        {
+          "captured_at": "2026-08-01T09:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "La demo de Nova es el 6 de noviembre.",
+          "expected_facts": [
+            "La demo de Nova es el 6 de noviembre"
+          ]
+        },
+        {
+          "captured_at": "2026-08-20T09:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "La demo de Nova será el 6 de noviembre.",
+          "expected_facts": [
+            "La demo de Nova será el 6 de noviembre"
+          ]
+        }
+      ],
+      "expected_relation": "merge",
+      "note": "paráfrasis del mismo hecho"
+    },
+    {
+      "id": "m20-013",
+      "category": "duplicate_near",
+      "moments": [
+        {
+          "captured_at": "2026-08-01T09:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "El repositorio usa pnpm y Turborepo.",
+          "expected_facts": [
+            "El repositorio usa pnpm y Turborepo"
+          ]
+        },
+        {
+          "captured_at": "2026-08-20T09:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "El repo usa pnpm con Turborepo.",
+          "expected_facts": [
+            "El repo usa pnpm con Turborepo"
+          ]
+        }
+      ],
+      "expected_relation": "merge",
+      "note": "paráfrasis del mismo hecho"
+    },
+    {
+      "id": "m20-014",
+      "category": "duplicate_near",
+      "moments": [
+        {
+          "captured_at": "2026-08-01T09:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Carlos trabaja en el equipo de datos.",
+          "expected_facts": [
+            "Carlos trabaja en el equipo de datos"
+          ]
+        },
+        {
+          "captured_at": "2026-08-20T09:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Carlos trabaja en el equipo de Datos.",
+          "expected_facts": [
+            "Carlos trabaja en el equipo de Datos"
+          ]
+        }
+      ],
+      "expected_relation": "merge",
+      "note": "paráfrasis del mismo hecho"
+    },
+    {
+      "id": "m20-015",
+      "category": "duplicate_near",
+      "moments": [
+        {
+          "captured_at": "2026-08-01T09:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "The staging database is hosted in Frankfurt.",
+          "expected_facts": [
+            "The staging database is hosted in Frankfurt"
+          ]
+        },
+        {
+          "captured_at": "2026-08-20T09:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Staging database is hosted in Frankfurt.",
+          "expected_facts": [
+            "Staging database is hosted in Frankfurt"
+          ]
+        }
+      ],
+      "expected_relation": "merge",
+      "note": "paráfrasis del mismo hecho"
+    },
+    {
+      "id": "m20-016",
+      "category": "duplicate_near",
+      "moments": [
+        {
+          "captured_at": "2026-08-01T09:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Dona tiene 3 clientes piloto.",
+          "expected_facts": [
+            "Dona tiene 3 clientes piloto"
+          ]
+        },
+        {
+          "captured_at": "2026-08-20T09:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Dona tiene tres clientes piloto.",
+          "expected_facts": [
+            "Dona tiene tres clientes piloto"
+          ]
+        }
+      ],
+      "expected_relation": "merge",
+      "note": "paráfrasis del mismo hecho"
+    },
+    {
+      "id": "m20-017",
+      "category": "duplicate_near",
+      "moments": [
+        {
+          "captured_at": "2026-08-01T09:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Fluvia usa Supabase como backend.",
+          "expected_facts": [
+            "Fluvia usa Supabase como backend"
+          ]
+        },
+        {
+          "captured_at": "2026-08-20T09:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Fluvia usa Supabase de backend.",
+          "expected_facts": [
+            "Fluvia usa Supabase de backend"
+          ]
+        }
+      ],
+      "expected_relation": "merge",
+      "note": "paráfrasis del mismo hecho"
+    },
+    {
+      "id": "m20-018",
+      "category": "duplicate_near",
+      "moments": [
+        {
+          "captured_at": "2026-08-01T09:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "I prefer dark mode in every editor.",
+          "expected_facts": [
+            "I prefer dark mode in every editor"
+          ]
+        },
+        {
+          "captured_at": "2026-08-20T09:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "I prefer dark mode in all editors.",
+          "expected_facts": [
+            "I prefer dark mode in all editors"
+          ]
+        }
+      ],
+      "expected_relation": "merge",
+      "note": "paráfrasis del mismo hecho"
+    },
+    {
+      "id": "m20-019",
+      "category": "duplicate_near",
+      "moments": [
+        {
+          "captured_at": "2026-08-01T09:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Acordamos publicar la beta en diciembre.",
+          "expected_facts": [
+            "Acordamos publicar la beta en diciembre"
+          ]
+        },
+        {
+          "captured_at": "2026-08-20T09:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Acordamos lanzar la beta en diciembre.",
+          "expected_facts": [
+            "Acordamos lanzar la beta en diciembre"
+          ]
+        }
+      ],
+      "expected_relation": "merge",
+      "note": "paráfrasis del mismo hecho"
+    },
+    {
+      "id": "m20-020",
+      "category": "duplicate_near",
+      "moments": [
+        {
+          "captured_at": "2026-08-01T09:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Lucía vive en Valencia.",
+          "expected_facts": [
+            "Lucía vive en Valencia"
+          ]
+        },
+        {
+          "captured_at": "2026-08-20T09:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Lucía vive en Valencia, España.",
+          "expected_facts": [
+            "Lucía vive en Valencia, España"
+          ]
+        }
+      ],
+      "expected_relation": "merge",
+      "note": "paráfrasis del mismo hecho"
+    },
+    {
+      "id": "m20-021",
+      "category": "contradiction",
+      "moments": [
+        {
+          "captured_at": "2026-07-01T12:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "La demo de Nova es el 30 de octubre.",
+          "expected_facts": [
+            "La demo de Nova es el 30 de octubre"
+          ]
+        },
+        {
+          "captured_at": "2026-10-01T12:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "La demo de Nova es el 6 de noviembre.",
+          "expected_facts": [
+            "La demo de Nova es el 6 de noviembre"
+          ]
+        }
+      ],
+      "expected_relation": "newer_wins",
+      "note": "el más nuevo gana; el anterior queda superseded"
+    },
+    {
+      "id": "m20-022",
+      "category": "contradiction",
+      "moments": [
+        {
+          "captured_at": "2026-07-01T12:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Precio del plan Pro: 49 USD al mes",
+          "expected_facts": [
+            "Precio del plan Pro: 49 USD al mes"
+          ]
+        },
+        {
+          "captured_at": "2026-10-01T12:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Precio del plan Pro: 59 USD al mes",
+          "expected_facts": [
+            "Precio del plan Pro: 59 USD al mes"
+          ]
+        }
+      ],
+      "expected_relation": "newer_wins",
+      "note": "el más nuevo gana; el anterior queda superseded"
+    },
+    {
+      "id": "m20-023",
+      "category": "contradiction",
+      "moments": [
+        {
+          "captured_at": "2026-07-01T12:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Lucía vive en Valencia.",
+          "expected_facts": [
+            "Lucía vive en Valencia"
+          ]
+        },
+        {
+          "captured_at": "2026-10-01T12:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Lucía vive en Madrid.",
+          "expected_facts": [
+            "Lucía vive en Madrid"
+          ]
+        }
+      ],
+      "expected_relation": "newer_wins",
+      "note": "el más nuevo gana; el anterior queda superseded"
+    },
+    {
+      "id": "m20-024",
+      "category": "contradiction",
+      "moments": [
+        {
+          "captured_at": "2026-07-01T12:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Carlos trabaja en el equipo de datos.",
+          "expected_facts": [
+            "Carlos trabaja en el equipo de datos"
+          ]
+        },
+        {
+          "captured_at": "2026-10-01T12:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Carlos trabaja en el equipo de producto.",
+          "expected_facts": [
+            "Carlos trabaja en el equipo de producto"
+          ]
+        }
+      ],
+      "expected_relation": "newer_wins",
+      "note": "el más nuevo gana; el anterior queda superseded"
+    },
+    {
+      "id": "m20-025",
+      "category": "contradiction",
+      "moments": [
+        {
+          "captured_at": "2026-07-01T12:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "The staging database is hosted in Frankfurt.",
+          "expected_facts": [
+            "The staging database is hosted in Frankfurt"
+          ]
+        },
+        {
+          "captured_at": "2026-10-01T12:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "The staging database is hosted in Dublin.",
+          "expected_facts": [
+            "The staging database is hosted in Dublin"
+          ]
+        }
+      ],
+      "expected_relation": "newer_wins",
+      "note": "el más nuevo gana; el anterior queda superseded"
+    },
+    {
+      "id": "m20-026",
+      "category": "contradiction",
+      "moments": [
+        {
+          "captured_at": "2026-07-01T12:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Dona tiene 3 clientes piloto.",
+          "expected_facts": [
+            "Dona tiene 3 clientes piloto"
+          ]
+        },
+        {
+          "captured_at": "2026-10-01T12:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Dona tiene 5 clientes piloto.",
+          "expected_facts": [
+            "Dona tiene 5 clientes piloto"
+          ]
+        }
+      ],
+      "expected_relation": "newer_wins",
+      "note": "el más nuevo gana; el anterior queda superseded"
+    },
+    {
+      "id": "m20-027",
+      "category": "contradiction",
+      "moments": [
+        {
+          "captured_at": "2026-07-01T12:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Fluvia usa Supabase como backend.",
+          "expected_facts": [
+            "Fluvia usa Supabase como backend"
+          ]
+        },
+        {
+          "captured_at": "2026-10-01T12:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Fluvia usa Firebase como backend.",
+          "expected_facts": [
+            "Fluvia usa Firebase como backend"
+          ]
+        }
+      ],
+      "expected_relation": "newer_wins",
+      "note": "el más nuevo gana; el anterior queda superseded"
+    },
+    {
+      "id": "m20-028",
+      "category": "contradiction",
+      "moments": [
+        {
+          "captured_at": "2026-07-01T12:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Prefiero reuniones por la mañana.",
+          "expected_facts": [
+            "Prefiero reuniones por la mañana"
+          ]
+        },
+        {
+          "captured_at": "2026-10-01T12:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Prefiero reuniones por la tarde.",
+          "expected_facts": [
+            "Prefiero reuniones por la tarde"
+          ]
+        }
+      ],
+      "expected_relation": "newer_wins",
+      "note": "el más nuevo gana; el anterior queda superseded"
+    },
+    {
+      "id": "m20-029",
+      "category": "contradiction",
+      "moments": [
+        {
+          "captured_at": "2026-07-01T12:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "The API rate limit is 100 requests per minute.",
+          "expected_facts": [
+            "The API rate limit is 100 requests per minute"
+          ]
+        },
+        {
+          "captured_at": "2026-10-01T12:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "The API rate limit is 300 requests per minute.",
+          "expected_facts": [
+            "The API rate limit is 300 requests per minute"
+          ]
+        }
+      ],
+      "expected_relation": "newer_wins",
+      "note": "el más nuevo gana; el anterior queda superseded"
+    },
+    {
+      "id": "m20-030",
+      "category": "contradiction",
+      "moments": [
+        {
+          "captured_at": "2026-07-01T12:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Acordamos publicar la beta en diciembre.",
+          "expected_facts": [
+            "Acordamos publicar la beta en diciembre"
+          ]
+        },
+        {
+          "captured_at": "2026-10-01T12:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Acordamos publicar la beta en enero.",
+          "expected_facts": [
+            "Acordamos publicar la beta en enero"
+          ]
+        }
+      ],
+      "expected_relation": "newer_wins",
+      "note": "el más nuevo gana; el anterior queda superseded"
+    },
+    {
+      "id": "m20-031",
+      "category": "distinct",
+      "moments": [
+        {
+          "captured_at": "2026-06-01T08:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Ana prefiere reuniones por la mañana.",
+          "expected_facts": [
+            "Ana prefiere reuniones por la mañana"
+          ]
+        },
+        {
+          "captured_at": "2026-06-02T08:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Ana prefiere el té al café.",
+          "expected_facts": [
+            "Ana prefiere el té al café"
+          ]
+        }
+      ],
+      "expected_relation": "keep_both",
+      "note": "parecidos pero distintos: no fusionar"
+    },
+    {
+      "id": "m20-032",
+      "category": "distinct",
+      "moments": [
+        {
+          "captured_at": "2026-06-01T08:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "El servidor de CI corre en GitHub Actions.",
+          "expected_facts": [
+            "El servidor de CI corre en GitHub Actions"
+          ]
+        },
+        {
+          "captured_at": "2026-06-02T08:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "El servidor de producción corre en Hetzner.",
+          "expected_facts": [
+            "El servidor de producción corre en Hetzner"
+          ]
+        }
+      ],
+      "expected_relation": "keep_both",
+      "note": "parecidos pero distintos: no fusionar"
+    },
+    {
+      "id": "m20-033",
+      "category": "distinct",
+      "moments": [
+        {
+          "captured_at": "2026-06-01T08:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Dona tiene 3 clientes piloto.",
+          "expected_facts": [
+            "Dona tiene 3 clientes piloto"
+          ]
+        },
+        {
+          "captured_at": "2026-06-02T08:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Fluvia tiene 3 clientes piloto.",
+          "expected_facts": [
+            "Fluvia tiene 3 clientes piloto"
+          ]
+        }
+      ],
+      "expected_relation": "keep_both",
+      "note": "parecidos pero distintos: no fusionar"
+    },
+    {
+      "id": "m20-034",
+      "category": "distinct",
+      "moments": [
+        {
+          "captured_at": "2026-06-01T08:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "La demo de Nova es el 6 de noviembre.",
+          "expected_facts": [
+            "La demo de Nova es el 6 de noviembre"
+          ]
+        },
+        {
+          "captured_at": "2026-06-02T08:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "La retro de Nova es el 6 de noviembre.",
+          "expected_facts": [
+            "La retro de Nova es el 6 de noviembre"
+          ]
+        }
+      ],
+      "expected_relation": "keep_both",
+      "note": "parecidos pero distintos: no fusionar"
+    },
+    {
+      "id": "m20-035",
+      "category": "distinct",
+      "moments": [
+        {
+          "captured_at": "2026-06-01T08:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Carlos trabaja en el equipo de datos.",
+          "expected_facts": [
+            "Carlos trabaja en el equipo de datos"
+          ]
+        },
+        {
+          "captured_at": "2026-06-02T08:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Carlos vive en Sevilla.",
+          "expected_facts": [
+            "Carlos vive en Sevilla"
+          ]
+        }
+      ],
+      "expected_relation": "keep_both",
+      "note": "parecidos pero distintos: no fusionar"
+    },
+    {
+      "id": "m20-036",
+      "category": "distinct",
+      "moments": [
+        {
+          "captured_at": "2026-06-01T08:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Precio del plan Pro: 49 USD al mes",
+          "expected_facts": [
+            "Precio del plan Pro: 49 USD al mes"
+          ]
+        },
+        {
+          "captured_at": "2026-06-02T08:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Precio del plan Team: 49 USD al mes",
+          "expected_facts": [
+            "Precio del plan Team: 49 USD al mes"
+          ]
+        }
+      ],
+      "expected_relation": "keep_both",
+      "note": "parecidos pero distintos: no fusionar"
+    },
+    {
+      "id": "m20-037",
+      "category": "distinct",
+      "moments": [
+        {
+          "captured_at": "2026-06-01T08:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "I prefer dark mode in every editor.",
+          "expected_facts": [
+            "I prefer dark mode in every editor"
+          ]
+        },
+        {
+          "captured_at": "2026-06-02T08:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "I prefer tabs over spaces.",
+          "expected_facts": [
+            "I prefer tabs over spaces"
+          ]
+        }
+      ],
+      "expected_relation": "keep_both",
+      "note": "parecidos pero distintos: no fusionar"
+    },
+    {
+      "id": "m20-038",
+      "category": "distinct",
+      "moments": [
+        {
+          "captured_at": "2026-06-01T08:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "The staging database is hosted in Frankfurt.",
+          "expected_facts": [
+            "The staging database is hosted in Frankfurt"
+          ]
+        },
+        {
+          "captured_at": "2026-06-02T08:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "The staging cache is hosted in Frankfurt.",
+          "expected_facts": [
+            "The staging cache is hosted in Frankfurt"
+          ]
+        }
+      ],
+      "expected_relation": "keep_both",
+      "note": "parecidos pero distintos: no fusionar"
+    },
+    {
+      "id": "m20-039",
+      "category": "distinct",
+      "moments": [
+        {
+          "captured_at": "2026-06-01T08:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Lucía vive en Valencia.",
+          "expected_facts": [
+            "Lucía vive en Valencia"
+          ]
+        },
+        {
+          "captured_at": "2026-06-02T08:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Lucía trabaja en Valencia.",
+          "expected_facts": [
+            "Lucía trabaja en Valencia"
+          ]
+        }
+      ],
+      "expected_relation": "keep_both",
+      "note": "parecidos pero distintos: no fusionar"
+    },
+    {
+      "id": "m20-040",
+      "category": "distinct",
+      "moments": [
+        {
+          "captured_at": "2026-06-01T08:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Fluvia usa Supabase como backend.",
+          "expected_facts": [
+            "Fluvia usa Supabase como backend"
+          ]
+        },
+        {
+          "captured_at": "2026-06-02T08:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Fluvia usa Next.js como frontend.",
+          "expected_facts": [
+            "Fluvia usa Next.js como frontend"
+          ]
+        }
+      ],
+      "expected_relation": "keep_both",
+      "note": "parecidos pero distintos: no fusionar"
+    },
+    {
+      "id": "m20-041",
+      "category": "privacy_or_noise",
+      "moments": [
+        {
+          "captured_at": "2026-09-01T00:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "La contraseña del banco es [REDACTED].",
+          "expected_facts": []
+        }
+      ],
+      "expected_relation": "no_fact",
+      "note": "marcador de redacción"
+    },
+    {
+      "id": "m20-042",
+      "category": "privacy_or_noise",
+      "moments": [
+        {
+          "captured_at": "2026-09-01T00:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Mi tarjeta termina en ████.",
+          "expected_facts": []
+        }
+      ],
+      "expected_relation": "no_fact",
+      "note": "marcador de bloque"
+    },
+    {
+      "id": "m20-043",
+      "category": "privacy_or_noise",
+      "moments": [
+        {
+          "captured_at": "2026-09-01T00:00:00Z",
+          "redaction_state": "pending",
+          "local_only": false,
+          "text": "Lucía vive en Valencia.",
+          "expected_facts": []
+        }
+      ],
+      "expected_relation": "no_fact",
+      "note": "redacción pendiente: no se lee"
+    },
+    {
+      "id": "m20-044",
+      "category": "privacy_or_noise",
+      "moments": [
+        {
+          "captured_at": "2026-09-01T00:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "El token de la API es ********.",
+          "expected_facts": []
+        }
+      ],
+      "expected_relation": "no_fact",
+      "note": "token enmascarado"
+    },
+    {
+      "id": "m20-045",
+      "category": "privacy_or_noise",
+      "moments": [
+        {
+          "captured_at": "2026-09-01T00:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "¿Cuál es el precio del plan Pro?",
+          "expected_facts": []
+        }
+      ],
+      "expected_relation": "no_fact",
+      "note": "pregunta: no es hecho"
+    },
+    {
+      "id": "m20-046",
+      "category": "privacy_or_noise",
+      "moments": [
+        {
+          "captured_at": "2026-09-01T00:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Compara estos widgets con alternativas.",
+          "expected_facts": []
+        }
+      ],
+      "expected_relation": "no_fact",
+      "note": "imperativo: no es hecho"
+    },
+    {
+      "id": "m20-047",
+      "category": "privacy_or_noise",
+      "moments": [
+        {
+          "captured_at": "2026-09-01T00:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "Recuérdame llamar a Carlos mañana.",
+          "expected_facts": []
+        }
+      ],
+      "expected_relation": "no_fact",
+      "note": "petición: no es hecho"
+    },
+    {
+      "id": "m20-048",
+      "category": "privacy_or_noise",
+      "moments": [
+        {
+          "captured_at": "2026-09-01T00:00:00Z",
+          "redaction_state": "applied",
+          "local_only": true,
+          "text": "El presupuesto interno de Dona es 20.000 USD.",
+          "expected_facts": [
+            "El presupuesto interno de Dona es 20.000 USD"
+          ]
+        }
+      ],
+      "expected_relation": "local_only_fact",
+      "note": "local_only: se extrae pero queda marcado local_only"
+    },
+    {
+      "id": "m20-049",
+      "category": "privacy_or_noise",
+      "moments": [
+        {
+          "captured_at": "2026-09-01T00:00:00Z",
+          "redaction_state": "applied",
+          "local_only": false,
+          "text": "ok gracias",
+          "expected_facts": []
+        }
+      ],
+      "expected_relation": "no_fact",
+      "note": "ruido corto"
+    },
+    {
+      "id": "m20-050",
+      "category": "privacy_or_noise",
+      "moments": [
+        {
+          "captured_at": "2026-09-01T00:00:00Z",
+          "redaction_state": "pending",
+          "local_only": false,
+          "text": "Dona tiene 3 clientes piloto.",
+          "expected_facts": []
+        }
+      ],
+      "expected_relation": "no_fact",
+      "note": "redacción pendiente: no se lee"
+    }
+  ]
+}
