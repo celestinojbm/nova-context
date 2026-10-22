@@ -3,7 +3,7 @@
 > Estado: **borrador para discusión**. Solo documentación; no cambia código, esquema ni despliegue.
 > Origen: notas de vigilancia de competidores del 22-oct-2026. Las afirmaciones sobre competidores se
 > marcan **(por verificar)**: no se confirmaron contra fuentes primarias en este borrador.
-> Prioridad: detrás de la demo M19 (bucle básico local). Nada aquí entra antes de cerrar M19.
+> Prioridad: **en paralelo con M19** (decisión tomada, ver §5). Sin gasto ni despliegue.
 
 ## 0. Punto de partida en el código actual (verificado en `main`)
 
@@ -65,12 +65,14 @@ Nada se borra: un duplicado pasa a `status='merged'` con `canonical_id`; un hech
 ### 1.3 Algoritmo (cola nueva `memory-consolidation`, job repetible BullMQ nocturno por usuario)
 1. **Selección**: ítems `active` creados/modificados desde la última corrida, agrupados por `user_id` y `namespace_id`.
 2. **Duplicados exactos**: mismo `content_hash` → el más antiguo es canónico; el resto `merged`; se unen fuentes.
-3. **Casi duplicados**: candidatos por FTS (`ts_rank`) y, si hay vectores del **mismo `model`**, coseno ≥ umbral
-   (p. ej. 0,92, a calibrar con §3). Sin embeddings: trigramas/Jaccard sobre texto normalizado.
+3. **Casi duplicados** (decidido: **primero texto**): candidatos por FTS (`ts_rank`) + trigramas (`pg_trgm`,
+   `similarity()` ≥ umbral a calibrar con §3). Fase posterior: embeddings locales del **mismo `model`**, coseno ≥ umbral.
 4. **Contradicciones**: entre pares del mismo sujeto (misma entidad vía `entity_mentions`) con similitud media:
    reglas (negación, valores numéricos/fechas distintos para el mismo atributo); opcional NLI local.
-   Se registra en `memory_conflicts`; el más reciente por `valid_from` queda `active`, el anterior `superseded`
-   (`supersedes_id`). Si `author='user'` en cualquiera de los dos → no se resuelve automáticamente (`contested`).
+   **Política decidida: `newer_wins` automático.** Se registra en `memory_conflicts` con `resolution='newer_wins'`;
+   el más reciente por `valid_from` queda `active` y el anterior pasa a `superseded` (`supersedes_id`), **sin borrarse**.
+   Es reversible: `POST /v1/memory/:id/restore` o revertir por `run_id` reactiva el anterior y marca el conflicto
+   `user_resolved`. Excepción: si `author='user'` en cualquiera de los dos → `contested` (no se toca lo del usuario).
 5. **Reporte**: conteos en `memory_consolidation_runs`; por defecto `dry-run` hasta validar en alpha.
 Idempotente (bloqueo por usuario con `pg_advisory_xact_lock`), por lotes, sin LLM por defecto.
 
@@ -99,8 +101,8 @@ CREATE TABLE memory_namespaces (
   UNIQUE (user_id, slug));
 ```
 - Cada usuario tiene `default`; cada `project` obtiene un namespace `project` (backfill en la migración).
-- Namespaces `assistant`: memoria escrita/leída por una IA conectada por API; los tokens de API se limitan
-  a una lista de namespaces (lectura/escritura). `local_only` del proyecto se hereda (no se exporta a la nube).
+- Namespaces `assistant`: memoria escrita/leída por una IA conectada por API, con **tokens por namespace desde
+  el inicio** (decisión tomada; ver §2.4). `local_only` del proyecto se hereda (no se exporta a la nube).
 - La consolidación (§1) nunca fusiona entre namespaces.
 
 ### 2.2 API (prefijo `/v1`, mismo esquema de auth que hoy)
@@ -109,6 +111,34 @@ CREATE TABLE memory_namespaces (
 - `POST /v1/namespaces/:slug/memory` (author=`assistant`/`user`), `GET /v1/memory/:id/history` (cadena `supersedes`).
 - `GET /v1/export/namespace/:slug.md` y `GET /v1/export/account?format=markdown` (zip de un `.md` por namespace).
   Se registran en `audit_log` igual que el export JSON actual.
+
+### 2.4 Tokens por namespace para asistentes
+```sql
+CREATE TABLE namespace_tokens (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  label text NOT NULL,                       -- 'claude-desktop', 'grok-bot'
+  token_hash text NOT NULL UNIQUE,           -- sha256; el token en claro solo se muestra al crearlo
+  token_prefix text NOT NULL,                -- 'nvx_ab12' para identificarlo en la UI/logs
+  expires_at timestamptz,                    -- opcional; recomendado 90 días
+  revoked_at timestamptz, last_used_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now());
+
+CREATE TABLE namespace_token_grants (
+  token_id uuid REFERENCES namespace_tokens(id) ON DELETE CASCADE,
+  namespace_id uuid REFERENCES memory_namespaces(id) ON DELETE CASCADE,
+  scopes text[] NOT NULL,                    -- subconjunto de {memory:read, memory:write, memory:export}
+  PRIMARY KEY (token_id, namespace_id));
+```
+- **Scopes**: `memory:read` (buscar/listar), `memory:write` (crear hechos con `author='assistant'`; nunca editar
+  ni resolver hechos `author='user'`), `memory:export` (Markdown del namespace). Sin scope de cuenta: un token de
+  namespace no puede tocar momentos, proyectos ni otros namespaces (404, no 403, para no filtrar existencia).
+- **Emisión**: solo el usuario autenticado (`POST /v1/namespace-tokens`), eligiendo namespaces y scopes.
+- **Revocación**: `DELETE /v1/namespace-tokens/:id` fija `revoked_at` con efecto inmediato (la validación consulta
+  la BD/caché con TTL ≤ 60 s); borrar un namespace revoca sus grants en cascada; rotación = crear nuevo + revocar.
+- **Auditoría**: cada uso escribe en `audit_log` (`actor='token:<prefix>'`, namespace, acción, conteo de ítems,
+  sin contenido); emisión y revocación también se auditan. `last_used_at` visible en la UI.
+- Límite de tasa por token; los namespaces `local_only` rechazan `memory:export` hacia destinos en la nube.
 
 ### 2.3 Formato Markdown de exportación
 ```markdown
@@ -140,8 +170,9 @@ Reglas: sin medios ni texto sin redactar; ids en comentarios HTML para reimporta
 | Madurez | Publicado 2024 (ICLR 2025), datos abiertos **(por verificar licencia)** | Anunciado 2026 **(por verificar contenido, licencia y si exige LLM juez de pago)** |
 | Cubre | extracción, razonamiento multisesión y temporal, actualización de conocimiento, abstención **(por verificar)** | **(por verificar)** |
 
-**Propuesta:** empezar con **LongMemEval** (subconjunto pequeño), porque sus categorías de
-"actualización de conocimiento" y "razonamiento temporal" miden justo §1. Revisar FrontierMemory cuando se verifique.
+**Decidido:** **subconjunto local de LongMemEval + 50 casos sintéticos propios, sin juez de pago**. Sus categorías de
+"actualización de conocimiento" y "razonamiento temporal" miden justo §1. FrontierMemory se añade en **M20d solo si es
+gratuito y su licencia lo permite**; si exige un juez LLM de pago, queda fuera.
 
 ### 3.2 Adaptación
 - Convertir cada sesión de chat del benchmark en `context_moments` sintéticos (`source_mode='instant_capture'`,
@@ -158,19 +189,28 @@ Reglas: sin medios ni texto sin redactar; ids en comentarios HTML para reimporta
 
 ### 3.4 Ejecución sin gasto
 - Todo local: Postgres+pgvector en Docker, sin `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` (el worker ya degrada a heurísticas).
-- Embeddings opcionales con un modelo local (p. ej. vía Ollama/`transformers.js`) — requiere ampliar
-  `@nova/model-router` y una columna `model` distinta; dimensión ≠ 1536 implica otra tabla/índice **(decisión)**.
+- Embeddings locales (fase posterior, p. ej. vía Ollama/`transformers.js`): requiere ampliar `@nova/model-router`
+  y un valor `model` distinto; si la dimensión ≠ 1536 van en **tabla o índice aparte** (p. ej. `embeddings_local`),
+  sin mezclar con `vector(1536)`.
 - Script `pnpm eval:memory` fuera de la CI por defecto (CI solo corre el set propio de 50 casos).
 
-## 4. Fases sugeridas
-1. M20a: extractor de hechos → `memory_items` + `memory_item_sources` (detrás de flag).
-2. M20b: namespaces + export Markdown (valor visible, bajo riesgo).
-3. M20c: consolidación en dry-run + set propio de evaluación.
-4. M20d: LongMemEval local; activar `apply` si las métricas lo justifican.
+## 4. Fases (ajustadas a las decisiones)
+M20 avanza **en paralelo con M19**; cada fase en su PR, sin gasto ni despliegue.
+1. **M20a**: extractor de hechos → `memory_items` + `memory_item_sources` (detrás de flag) + set de 50 casos sintéticos.
+2. **M20b**: namespaces + tokens por namespace (scopes, revocación, auditoría) + export Markdown.
+3. **M20c**: consolidación con FTS/trigramas; `newer_wins` reversible; dry-run por defecto; medir con los 50 casos.
+4. **M20d**: subconjunto local de LongMemEval (sin juez de pago); FrontierMemory solo si es gratis y la licencia lo
+   permite; activar `apply` si las métricas lo justifican.
+5. **M20e** (posterior): embeddings locales en tabla/índice aparte si cambia la dimensión; comparar contra M20c.
 
-## 5. Decisiones abiertas
-- ¿Entra M20 tras la demo M19 o espera a Dona/Fluvia?
-- ¿Embeddings locales (otra dimensión) o FTS/trigramas sin vectores para la versión sin gasto?
-- Política de conflicto por defecto: `newer_wins` automático o siempre `contested` hasta revisión del usuario.
-- ¿Namespaces de asistente con tokens por namespace desde el inicio o solo por proyecto?
-- LongMemEval vs. FrontierMemory tras verificar licencia y si requieren juez LLM.
+## 5. Decisiones tomadas (Celestino, 22-oct-2026)
+1. **Calendario**: M20 corre en paralelo con M19.
+2. **Búsqueda**: primero texto (FTS + trigramas); embeddings locales después, en tabla o índice aparte si cambia la dimensión.
+3. **Conflictos**: gana automáticamente el hecho más nuevo; el anterior queda `superseded` (reversible). Hechos del usuario → `contested`.
+4. **Acceso de asistentes**: tokens por namespace desde el inicio, con scopes, revocación y auditoría (§2.4).
+5. **Evaluación**: subconjunto local de LongMemEval + 50 casos sintéticos, sin juez de pago; FrontierMemory en M20d
+   solo si es gratis y su licencia lo permite.
+
+## 6. Pendiente
+- Umbrales de similitud (trigramas/coseno): se calibran con §3.
+- Verificar licencia de LongMemEval y de FrontierMemory antes de descargar datos.
