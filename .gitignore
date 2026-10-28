@@ -17,3 +17,6 @@ artifacts/
 .DS_Store
 *.traineddata
 var/
+
+# M20d: LongMemEval (downloaded at runtime, never committed)
+.cache/
