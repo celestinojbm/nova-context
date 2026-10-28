@@ -10,7 +10,7 @@ function Field({ className, ...props }: React.ComponentProps<"div">) {
 }
 
 function FieldLabel({ className, ...props }: React.ComponentProps<"label">) {
-  return <label className={cn("text-xl font-medium text-foreground", className)} {...props} />;
+  return <label className={cn("text-lg font-medium text-foreground", className)} {...props} />;
 }
 
 function FieldDescription({ className, ...props }: React.ComponentProps<"p">) {

@@ -58,7 +58,7 @@ export default function HomePage() {
         </div>
 
         <div className="hero-foot">
-          <p className="max-w-3xl text-[1.375rem] leading-relaxed text-[#A1A1A1] md:text-[1.75rem]">
+          <p className="max-w-3xl text-[1.125rem] leading-relaxed text-[#A1A1A1] md:text-[1.25rem]">
             Nova Context no es un chat ni un cuaderno. Es la capa debajo de los asistentes: capturas lo que estás viendo, dices qué
             significa para ti y qué quieres hacer con ello, y eso queda como un momento tuyo. Lo ves antes de que se guarde, y nada
             sale hacia fuera si tú no lo confirmas.
@@ -78,15 +78,15 @@ export default function HomePage() {
           <CaptureSlot />
           <div className="grid gap-8 md:grid-cols-3">
             <article className="flex flex-col gap-2">
-              <h3 className="text-[1.75rem] leading-tight font-semibold">Ver</h3>
+              <h3 className="text-2xl leading-tight font-semibold">Ver</h3>
               <p className="text-[#A1A1A1]">El cristal del banco. Lo que hay en pantalla, a la vista, antes de que exista un recuerdo.</p>
             </article>
             <article className="flex flex-col gap-2">
-              <h3 className="text-[1.75rem] leading-tight font-semibold">Decir</h3>
+              <h3 className="text-2xl leading-tight font-semibold">Decir</h3>
               <p className="text-[#A1A1A1]">El émbolo. La intención la dices tú. Nova puede proponerte un vínculo; no supone para qué lo quieres.</p>
             </article>
             <article className="flex flex-col gap-2">
-              <h3 className="text-[1.75rem] leading-tight font-semibold">Confirmar</h3>
+              <h3 className="text-2xl leading-tight font-semibold">Confirmar</h3>
               <p className="text-[#A1A1A1]">El perno y el sello. Sin ese gesto la ficha no entra en la bandeja del proyecto.</p>
             </article>
           </div>
