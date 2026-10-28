@@ -56,3 +56,11 @@ describe("M20c calibration on synthetic cases", () => {
     expect(rows.length).toBe(24);
   });
 });
+
+describe("M20e: embedding cosine only adds candidates", () => {
+  it("low-trigram pair above the embedding threshold → conflict (embedding_neighbor)", () => {
+    expect(classifyPair("Drives a Mazda", "My new car is a Honda", THRESHOLDS, undefined, 0.8)).toMatchObject({ relation: "conflict", reason: "embedding_neighbor" });
+    expect(classifyPair("Drives a Mazda", "My new car is a Honda", THRESHOLDS, undefined, 0.3).relation).toBe("keep");
+    expect(classifyPair("Drives a Mazda", "My new car is a Honda").relation).toBe("keep");
+  });
+});
