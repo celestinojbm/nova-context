@@ -130,23 +130,34 @@ export function evalConsolidation(
 
 /** Boolean flags: --download (M20d), --pg (M20, Postgres FTS ranking), --embeddings (M20e, local model). */
 const EVAL_FLAGS = new Set(["--download", "--pg", "--embeddings"]);
-export interface EvalArgs { n: number; download: boolean; pg: boolean; embeddings: boolean }
+export interface EvalArgs { n: number; download: boolean; pg: boolean; embeddings: boolean; model?: string }
 
-/** CLI args for `pnpm eval:longmemeval`. Strict: a bad `--n` or unknown flag is an error, not a silent default. */
+/** CLI args for `pnpm eval:longmemeval`. Strict: a bad `--n`/`--model` or unknown flag is an error, not a silent default. */
 export function parseEvalArgs(argv: string[]): EvalArgs {
   const args = argv.filter((a) => a !== "--");
   let n = 100;
+  let model: string | undefined;
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (EVAL_FLAGS.has(a)) continue;
+    // M20g: `--model <id>` picks the local embedding model (only with --embeddings).
+    const mm = /^--model(?:=(.*))?$/.exec(a);
+    if (mm) {
+      const raw = mm[1] ?? args[++i];
+      if (!raw || raw.startsWith("--")) throw new Error(`--model necesita un id de modelo (recibido: ${raw ?? "nada"})`);
+      model = raw;
+      continue;
+    }
     const m = /^--n(?:=(.*))?$/.exec(a);
-    if (!m) throw new Error(`argumento desconocido: ${a} (uso: [--n 100] [--download] [--pg] [--embeddings])`);
+    if (!m) throw new Error(`argumento desconocido: ${a} (uso: [--n 100] [--download] [--pg] [--embeddings [--model id]])`);
     const raw = m[1] ?? args[++i];
     const v = Number(raw);
     if (!Number.isInteger(v) || v < 1) throw new Error(`--n debe ser un entero >= 1 (recibido: ${raw ?? "nada"})`);
     n = v;
   }
-  return { n, download: args.includes("--download"), pg: args.includes("--pg"), embeddings: args.includes("--embeddings") };
+  const embeddings = args.includes("--embeddings");
+  if (model !== undefined && !embeddings) throw new Error("--model solo tiene sentido con --embeddings");
+  return { n, download: args.includes("--download"), pg: args.includes("--pg"), embeddings, ...(model !== undefined ? { model } : {}) };
 }
 
 /** Deterministic subset without abstention questions: every k-th question, at most n. */
