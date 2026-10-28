@@ -22,8 +22,17 @@ const CACHE = resolve(
   "../../../../.cache/models",
 );
 
+/** e5 role prefix: "query" (symmetric, M20e default) or "passage". */
+export type E5Role = "query" | "passage";
+
+/** e5 models require "query: " / "passage: " prefixes; other models get raw text. */
+export function prefixFor(model: string, texts: string[], role: E5Role = "query"): string[] {
+  return model.includes("e5") ? texts.map((x) => `${role}: ${x}`) : texts;
+}
+
 export async function localEmbedder(
   model = EMBEDDING_MODEL,
+  role: E5Role = "query",
 ): Promise<Embedder> {
   if (process.env.CI)
     throw new Error("local embeddings are disabled in CI (model download)");
@@ -38,9 +47,7 @@ export async function localEmbedder(
       for (let i = 0; i < texts.length; i += 32) {
         // e5 expects a prefix; "query: " is the symmetric-similarity form.
         const t = await fe(
-          texts
-            .slice(i, i + 32)
-            .map((x) => (model.includes("e5") ? `query: ${x}` : x)),
+          prefixFor(model, texts.slice(i, i + 32), role),
           { pooling: "mean", normalize: true },
         );
         const data = t.data as Float32Array;
