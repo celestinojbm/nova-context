@@ -80,6 +80,14 @@ describe.skipIf(!databaseUrl)("M20a memory facts (integration)", () => {
     await db.query("DELETE FROM context_moments WHERE id = $1", [id]);
   });
 
+  it("skipped redaction: PII never reaches memory_items", async () => {
+    const id = await moment("El correo de Ana es ana@example.com. Ana vive en Quito.", "skipped");
+    await writeMomentFacts(db, id);
+    const { rows } = await db.query("SELECT content FROM memory_items WHERE moment_id = $1", [id]);
+    expect(rows.map((r) => r.content)).toEqual(["Ana vive en Quito"]);
+    await db.query("DELETE FROM context_moments WHERE id = $1", [id]);
+  });
+
   it("never reads moments whose redaction is pending", async () => {
     const id = await moment("Lucía vive en Valencia.", "pending");
     expect(await writeMomentFacts(db, id)).toMatchObject({ written: 0, skipped: "redaction_pending" });
