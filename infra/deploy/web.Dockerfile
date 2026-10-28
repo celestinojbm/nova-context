@@ -1,6 +1,6 @@
 # Nova web app — build from the repo root:
 #   docker build -f infra/deploy/web.Dockerfile -t nova-web .
-FROM node:22-alpine
+FROM node:22.23.4-alpine
 RUN corepack enable
 WORKDIR /app
 COPY . .
