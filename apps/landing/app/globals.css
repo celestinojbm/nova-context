@@ -51,6 +51,8 @@ body {
   background: #000000;
   color: var(--foreground);
   font-family: var(--font-sans);
+  font-size: 1.25rem;
+  line-height: 1.6;
 }
 
 /* Figuras anatomy en la misma tinta. El kit ya es gris; aquí solo se
@@ -68,6 +70,11 @@ body {
   --anatomy-green: #a1a1a1;
   --anatomy-blue: #8f8f8f;
   --anatomy-mono: var(--font-geist-mono), ui-monospace, monospace;
+}
+
+.iso-legend {
+  font-size: 1.125rem;
+  line-height: 1.55;
 }
 
 .hero {
@@ -93,7 +100,7 @@ body {
   position: relative;
   z-index: 1;
   height: min(480px, 70vw);
-  margin-top: -4.5rem;
+  margin-top: -1.5rem;
 }
 
 .hero-foot {
@@ -159,18 +166,27 @@ body {
   background: #0a0a0a;
   color: #a1a1a1;
   font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: 12px;
-  padding: 6px 10px;
+  font-size: 1rem;
+  line-height: 1.2;
+  padding: 8px 14px;
   border-radius: 6px;
 }
 
 h1.hero-title {
   font-weight: 600;
   letter-spacing: -0.045em;
-  line-height: 1;
-  font-size: clamp(34px, 5vw, 72px);
+  line-height: 0.98;
+  font-size: clamp(3rem, 8vw, 8rem);
   color: #ededed;
+  text-wrap: balance;
   text-shadow: 0 0 40px #000;
+}
+
+.section-title {
+  font-size: clamp(2rem, 4.5vw, 3.5rem);
+  font-weight: 600;
+  letter-spacing: -0.045em;
+  line-height: 1.08;
 }
 
 @media (max-width: 720px) {
@@ -193,9 +209,8 @@ h1.hero-title {
     padding-top: 0.25rem;
     padding-bottom: 2.75rem;
   }
-  h1.hero-title {
-    font-size: 34px;
-    line-height: 1.02;
+  .hero-tag {
+    font-size: 0.875rem;
   }
 }
 

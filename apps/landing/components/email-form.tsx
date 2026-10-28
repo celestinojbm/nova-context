@@ -14,7 +14,7 @@ export function EmailForm() {
   const invalid = state.status === "invalid";
 
   return (
-    <form action={action} noValidate className="w-full max-w-md text-left">
+    <form action={action} noValidate className="w-full max-w-xl text-left">
       <FieldGroup>
         <Field className="relative" data-invalid={invalid || undefined}>
           <FieldLabel htmlFor={id}>Correo</FieldLabel>
@@ -36,14 +36,14 @@ export function EmailForm() {
           </div>
           <FieldDescription id={`${id}-help`}>Escríbenos. No abre una cuenta y no pasa por un pago.</FieldDescription>
           {state.status === "ok" ? (
-            <p role="status" className="text-sm text-foreground">
+            <p role="status" className="text-lg text-foreground">
               {state.message}
             </p>
           ) : state.message ? (
             <FieldError>{state.message}</FieldError>
           ) : null}
         </Field>
-        <Button type="submit" disabled={pending}>
+        <Button type="submit" disabled={pending} className="w-full sm:w-auto">
           Enviar correo
         </Button>
       </FieldGroup>

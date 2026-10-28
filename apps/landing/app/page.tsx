@@ -7,11 +7,11 @@ export default function HomePage() {
   return (
     <>
       <header className="sticky top-0 z-20 border-b border-white/10 bg-black/80 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-10 gap-y-3 px-5 py-4 md:h-[76px] md:px-16">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-10 gap-y-3 px-5 py-4 md:min-h-[76px] md:px-16">
           <a href="#inicio" aria-label="nova context" className="text-white">
             <LogoLockup />
           </a>
-          <nav className="flex flex-wrap gap-x-8 gap-y-1 text-sm text-[#A1A1A1]">
+          <nav className="flex max-w-full flex-wrap gap-x-8 gap-y-2 text-lg text-[#A1A1A1]">
             <a href="#como-funciona" className="hover:text-[#EDEDED]">
               Cómo funciona
             </a>
@@ -39,8 +39,8 @@ export default function HomePage() {
         </svg>
 
         <div className="hero-top">
-          <p className="font-mono text-[13px] tracking-[0.08em] text-[#A1A1A1] uppercase">Infraestructura de contexto humano</p>
-          <h1 className="hero-title mx-auto mt-5 max-w-[1200px]">
+          <p className="font-mono text-base tracking-[0.08em] text-[#A1A1A1] uppercase md:text-lg">Infraestructura de contexto humano</p>
+          <h1 className="hero-title mx-auto mt-5 w-full max-w-[1200px]">
             Lo que ves, dicho con tus palabras,
             <span className="mt-2 block text-[#8F8F8F]">queda donde pertenece.</span>
           </h1>
@@ -58,7 +58,7 @@ export default function HomePage() {
         </div>
 
         <div className="hero-foot">
-          <p className="max-w-xl text-lg leading-relaxed text-[#A1A1A1] md:text-xl">
+          <p className="max-w-3xl text-[1.375rem] leading-relaxed text-[#A1A1A1] md:text-[1.75rem]">
             Nova Context no es un chat ni un cuaderno. Es la capa debajo de los asistentes: capturas lo que estás viendo, dices qué
             significa para ti y qué quieres hacer con ello, y eso queda como un momento tuyo. Lo ves antes de que se guarde, y nada
             sale hacia fuera si tú no lo confirmas.
@@ -69,7 +69,7 @@ export default function HomePage() {
 
       <main className="mx-auto flex max-w-5xl flex-col gap-20 bg-black px-5 py-20">
         <section id="como-funciona" className="flex flex-col gap-6">
-          <h2 className="text-2xl font-semibold tracking-[-0.045em]">Un gesto, y el momento todavía no está guardado</h2>
+          <h2 className="section-title">Un gesto, y el momento todavía no está guardado</h2>
           <p className="max-w-2xl text-[#A1A1A1]">
             Nova permanece invisible hasta que lo invocas. Te enseña lo que ve antes de almacenar nada. Tú hablas, y tus palabras se
             conservan tal cual: la interpretación se puede corregir, lo que dijiste no se reescribe. Nada entra en un proyecto hasta
@@ -78,22 +78,22 @@ export default function HomePage() {
           <CaptureSlot />
           <div className="grid gap-8 md:grid-cols-3">
             <article className="flex flex-col gap-2">
-              <h3 className="font-medium">Ver</h3>
-              <p className="text-sm text-[#A1A1A1]">El cristal del banco. Lo que hay en pantalla, a la vista, antes de que exista un recuerdo.</p>
+              <h3 className="text-[1.75rem] leading-tight font-semibold">Ver</h3>
+              <p className="text-[#A1A1A1]">El cristal del banco. Lo que hay en pantalla, a la vista, antes de que exista un recuerdo.</p>
             </article>
             <article className="flex flex-col gap-2">
-              <h3 className="font-medium">Decir</h3>
-              <p className="text-sm text-[#A1A1A1]">El émbolo. La intención la dices tú. Nova puede proponerte un vínculo; no supone para qué lo quieres.</p>
+              <h3 className="text-[1.75rem] leading-tight font-semibold">Decir</h3>
+              <p className="text-[#A1A1A1]">El émbolo. La intención la dices tú. Nova puede proponerte un vínculo; no supone para qué lo quieres.</p>
             </article>
             <article className="flex flex-col gap-2">
-              <h3 className="font-medium">Confirmar</h3>
-              <p className="text-sm text-[#A1A1A1]">El perno y el sello. Sin ese gesto la ficha no entra en la bandeja del proyecto.</p>
+              <h3 className="text-[1.75rem] leading-tight font-semibold">Confirmar</h3>
+              <p className="text-[#A1A1A1]">El perno y el sello. Sin ese gesto la ficha no entra en la bandeja del proyecto.</p>
             </article>
           </div>
         </section>
 
         <section id="modos" className="flex max-w-2xl flex-col gap-4">
-          <h2 className="text-2xl font-semibold tracking-[-0.045em]">Dos modos, y ninguno a escondidas</h2>
+          <h2 className="section-title">Dos modos, y ninguno a escondidas</h2>
           <p className="text-[#A1A1A1]">
             En la captura instantánea invocas, miras lo que Nova ha tomado, dices la frase y confirmas. Sigues en lo que estabas
             haciendo.
@@ -109,7 +109,7 @@ export default function HomePage() {
         </section>
 
         <section id="aprobacion" className="flex flex-col gap-6">
-          <h2 className="text-2xl font-semibold tracking-[-0.045em]">Nada sale sin tu llave</h2>
+          <h2 className="section-title">Nada sale sin tu llave</h2>
           <p className="max-w-2xl text-[#A1A1A1]">
             Dentro de Nova, ordenar un momento o preparar algo reversible puede seguir su curso. En cuanto algo va a salir — una
             página, un mensaje, un encargo hacia otra herramienta — ves el contenido y decides. La caja es esa regla: el cajón
@@ -119,7 +119,7 @@ export default function HomePage() {
         </section>
 
         <section id="que-es" className="flex max-w-2xl flex-col gap-4">
-          <h2 className="text-2xl font-semibold tracking-[-0.045em]">Infraestructura, no otro asistente</h2>
+          <h2 className="section-title">Infraestructura, no otro asistente</h2>
           <p className="text-[#A1A1A1]">
             Nova es el sustrato que captura, recuerda y propone acciones, y que un asistente puede usar con tu permiso. La aplicación
             es un cliente de referencia. La memoria es tuya: puedes exportarla y puedes borrarla. Tu contexto no es el negocio.
@@ -131,7 +131,7 @@ export default function HomePage() {
         </section>
 
         <section className="flex max-w-2xl flex-col gap-4 border-t border-white/10 pt-10">
-          <h2 className="text-2xl font-semibold tracking-[-0.045em]">Escríbenos</h2>
+          <h2 className="section-title">Escríbenos</h2>
           <p className="text-[#A1A1A1]">Si quieres hablar del producto, deja tu correo. Es el único gesto que pedimos desde aquí.</p>
           <EmailForm />
         </section>
