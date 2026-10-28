@@ -62,15 +62,31 @@ const prf = (r: ReturnType<typeof evalConsolidation>) => {
 };
 console.log(`trigramas (THRESHOLDS): ${prf(evalConsolidation(pairs, { ...THRESHOLDS, embedding: undefined }))}`);
 
-// `--embeddings`: M20e, local all-MiniLM-L6-v2 (downloaded once into .cache/models).
+// `--embeddings [--model id]`: M20e/M20f local models (downloaded once into
+// .cache/models). Thresholds for e5 come from the Spanish set (M20f) and are
+// applied here out of sample; LongMemEval's own best-F1 is shown for reference.
 if (args.includes("--embeddings")) {
-  const { localEmbedder, cosine } = await import("../memory/embeddings.js");
-  const e = await localEmbedder();
+  const { localEmbedder, cosine, EMBEDDING_MODEL } = await import("../memory/embeddings.js");
+  const { prAt, sweep } = await import("./multilingual-metrics.js");
+  const mi = args.indexOf("--model");
+  const model = mi >= 0 ? args[mi + 1]! : EMBEDDING_MODEL;
+  const e = await localEmbedder(model, "query");
   const texts = [...new Set([...pairs.pos, ...pairs.neg].flat())];
   const vecs = await e.embed(texts);
   const v = new Map(texts.map((x, i) => [x, vecs[i]!]));
   const cos = (a: string, b: string) => cosine(v.get(a)!, v.get(b)!);
-  for (const emb of [0.45, 0.5, 0.55, 0.6, 0.65])
+  const grid = model.includes("e5") ? [0.85, 0.875, 0.9, 0.914, 0.93] : [0.45, 0.5, 0.55, 0.6, 0.65];
+  console.log(`modelo: ${model}`);
+  for (const emb of grid)
     console.log(`trigramas + embeddings ≥${emb}: ${prf(evalConsolidation(pairs, { ...THRESHOLDS, embedding: emb }, cos))}`);
+  const scored = [
+    ...pairs.pos.map(([a, b]) => ({ label: 1 as const, score: cos(a, b) })),
+    ...pairs.neg.map(([a, b]) => ({ label: 0 as const, score: cos(a, b) })),
+  ];
+  const f = (r: ReturnType<typeof prAt>) => `t=${r.threshold.toFixed(3)} P=${pct(r.precision)} R=${pct(r.recall)} F1=${r.f1.toFixed(3)} (tp ${r.tp}, fp ${r.fp}, fn ${r.fn})`;
+  const sw = sweep(scored);
+  console.log(`solo coseno, mejor F1 en LME: ${f(sw.bestF1)}`);
+  console.log(`solo coseno, 0 FP en LME:     ${f(sw.zeroFp)}`);
+  for (const t of grid) console.log(`solo coseno ≥${t}: ${f(prAt(scored, t))}`);
 }
 console.log("dry-run: no se escribió nada en la base de datos.");
