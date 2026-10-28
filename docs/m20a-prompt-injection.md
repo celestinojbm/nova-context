@@ -21,6 +21,5 @@ u otro consumidor pase hechos a un LLM, actuar como inyección persistente.
    `instruction_like = true` no deben resolver conflictos automáticamente.
 
 ## Pendiente
-- El filtro de PII para `skipped` (emails, teléfonos, tarjetas) no está en este cambio; necesita decisión
-  (reutilizar el pipeline de redacción o tratar `skipped` como "sin datos sensibles").
+- Filtro de PII para `skipped`: `filterSkippedPii()` reutiliza los detectores de captura (email, teléfono, tarjeta con Luhn, api_key, ssn, iban); las frases con PII se descartan.
 - La heurística es una defensa en profundidad, no una garantía.
