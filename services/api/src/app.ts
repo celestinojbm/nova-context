@@ -19,6 +19,7 @@ import {
   type EnrichmentResult,
   type ListContextMomentsResponse,
   type ParsedIntent,
+  INGEST_TTL_MS,
 } from "@nova/schema";
 import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -36,6 +37,7 @@ import { MediaService } from "./media/media-service.js";
 import { storeFromEnv, type ObjectStore } from "./media/object-store.js";
 import { registerAccountRoutes } from "./routes-account.js";
 import { registerFeedbackRoutes } from "./routes-feedback.js";
+import { registerIngestStatusRoutes } from "./routes-ingest-status.js";
 import { registerOpsRoutes } from "./routes-ops.js";
 import { registerMediaRoutes } from "./routes-media.js";
 import { TesseractOcrEngine } from "./ocr.js";
@@ -361,6 +363,7 @@ export async function buildApp({
   });
   // M13: private-alpha feedback intake.
   registerFeedbackRoutes(app, { db, analytics, rateLimiter });
+  registerIngestStatusRoutes(app, db);
 
   app.get("/healthz", async () => {
     await db.query("SELECT 1");
@@ -465,10 +468,12 @@ export async function buildApp({
       url: (body.source_meta["url"] as string | undefined) ?? null,
     });
 
+    const enrichmentStatus = enrichmentQueue ? "pending" : "skipped";
+    const ingestExpiresAt = enrichmentQueue ? new Date(Date.now() + INGEST_TTL_MS) : null;
     const { rows } = await db.query<MomentRow>(
       `INSERT INTO context_moments
-         (user_id, project_id, source_mode, source_meta, payload, extracted_text, intent_text, intent_parsed, enrichment_status, redaction_state, image_redaction, ocr_text)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         (user_id, project_id, source_mode, source_meta, payload, extracted_text, intent_text, intent_parsed, enrichment_status, redaction_state, image_redaction, ocr_text, enrichment_wait_reason, enrichment_expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        RETURNING ${MOMENT_COLUMNS}`,
       [
         userId,
@@ -479,10 +484,12 @@ export async function buildApp({
         body.extracted_text ?? null,
         body.intent_text ?? null,
         intent ? JSON.stringify(intent) : null,
-        enrichmentQueue ? "pending" : "skipped",
+        enrichmentStatus,
         redactionOn ? "applied" : "skipped",
         JSON.stringify(imageReport),
         imageOutcome.ocrText,
+        enrichmentQueue ? "queued" : null,
+        ingestExpiresAt,
       ],
     );
     const moment = rowToMoment(rows[0]!);
@@ -516,7 +523,7 @@ export async function buildApp({
       } catch (err) {
         req.log.warn({ err }, "enrichment enqueue failed; marking skipped");
         await db.query(
-          "UPDATE context_moments SET enrichment_status = 'skipped' WHERE id = $1",
+          "UPDATE context_moments SET enrichment_status = 'skipped', enrichment_wait_reason = NULL, enrichment_expires_at = NULL WHERE id = $1",
           [moment.id],
         );
         moment.enrichment_status = "skipped";
