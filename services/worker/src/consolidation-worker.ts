@@ -2,6 +2,8 @@ import { Queue, Worker, type Job } from "bullmq";
 import pg from "pg";
 import { log } from "./log.js";
 import type { WorkerEnv } from "./env.js";
+import { THRESHOLDS } from "./memory/consolidation-rules.js";
+import { localEmbedder, type Embedder } from "./memory/embeddings.js";
 import { revertConsolidationRun, runConsolidation, type ConsolidationMode } from "./memory/consolidate.js";
 
 /** M20c: `memory-consolidation` queue. Mode comes from NOVA_CONSOLIDATION_MODE (default dry-run). */
@@ -15,6 +17,8 @@ export function startConsolidationWorker(env: WorkerEnv, pool?: pg.Pool): { work
   const db = pool ?? new pg.Pool({ connectionString: env.DATABASE_URL, max: 2 });
   const mode: ConsolidationMode = env.NOVA_CONSOLIDATION_MODE;
   const connection = { url: env.REDIS_URL };
+  let embedder: Promise<Embedder> | undefined;
+  const getEmbedder = () => (env.NOVA_MEMORY_EMBEDDINGS === "local" ? (embedder ??= localEmbedder()) : undefined);
   const worker = new Worker<ConsolidationJobData>(
     env.NOVA_CONSOLIDATION_QUEUE,
     async (job: Job<ConsolidationJobData>) => {
@@ -26,7 +30,8 @@ export function startConsolidationWorker(env: WorkerEnv, pool?: pg.Pool): { work
             `SELECT DISTINCT user_id FROM memory_items WHERE status = 'active' AND layer = 'semantic'`,
           )).rows.map((r) => r.user_id);
       const runs = [];
-      for (const u of users) runs.push(await runConsolidation(db, u, mode));
+      const e = await getEmbedder();
+      for (const u of users) runs.push(await runConsolidation(db, u, mode, THRESHOLDS, e));
       return { mode, runs: runs.length };
     },
     { connection, concurrency: 1 },

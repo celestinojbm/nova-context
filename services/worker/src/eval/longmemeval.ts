@@ -7,6 +7,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import { THRESHOLDS } from "../memory/consolidation-rules.js";
 import { bm25Rank, consolidationPairs, evalConsolidation, evalRetrieval, trigramRank, type LmeQuestion } from "./longmemeval-metrics.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
@@ -54,5 +55,22 @@ for (const t of [
 ]) {
   const r = evalConsolidation(pairs, t);
   console.log(`consolidación ${JSON.stringify(t)} pos=${r.positives} marcados=${pct(r.posFlagged / Math.max(1, r.positives))} (merge ${r.posMerge}, conflict ${r.posConflict}) | neg=${r.negatives} falsos=${pct(r.negFlagged / Math.max(1, r.negatives))} (merge ${r.negMerge}, conflict ${r.negConflict})`);
+}
+const prf = (r: ReturnType<typeof evalConsolidation>) => {
+  const tp = r.posFlagged, fp = r.negFlagged;
+  return `recall=${pct(tp / Math.max(1, r.positives))} precision=${pct(tp / Math.max(1, tp + fp))} (tp ${tp}/${r.positives}, fp ${fp}/${r.negatives})`;
+};
+console.log(`trigramas (THRESHOLDS): ${prf(evalConsolidation(pairs, { ...THRESHOLDS, embedding: undefined }))}`);
+
+// `--embeddings`: M20e, local all-MiniLM-L6-v2 (downloaded once into .cache/models).
+if (args.includes("--embeddings")) {
+  const { localEmbedder, cosine } = await import("../memory/embeddings.js");
+  const e = await localEmbedder();
+  const texts = [...new Set([...pairs.pos, ...pairs.neg].flat())];
+  const vecs = await e.embed(texts);
+  const v = new Map(texts.map((x, i) => [x, vecs[i]!]));
+  const cos = (a: string, b: string) => cosine(v.get(a)!, v.get(b)!);
+  for (const emb of [0.45, 0.5, 0.55, 0.6, 0.65])
+    console.log(`trigramas + embeddings ≥${emb}: ${prf(evalConsolidation(pairs, { ...THRESHOLDS, embedding: emb }, cos))}`);
 }
 console.log("dry-run: no se escribió nada en la base de datos.");

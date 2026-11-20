@@ -1,6 +1,6 @@
 /**
  * M20c consolidation rules (docs/design/memoria-m20.md §1.3). Pure and
- * deterministic: no embeddings, no LLM, no network. The database supplies
+ * deterministic: no LLM, no network (M20e embeddings arrive as a precomputed cosine). The database supplies
  * candidate pairs with pg_trgm `similarity()`; these rules decide what a pair
  * is. `trigramSimilarity` mirrors pg_trgm so the thresholds can be calibrated
  * offline against the 50 synthetic cases (eval/m20-synthetic-cases.json).
@@ -16,8 +16,14 @@ export const THRESHOLDS = {
   mergeSubset: 0.5,
   /** A same-subject pair with a differing value slot is a conflict at/above this. */
   conflict: 0.45,
+  /**
+   * M20e: cosine (all-MiniLM-L6-v2) at/above which a pair is a candidate even
+   * with low trigram overlap. Calibrated out of sample on LongMemEval
+   * (76 positive / 2760 negative pairs): 0.55 → 11/76 flagged, 0 false.
+   */
+  embedding: 0.55,
 } as const;
-export type Thresholds = { candidate: number; mergeSubset: number; conflict: number };
+export type Thresholds = { candidate: number; mergeSubset: number; conflict: number; embedding?: number };
 
 /** pg_trgm-compatible similarity: words padded with "  " / " ", trigram sets, Jaccard. */
 export function trigramSet(text: string): Set<string> {
@@ -75,8 +81,13 @@ export interface PairDecision {
   reason: string;
 }
 
-/** Classify two facts of the same user + namespace. `sim` defaults to the JS pg_trgm mirror. */
-export function classifyPair(a: string, b: string, t: Thresholds = THRESHOLDS, sim?: number): PairDecision {
+/**
+ * Classify two facts of the same user + namespace. `sim` defaults to the JS
+ * pg_trgm mirror. `emb` (M20e) is the cosine of local embeddings, if any: it
+ * only adds candidates (paraphrases/updates trigrams miss) and never overrides
+ * a trigram decision.
+ */
+export function classifyPair(a: string, b: string, t: Thresholds = THRESHOLDS, sim?: number, emb?: number): PairDecision {
   const s = sim ?? trigramSimilarity(a, b);
   const ta = contentTokens(a);
   const tb = contentTokens(b);
@@ -85,7 +96,13 @@ export function classifyPair(a: string, b: string, t: Thresholds = THRESHOLDS, s
   const onlyA = [...A].filter((x) => !B.has(x));
   const onlyB = [...B].filter((x) => !A.has(x));
   if (onlyA.length === 0 && onlyB.length === 0) return { relation: "merge", similarity: s, reason: "same_tokens" };
-  if (s < t.candidate) return { relation: "keep", similarity: s, reason: "low_similarity" };
+  const semantic = emb !== undefined && t.embedding !== undefined && emb >= t.embedding;
+  if (s < t.candidate) {
+    // Semantic neighbour: same subject reworded/updated. Reported as a conflict
+    // (newer wins, or 'contested' with a user fact), never as a silent merge.
+    if (semantic) return { relation: "conflict", similarity: s, reason: "embedding_neighbor" };
+    return { relation: "keep", similarity: s, reason: "low_similarity" };
+  }
   if ((onlyA.length === 0 || onlyB.length === 0) && s >= t.mergeSubset) {
     return { relation: "merge", similarity: s, reason: "token_subset" };
   }
@@ -98,5 +115,6 @@ export function classifyPair(a: string, b: string, t: Thresholds = THRESHOLDS, s
   if (anchored && onlyA.length > 0 && onlyB.length > 0 && s >= t.conflict) {
     return { relation: "conflict", similarity: s, reason: "value_slot_differs" };
   }
+  if (semantic) return { relation: "conflict", similarity: s, reason: "embedding_neighbor" };
   return { relation: "keep", similarity: s, reason: anchored ? "below_conflict_threshold" : "different_subject" };
 }

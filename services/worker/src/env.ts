@@ -22,6 +22,9 @@ const envSchema = z.object({
   // apply changes statuses (reversible by run_id). Cron empty = no nightly job.
   NOVA_CONSOLIDATION_QUEUE: z.string().default("memory-consolidation"),
   NOVA_CONSOLIDATION_MODE: z.enum(["dry-run", "apply"]).default("dry-run"),
+  // M20e: local embeddings (all-MiniLM-L6-v2, on-device) as extra consolidation
+  // candidates. Off by default; never enabled in CI (model download).
+  NOVA_MEMORY_EMBEDDINGS: z.enum(["off", "local"]).default("off"),
   NOVA_CONSOLIDATION_CRON: z.string().optional().or(z.literal("").transform(() => undefined)),
   NOVA_ACTION_QUEUE: z.string().default("action-execution"),
   // M6: key for decrypting integration tokens (same value as the API's).
