@@ -88,9 +88,9 @@ describe.skipIf(!databaseUrl)("M20c memory consolidation (integration)", () => {
     expect(await st(dup.newer)).toMatchObject({ status: "active", canonical_id: null });
     expect(await st(cf.newer)).toMatchObject({ status: "active", supersedes_id: null });
     const open = (await db.query(
-      `SELECT count(*)::int n FROM memory_conflicts WHERE run_id = $1 AND resolution <> 'user_resolved'`, [runId],
+      `SELECT count(*)::int n FROM memory_conflicts WHERE run_id = $1 AND resolution <> 'reverted'`, [runId],
     )).rows[0].n;
     expect(open).toBe(0);
-    expect((await revertConsolidationRun(db, runId)).restored).toBe(0);
+    expect((await revertConsolidationRun(db, runId)).restored).toBe(0); // idempotent
   });
 });
