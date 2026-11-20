@@ -1,5 +1,16 @@
 import type pg from "pg";
+import { redactText } from "@nova/context-engine";
 import { EXTRACTOR_ID, extractFacts } from "./fact-extractor.js";
+
+/**
+ * PII filter for moments captured with redaction 'skipped' (review #25, pt 3):
+ * the capture-time detectors (email, phone, card w/ Luhn, api_key, ssn, iban)
+ * run before extraction. Detected values become [REDACTED:type] markers, so
+ * the extractor drops those sentences entirely: no PII is copied to memory.
+ */
+export function filterSkippedPii(text: string | null): string | null {
+  return text == null ? text : redactText(text).text;
+}
 
 /**
  * M20a: persist heuristic facts for one Context Moment into memory_items
@@ -41,7 +52,11 @@ export async function writeMomentFacts(db: pg.Pool, momentId: string): Promise<W
   if (m.redaction_state !== "applied" && m.redaction_state !== "skipped") {
     return { written: 0, extracted: 0, skipped: "redaction_pending" };
   }
-  const facts = extractFacts(m.intent_text, m.extracted_text);
+  const skipped = m.redaction_state === "skipped";
+  const facts = extractFacts(
+    skipped ? filterSkippedPii(m.intent_text) : m.intent_text,
+    skipped ? filterSkippedPii(m.extracted_text) : m.extracted_text,
+  );
   let written = 0;
   // One transaction for the whole fact set: a memory_item never exists
   // without its memory_item_sources row (review #25, point 2).
