@@ -123,3 +123,27 @@ export function evalConsolidation(pairs: ReturnType<typeof consolidationPairs>, 
   }
   return r;
 }
+
+/** CLI args for `pnpm eval:longmemeval`. Strict: a bad `--n` is an error, not a silent 100. */
+export function parseEvalArgs(argv: string[]): { n: number; download: boolean } {
+  const args = argv.filter((a) => a !== "--");
+  let n = 100;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === "--download") continue;
+    const m = /^--n(?:=(.*))?$/.exec(a);
+    if (!m) throw new Error(`argumento desconocido: ${a} (uso: [--n 100] [--download])`);
+    const raw = m[1] ?? args[++i];
+    const v = Number(raw);
+    if (!Number.isInteger(v) || v < 1) throw new Error(`--n debe ser un entero >= 1 (recibido: ${raw ?? "nada"})`);
+    n = v;
+  }
+  return { n, download: args.includes("--download") };
+}
+
+/** Deterministic subset without abstention questions: every k-th question, at most n. */
+export function selectSubset(all: LmeQuestion[], n: number): { subset: LmeQuestion[]; pool: number } {
+  const pool = all.filter((q) => !q.question_id.endsWith("_abs"));
+  const step = Math.max(1, Math.floor(pool.length / n));
+  return { subset: pool.filter((_, i) => i % step === 0).slice(0, n), pool: pool.length };
+}

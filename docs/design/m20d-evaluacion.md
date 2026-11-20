@@ -9,6 +9,8 @@ pnpm eval:longmemeval --download   # primera vez (~277 MB)
 pnpm eval:longmemeval --n 100      # subconjunto determinista (1 de cada 4)
 ```
 
+La descarga está fijada a la revisión `98d7416` del dataset y se verifica por sha256 (`d6f21ea9…`); se escribe a `.part` y se renombra, así que un corte no deja un archivo corrupto. Si el archivo en caché no coincide, el script sale con 1. Reproducido el 20-nov-2026: mismas cifras que abajo.
+
 Sin el archivo, el script imprime "omitido" y sale con 0. CI solo corre el test unitario con fixture (`src/eval/longmemeval-metrics.test.ts`).
 
 ## Resultados (22-oct-2026, 100 preguntas sin abstención, ~8 s en local)
@@ -42,7 +44,9 @@ Solo 5 de 76 pares positivos superan similitud 0.30 (mediana 0.15): en conversac
 ("watched all 22 MCU movies in two weeks" vs. "finished a Star Wars marathon…"), y las reglas léxicas
 (anclas y prefijo compartido, pensados sobre los 50 casos sintéticos en español) no lo detectan.
 
-**Lectura:** los umbrales son *seguros* (0 falsos merges/conflictos), así que no hay que subirlos; bajarlos tampoco
+**Lectura:** 0 falsos merges/conflictos es coherente con umbrales conservadores, pero **no los valida**: con 0/76
+positivos detectados la prueba no tiene poder para distinguir entre umbrales (las cuatro filas son idénticas), y los
+negativos (hecho de evidencia vs. sesiones no relacionadas) son fáciles por construcción. Bajarlos tampoco
 ayuda, porque el límite es léxico. La consolidación no aporta en datos reales todavía → **sigue en dry-run**.
 El paso que la mejora son los embeddings locales (fase siguiente), usados para generar candidatos.
 
