@@ -56,6 +56,11 @@ release takes traffic. Manual run: `fly ssh console -c infra/deploy/fly.api.toml
   --image <previous image ref>`.
 - Migrations are forward-only by policy: write a new migration to undo a
   bad one, never edit an applied file (the runner tracks by filename).
+  Exception for emergencies: `services/api/migrations/rollback/` holds
+  tested down scripts (never run by `db:migrate`). M20c/0015: deploy a
+  worker without M20c first, then `psql "$DATABASE_URL" -v ON_ERROR_STOP=1
+  --single-transaction -f services/api/migrations/rollback/0015_m20c_memory_consolidation.down.sql`
+  (undoes applied consolidation runs, drops what 0015 added).
 - M8 legacy media: rows captured before M8 may still hold inline
   screenshots. Move them with the manual operator command
   `pnpm --filter @nova/api media:backfill` (idempotent; skips anything it
