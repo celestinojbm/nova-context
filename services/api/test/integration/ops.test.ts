@@ -160,8 +160,9 @@ describe.skipIf(!databaseUrl)("M11: ops surface", () => {
     // Product events are untouched without an explicit prune window.
     expect((applied.product_events as { deleted: number }).deleted).toBe(0);
 
-    // Both runs recorded; the status endpoint shows the latest.
-    const runs = await db.query(`SELECT mode FROM ops_maintenance_runs ORDER BY ran_at DESC LIMIT 2`);
+    // Both runs recorded; the status endpoint shows the latest. Filtered by job:
+    // worker M20c tests write consolidation runs to the same table in parallel.
+    const runs = await db.query(`SELECT mode FROM ops_maintenance_runs WHERE job = 'retention' ORDER BY ran_at DESC LIMIT 2`);
     expect(runs.rows.map((r) => r.mode)).toEqual(["apply", "dry-run"]);
     const status = await user.inject({ method: "GET", url: "/v1/ops/status" });
     expect(status.json().last_maintenance.mode).toBe("apply");

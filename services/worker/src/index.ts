@@ -3,6 +3,7 @@ import { startHeartbeat } from "./heartbeat.js";
 import { loadEnv } from "./env.js";
 import { log } from "./log.js";
 import { buildDeps, startWorker } from "./worker.js";
+import { startConsolidationWorker } from "./consolidation-worker.js";
 
 const env = loadEnv();
 const deps = buildDeps(env);
@@ -14,6 +15,7 @@ log.info(
     embeddings: Boolean(deps.embedder),
     external_actions: Boolean(actionDeps.keys?.length),
     read_keys: actionDeps.keys?.length ?? 0,
+    consolidation_mode: env.NOVA_CONSOLIDATION_MODE,
     media_store: actionDeps.mediaStore?.name ?? "none",
   },
   "worker starting",
@@ -21,10 +23,11 @@ log.info(
 const heartbeat = startHeartbeat(env.REDIS_URL);
 const worker = startWorker({ env, deps });
 const actionWorker = startActionWorker({ env, deps: actionDeps });
+const consolidation = startConsolidationWorker(env);
 
 async function shutdown() {
   log.info("worker shutting down");
-  await Promise.all([worker.close(), actionWorker.close(), heartbeat.stop()]);
+  await Promise.all([worker.close(), actionWorker.close(), consolidation.close(), heartbeat.stop()]);
   process.exit(0);
 }
 process.on("SIGINT", () => void shutdown());
