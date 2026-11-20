@@ -49,6 +49,26 @@ jobs:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
       - uses: actions/checkout@v4
+      # CAUSA: el runner trae un cliente de Postgres más nuevo (≥17) que el
+      #   servidor del servicio (16). pg_dump/pg_restore ≥17 emiten
+      #   `SET transaction_timeout = 0;`, que Postgres 16 no reconoce
+      #   (`unrecognized configuration parameter "transaction_timeout"`), y los
+      #   tests de integración de backup/restore fallaban en TODAS las PRs.
+      # ARREGLO: usar el cliente de la MISMA versión mayor que el servidor
+      #   (16, igual que producción en Render y el docker-compose de dev), en
+      #   lugar de subir el servidor a 17: así el CI sigue probando lo que corre
+      #   en producción. En Ubuntu, /usr/bin/pg_* es un wrapper que elige el
+      #   cliente más nuevo instalado, por eso se antepone el bin/ de la v16.
+      - name: Cliente Postgres 16 (misma versión mayor que el servidor)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-16
+          echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
+          # Comprobación explícita: si el cliente no es 16, el job falla aquí
+          # en vez de fallar más tarde y de forma confusa en la integración.
+          /usr/lib/postgresql/16/bin/pg_restore --version | grep -q ' 16\.' \
+            || { echo "::error::pg_restore no es la versión 16"; exit 1; }
+          /usr/lib/postgresql/16/bin/pg_dump --version
       # M18A / M18A.1 finding 5: MinIO for the S3 media backup/recovery drill.
       # The step MUST fail if the S3 endpoint does not become healthy — the drill is
       # mandatory in CI, so a broken S3 can never let the suite silently
