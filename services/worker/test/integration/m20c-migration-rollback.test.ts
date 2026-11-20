@@ -41,12 +41,23 @@ describe.skipIf(!databaseUrl)("M20c migration 0015 rollback (scratch database)",
     const u = new URL(databaseUrl!);
     u.pathname = `/${scratch}`;
     db = new pg.Pool({ connectionString: u.toString(), max: 1 });
+    db.on("error", () => undefined); // idle-client socket errors must not crash the run; queries still reject
     await db.query(`CREATE TABLE schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`);
   });
   afterAll(async () => {
+    // No pg_terminate_backend: killing a socket that pool.end() is still
+    // closing surfaces as an unhandled 'error' and fails the run (seen in CI).
     await db?.end();
-    await admin.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1`, [scratch]);
-    await admin.query(`DROP DATABASE IF EXISTS ${scratch}`);
+    for (let i = 0; ; i++) {
+      try {
+        await admin.query(`DROP DATABASE IF EXISTS ${scratch}`);
+        break;
+      } catch (err) {
+        // 55006 = object_in_use: the closed pool's backends are still exiting.
+        if ((err as { code?: string }).code !== "55006" || i >= 50) throw err;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }
     await admin.end();
   });
 
