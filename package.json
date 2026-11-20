@@ -19,7 +19,8 @@
     "validate:deploy": "pnpm --filter @nova/validation-gate gate deploy",
     "validate:postdeploy": "pnpm --filter @nova/validation-gate gate postdeploy",
     "validate:recovery": "pnpm --filter @nova/validation-gate gate recovery",
-    "validate:recovery-remote": "pnpm --filter @nova/validation-gate recovery-remote --"
+    "validate:recovery-remote": "pnpm --filter @nova/validation-gate recovery-remote --",
+    "eval:longmemeval": "pnpm --filter @nova/worker eval:longmemeval --"
   },
   "devDependencies": {
     "turbo": "^2.3.0",
