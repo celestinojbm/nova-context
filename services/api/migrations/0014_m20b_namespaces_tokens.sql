@@ -1,5 +1,6 @@
 -- M20b: memory namespaces, per-namespace tokens for assistants, Markdown export.
--- Design: docs/design/memoria-m20.md §2 (incl. §2.4). Forward-only, additive.
+-- Design: docs/design/memoria-m20.md §2 (incl. §2.4). Additive; the runner is
+-- forward-only, manual rollback: migrations/down/0014_m20b_namespaces_tokens.down.sql
 
 CREATE TABLE IF NOT EXISTS memory_namespaces (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -54,8 +55,18 @@ INSERT INTO memory_namespaces (user_id, slug, kind, project_id)
   SELECT p.user_id, 'proyecto/' || left(p.id::text, 8), 'project', p.id
   FROM projects p WHERE p.archived = false
   ON CONFLICT DO NOTHING;
+-- Facts go to their moment's project namespace, or to 'default' only when the
+-- moment has NO project. Facts of a project without a namespace (archived, or a
+-- slug collision) stay NULL — invisible to tokens — instead of leaking into
+-- 'default'. Same rule as ASSIGN_ORPHAN_FACTS_SQL in src/routes-namespaces.ts.
 UPDATE memory_items mi SET namespace_id = COALESCE(
-    (SELECT n.id FROM context_moments m JOIN memory_namespaces n ON n.project_id = m.project_id
+    (SELECT n.id FROM context_moments m JOIN memory_namespaces n
+       ON n.project_id = m.project_id AND n.user_id = mi.user_id
       WHERE m.id = mi.moment_id),
     (SELECT n.id FROM memory_namespaces n WHERE n.user_id = mi.user_id AND n.slug = 'default'))
-  WHERE mi.namespace_id IS NULL;
+  WHERE mi.namespace_id IS NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM context_moments m
+       WHERE m.id = mi.moment_id AND m.project_id IS NOT NULL
+         AND NOT EXISTS (SELECT 1 FROM memory_namespaces n
+                          WHERE n.project_id = m.project_id AND n.user_id = mi.user_id));

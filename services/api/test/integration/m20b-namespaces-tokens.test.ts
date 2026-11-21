@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -174,5 +177,136 @@ describe.skipIf(!databaseUrl)("M20b: namespaces + namespace tokens", () => {
     const t = await issue(alice, [{ namespace: slug, scopes: ["memory:export"] }]);
     expect((await authedInject(app, t.token)({ method: "GET", url: `/v1/export/namespace/${slug}.md` })).statusCode).toBe(403);
     await db.query(`UPDATE projects SET local_only = false WHERE id = $1`, [pid]);
+  });
+
+  it("facts of an archived project never fall into 'default' (fail closed)", async () => {
+    const MARK = `archivedfact${Date.now().toString(36)}`;
+    const p = await db.query<{ id: string }>(`INSERT INTO projects (user_id, name) VALUES ($1, 'M20b archivado') RETURNING id`, [alice.userId]);
+    const pid = p.rows[0]!.id;
+    const m = await db.query<{ id: string }>(
+      `INSERT INTO context_moments (user_id, project_id, source_mode) VALUES ($1, $2, 'instant_capture') RETURNING id`,
+      [alice.userId, pid],
+    );
+    await db.query(`UPDATE projects SET archived = true WHERE id = $1`, [pid]);
+    const fact = await db.query<{ id: string }>(
+      `INSERT INTO memory_items (user_id, moment_id, layer, content, author) VALUES ($1, $2, 'semantic', $3, 'model') RETURNING id`,
+      [alice.userId, m.rows[0]!.id, MARK],
+    );
+    await alice.inject({ method: "GET", url: "/v1/namespaces" }); // runs the lazy assignment
+    const row = await db.query(`SELECT namespace_id FROM memory_items WHERE id = $1`, [fact.rows[0]!.id]);
+    expect(row.rows[0].namespace_id).toBeNull();
+    const t = await issue(alice, [{ namespace: "default", scopes: ["memory:read", "memory:export"] }]);
+    const tI = authedInject(app, t.token);
+    expect((await tI({ method: "GET", url: "/v1/namespaces/default/memory?status=all" })).body).not.toContain(MARK);
+    expect((await tI({ method: "GET", url: "/v1/export/namespace/default.md" })).body).not.toContain(MARK);
+    // Unarchived: the project gets its namespace and the fact lands there, not in 'default'.
+    await db.query(`UPDATE projects SET archived = false WHERE id = $1`, [pid]);
+    await alice.inject({ method: "GET", url: "/v1/namespaces" });
+    const after = await db.query<{ slug: string }>(
+      `SELECT n.slug FROM memory_items mi JOIN memory_namespaces n ON n.id = mi.namespace_id WHERE mi.id = $1`,
+      [fact.rows[0]!.id],
+    );
+    expect(after.rows[0]!.slug).toBe(`proyecto/${pid.slice(0, 8)}`);
+  });
+
+  it("token issuance is all-or-nothing: a duplicated namespace is a 400 and leaves no token row", async () => {
+    const count = async () =>
+      (await db.query<{ c: number }>(`SELECT count(*)::int AS c FROM namespace_tokens WHERE user_id = $1`, [alice.userId])).rows[0]!.c;
+    const before = await count();
+    const res = await alice.inject({
+      method: "POST",
+      url: "/v1/namespace-tokens",
+      payload: { label: "dup", grants: [{ namespace: "default", scopes: ["memory:read"] }, { namespace: "default", scopes: ["memory:write"] }] },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("duplicate_namespace_grant");
+    expect(await count()).toBe(before);
+  });
+
+  it("concurrent rotations mint exactly one successor", async () => {
+    const t = await issue(alice, [{ namespace: "asistente/claude", scopes: ["memory:read"] }]);
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => alice.inject({ method: "POST", url: `/v1/namespace-tokens/${t.id}/rotate` })),
+    );
+    expect(results.filter((r) => r.statusCode === 201)).toHaveLength(1);
+    expect(results.filter((r) => r.statusCode === 404)).toHaveLength(4);
+    const successors = await db.query(`SELECT 1 FROM namespace_tokens WHERE rotated_from = $1`, [t.id]);
+    expect(successors.rowCount).toBe(1);
+    expect((await authedInject(app, t.token)({ method: "GET", url: "/v1/namespaces/asistente/claude/memory" })).statusCode).toBe(401);
+  });
+});
+
+/**
+ * 0014 is reversible: down script → exact pre-0014 schema; re-applying 0014
+ * backfills with the fail-closed rule. Runs in a throwaway database so the
+ * shared test DB is never touched.
+ */
+describe.skipIf(!databaseUrl)("M20b: migration 0014 round trip (up → down → up)", () => {
+  const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "../../migrations");
+  const tmpName = `nova_m20b_rt_${Date.now().toString(36)}`;
+  let admin: pg.Client;
+  let tmpUrl: string;
+
+  beforeAll(async () => {
+    admin = new pg.Client({ connectionString: databaseUrl });
+    await admin.connect();
+    await admin.query(`CREATE DATABASE ${tmpName}`);
+    const u = new URL(databaseUrl!);
+    u.pathname = `/${tmpName}`;
+    tmpUrl = u.toString();
+  });
+  afterAll(async () => {
+    await admin?.query(`DROP DATABASE IF EXISTS ${tmpName} WITH (FORCE)`);
+    await admin?.end();
+  });
+
+  it("drops every 0014 object, keeps facts, and re-applies cleanly", async () => {
+    await migrate(tmpUrl);
+    const db = new pg.Client({ connectionString: tmpUrl });
+    await db.connect();
+    try {
+      const down = await readFile(join(migrationsDir, "down/0014_m20b_namespaces_tokens.down.sql"), "utf8");
+      await db.query("BEGIN");
+      await db.query(down);
+      await db.query("COMMIT");
+
+      const tables = await db.query(
+        `SELECT table_name FROM information_schema.tables
+          WHERE table_name IN ('memory_namespaces','namespace_tokens','namespace_token_grants')`,
+      );
+      expect(tables.rowCount).toBe(0);
+      const col = await db.query(
+        `SELECT 1 FROM information_schema.columns WHERE table_name = 'memory_items' AND column_name = 'namespace_id'`,
+      );
+      expect(col.rowCount).toBe(0);
+      expect((await db.query(`SELECT 1 FROM schema_migrations WHERE name = '0014_m20b_namespaces_tokens.sql'`)).rowCount).toBe(0);
+
+      // Pre-0014 data: a loose fact, a live-project fact, an archived-project fact.
+      const user = (await db.query<{ id: string }>(`INSERT INTO users (email) VALUES ('rt@test.local') RETURNING id`)).rows[0]!.id;
+      const live = (await db.query<{ id: string }>(`INSERT INTO projects (user_id, name) VALUES ($1, 'live') RETURNING id`, [user])).rows[0]!.id;
+      const arch = (await db.query<{ id: string }>(`INSERT INTO projects (user_id, name, archived) VALUES ($1, 'arch', true) RETURNING id`, [user])).rows[0]!.id;
+      const moment = async (pid: string) =>
+        (await db.query<{ id: string }>(`INSERT INTO context_moments (user_id, project_id, source_mode) VALUES ($1, $2, 'instant_capture') RETURNING id`, [user, pid])).rows[0]!.id;
+      const fact = async (content: string, momentId: string | null) =>
+        (await db.query<{ id: string }>(
+          `INSERT INTO memory_items (user_id, moment_id, layer, content, author) VALUES ($1, $2, 'semantic', $3, 'model') RETURNING id`,
+          [user, momentId, content],
+        )).rows[0]!.id;
+      const loose = await fact("loose", null);
+      const inLive = await fact("live", await moment(live));
+      const inArch = await fact("arch", await moment(arch));
+
+      expect(await migrate(tmpUrl)).toEqual(["0014_m20b_namespaces_tokens.sql"]);
+      const ns = async (id: string) =>
+        (await db.query<{ slug: string | null }>(
+          `SELECT n.slug FROM memory_items mi LEFT JOIN memory_namespaces n ON n.id = mi.namespace_id WHERE mi.id = $1`,
+          [id],
+        )).rows[0]!.slug;
+      expect(await ns(loose)).toBe("default");
+      expect(await ns(inLive)).toBe(`proyecto/${live.slice(0, 8)}`);
+      expect(await ns(inArch)).toBeNull();
+    } finally {
+      await db.end();
+    }
   });
 });
