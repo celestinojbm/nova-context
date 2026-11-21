@@ -72,15 +72,27 @@ export async function ensureNamespaces(db: pg.Pool, userId: string): Promise<voi
      ON CONFLICT DO NOTHING`,
     [userId],
   );
-  await db.query(
-    `UPDATE memory_items mi SET namespace_id = COALESCE(
-        (SELECT n.id FROM context_moments m JOIN memory_namespaces n ON n.project_id = m.project_id
-          WHERE m.id = mi.moment_id),
-        (SELECT n.id FROM memory_namespaces n WHERE n.user_id = $1 AND n.slug = 'default'))
-     WHERE mi.user_id = $1 AND mi.namespace_id IS NULL`,
-    [userId],
-  );
+  await db.query(`${ASSIGN_ORPHAN_FACTS_SQL} AND mi.user_id = $1`, [userId]);
 }
+
+/**
+ * Orphan facts (namespace_id NULL) go to their moment's project namespace, or
+ * to 'default' only when the moment has NO project. A fact whose project has
+ * no namespace (archived project, slug collision) stays unassigned — invisible
+ * to every token — instead of leaking into 'default'. Fail closed.
+ * Mirrors the backfill in migrations/0014_m20b_namespaces_tokens.sql.
+ */
+const ASSIGN_ORPHAN_FACTS_SQL = `UPDATE memory_items mi SET namespace_id = COALESCE(
+     (SELECT n.id FROM context_moments m JOIN memory_namespaces n
+        ON n.project_id = m.project_id AND n.user_id = mi.user_id
+       WHERE m.id = mi.moment_id),
+     (SELECT n.id FROM memory_namespaces n WHERE n.user_id = mi.user_id AND n.slug = 'default'))
+   WHERE mi.namespace_id IS NULL
+     AND NOT EXISTS (
+       SELECT 1 FROM context_moments m
+        WHERE m.id = mi.moment_id AND m.project_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM memory_namespaces n
+                           WHERE n.project_id = m.project_id AND n.user_id = mi.user_id))`;
 
 async function findNamespace(db: pg.Pool, userId: string, slug: string): Promise<NamespaceRow | null> {
   const { rows } = await db.query<NamespaceRow>(
@@ -368,21 +380,38 @@ export function registerNamespaceRoutes(app: FastifyInstance, deps: { db: pg.Poo
   });
 
   // ---- Namespace tokens (session only) -------------------------------------------
+  /** Token row + grants in the caller's transaction: all or nothing. */
   async function issueToken(
+    client: pg.PoolClient,
     userId: string,
     input: { label: string; expiresInDays: number | null; rate: number; grants: Array<{ namespace_id: string; scopes: string[] }>; rotatedFrom?: string },
   ) {
     const { token, prefix } = newNamespaceToken();
-    const { rows } = await db.query<{ id: string; expires_at: Date | null }>(
+    const { rows } = await client.query<{ id: string; expires_at: Date | null }>(
       `INSERT INTO namespace_tokens (user_id, label, token_hash, token_prefix, expires_at, rate_limit_per_hour, rotated_from)
        VALUES ($1, $2, $3, $4, CASE WHEN $5::int IS NULL THEN NULL ELSE now() + make_interval(days => $5::int) END, $6, $7)
        RETURNING id, expires_at`,
       [userId, input.label, sha256Hex(token), prefix, input.expiresInDays, input.rate, input.rotatedFrom ?? null],
     );
     for (const g of input.grants) {
-      await db.query(`INSERT INTO namespace_token_grants (token_id, namespace_id, scopes) VALUES ($1, $2, $3)`, [rows[0]!.id, g.namespace_id, g.scopes]);
+      await client.query(`INSERT INTO namespace_token_grants (token_id, namespace_id, scopes) VALUES ($1, $2, $3)`, [rows[0]!.id, g.namespace_id, g.scopes]);
     }
     return { id: rows[0]!.id, token, prefix, expires_at: rows[0]!.expires_at };
+  }
+
+  async function inTransaction<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+      const out = await fn(client);
+      await client.query("COMMIT");
+      return out;
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   app.post("/v1/namespace-tokens", async (req, reply) => {
@@ -395,9 +424,14 @@ export function registerNamespaceRoutes(app: FastifyInstance, deps: { db: pg.Poo
     for (const g of body.data.grants) {
       const ns = await findNamespace(db, userId, g.namespace);
       if (!ns) return reply.code(404).send({ error: "namespace_not_found" });
+      // Ambiguous scopes for one namespace: refuse instead of guessing (and
+      // instead of a PK violation half-way through issuance).
+      if (grants.some((x) => x.namespace_id === ns.id)) return reply.code(400).send({ error: "duplicate_namespace_grant" });
       grants.push({ namespace_id: ns.id, scopes: [...new Set(g.scopes)], slug: ns.slug });
     }
-    const t = await issueToken(userId, { label: body.data.label, expiresInDays: body.data.expires_in_days, rate: body.data.rate_limit_per_hour, grants });
+    const t = await inTransaction((client) =>
+      issueToken(client, userId, { label: body.data.label, expiresInDays: body.data.expires_in_days, rate: body.data.rate_limit_per_hour, grants }),
+    );
     await audit(db, { kind: "user", userId }, "namespace_token.issue", { token_prefix: t.prefix, grants: grants.map((g) => ({ namespace: g.slug, scopes: g.scopes })) }, { kind: "namespace_token", id: t.id });
     return reply.code(201).send({ ...t, label: body.data.label, warning: "token shown once; store it now" });
   });
@@ -435,20 +469,28 @@ export function registerNamespaceRoutes(app: FastifyInstance, deps: { db: pg.Poo
     const userId = userOnly(req, reply);
     if (!userId) return reply;
     if (!z.string().uuid().safeParse(req.params.id).success) return reply.code(404).send({ error: "not_found" });
-    const old = await db.query<{ label: string; rate_limit_per_hour: number; token_prefix: string; days: number | null }>(
-      `SELECT label, rate_limit_per_hour, token_prefix,
-              CASE WHEN expires_at IS NULL THEN NULL ELSE GREATEST(1, ceil(extract(epoch FROM expires_at - created_at) / 86400))::int END AS days
-       FROM namespace_tokens WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`,
-      [req.params.id, userId],
-    );
-    if (!old.rows[0]) return reply.code(404).send({ error: "not_found" });
-    const grants = await db.query<{ namespace_id: string; scopes: string[] }>(
-      `SELECT namespace_id, scopes FROM namespace_token_grants WHERE token_id = $1`,
-      [req.params.id],
-    );
-    const o = old.rows[0];
-    const t = await issueToken(userId, { label: o.label, expiresInDays: o.days, rate: o.rate_limit_per_hour, grants: grants.rows, rotatedFrom: req.params.id });
-    await db.query(`UPDATE namespace_tokens SET revoked_at = now() WHERE id = $1`, [req.params.id]);
+    // One transaction with the old row locked: two concurrent rotations can
+    // never both mint a successor, and a failure leaves the old token intact.
+    const rotated = await inTransaction(async (client) => {
+      const old = await client.query<{ label: string; rate_limit_per_hour: number; token_prefix: string; days: number | null }>(
+        `SELECT label, rate_limit_per_hour, token_prefix,
+                CASE WHEN expires_at IS NULL THEN NULL ELSE GREATEST(1, ceil(extract(epoch FROM expires_at - created_at) / 86400))::int END AS days
+         FROM namespace_tokens WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+         FOR UPDATE`,
+        [req.params.id, userId],
+      );
+      const o = old.rows[0];
+      if (!o) return null;
+      const grants = await client.query<{ namespace_id: string; scopes: string[] }>(
+        `SELECT namespace_id, scopes FROM namespace_token_grants WHERE token_id = $1`,
+        [req.params.id],
+      );
+      const t = await issueToken(client, userId, { label: o.label, expiresInDays: o.days, rate: o.rate_limit_per_hour, grants: grants.rows, rotatedFrom: req.params.id });
+      await client.query(`UPDATE namespace_tokens SET revoked_at = now() WHERE id = $1`, [req.params.id]);
+      return { o, t };
+    });
+    if (!rotated) return reply.code(404).send({ error: "not_found" });
+    const { o, t } = rotated;
     await audit(db, { kind: "user", userId }, "namespace_token.rotate", { old_prefix: o.token_prefix, new_prefix: t.prefix }, { kind: "namespace_token", id: t.id });
     return reply.code(201).send({ ...t, label: o.label, rotated_from: req.params.id });
   });
