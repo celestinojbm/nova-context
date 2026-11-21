@@ -6,9 +6,16 @@ import { factHash } from "../../src/memory/fact-extractor.js";
 
 /**
  * Review of #28: migration 0015 is reversible. On a scratch database:
- * 0000–0014 → snapshot → 0015 → applied consolidation runs → rollback script
- * → schema identical to the snapshot, every fact active again with its own
- * sources only, 0015 re-applies cleanly.
+ * every migration except 0015 → snapshot → 0015 → applied consolidation runs
+ * → rollback script → schema identical to the snapshot, every fact active
+ * again with its own sources only, 0015 re-applies cleanly.
+ *
+ * The snapshot includes migrations numbered after 0015 (e.g. 0018 from main):
+ * the down script only removes 0015's objects, so anything applied after the
+ * snapshot would show up as a false schema diff. Applying 0015 last mirrors
+ * production, where later-numbered migrations from main can already be
+ * applied (the migrator skips by name, not by order). A later migration that
+ * depends on 0015 fails loudly here when applied without it.
  */
 const databaseUrl = process.env.DATABASE_URL;
 const MIGRATIONS = new URL("../../../api/migrations/", import.meta.url);
@@ -63,10 +70,9 @@ describe.skipIf(!databaseUrl)("M20c migration 0015 rollback (scratch database)",
 
   it("down script restores the pre-0015 schema and undoes applied runs; 0015 re-applies", async () => {
     expect(files).toContain(M15);
-    for (const f of files.filter((f) => f < M15)) await apply(f);
+    for (const f of files.filter((f) => f !== M15)) await apply(f);
     const before = await schema();
     await apply(M15);
-    for (const f of files.filter((f) => f > M15)) await apply(f);
 
     const userId = (await db.query(`INSERT INTO users (email) VALUES ('down@nova.local') RETURNING id`)).rows[0].id;
     const ns = (await db.query(`INSERT INTO memory_namespaces (user_id, slug, kind) VALUES ($1, 'd', 'custom') RETURNING id`, [userId])).rows[0].id;
