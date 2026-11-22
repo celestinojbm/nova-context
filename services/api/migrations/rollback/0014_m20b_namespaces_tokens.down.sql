@@ -1,6 +1,9 @@
--- Manual rollback of 0014_m20b_namespaces_tokens.sql (the runner is forward-only
--- and never reads this directory). Run in ONE transaction, with the API stopped:
---   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -1 -f migrations/down/0014_m20b_namespaces_tokens.down.sql
+-- Rollback of 0014_m20b_namespaces_tokens.sql. NOT run by db:migrate
+-- (the runner only reads migrations/*.sql); apply by hand, in ONE transaction,
+-- with the API stopped:
+--
+--   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 --single-transaction \
+--     -f services/api/migrations/rollback/0014_m20b_namespaces_tokens.down.sql
 --
 -- 0014 is additive, so this restores the exact pre-0014 schema. What is LOST:
 -- every namespace token (connected assistants stop working — intended), every

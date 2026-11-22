@@ -265,7 +265,7 @@ describe.skipIf(!databaseUrl)("M20b: migration 0014 round trip (up → down → 
     const db = new pg.Client({ connectionString: tmpUrl });
     await db.connect();
     try {
-      const down = await readFile(join(migrationsDir, "down/0014_m20b_namespaces_tokens.down.sql"), "utf8");
+      const down = await readFile(join(migrationsDir, "rollback/0014_m20b_namespaces_tokens.down.sql"), "utf8");
       await db.query("BEGIN");
       await db.query(down);
       await db.query("COMMIT");
