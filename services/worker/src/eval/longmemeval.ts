@@ -2,43 +2,81 @@
  * M20d: `pnpm eval:longmemeval [--n 100] [--download]`
  * Downloads LongMemEval-S (MIT, HF xiaowu0162/longmemeval-cleaned) into the
  * gitignored `.cache/longmemeval/` only when `--download` is passed. Never used in CI.
+ * The download is pinned to one dataset revision and verified by sha256, and
+ * written atomically (.part → rename), so results in docs/design/m20d-evaluacion.md
+ * are reproducible and a cut-off download never leaves a corrupt cache file.
  * Consolidation is evaluated in memory only (dry-run): nothing touches a database.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { THRESHOLDS } from "../memory/consolidation-rules.js";
-import { bm25Rank, consolidationPairs, evalConsolidation, evalRetrieval, trigramRank, type LmeQuestion } from "./longmemeval-metrics.js";
+import {
+  bm25Rank, consolidationPairs, evalConsolidation, evalRetrieval, parseEvalArgs, selectSubset, trigramRank, type LmeQuestion,
+} from "./longmemeval-metrics.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const DIR = resolve(ROOT, ".cache/longmemeval");
 const FILE = resolve(DIR, "longmemeval_s_cleaned.json");
-const URL_S = "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json";
-const args = process.argv.slice(2);
-const n = Number(args[args.indexOf("--n") + 1] ?? 0) || 100;
+/** Dataset revision and LFS sha256 the published results were computed on. */
+const REVISION = "98d7416c24c778c2fee6e6f3006e7a073259d48f";
+const SHA256 = "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442";
+const URL_S = `https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/${REVISION}/longmemeval_s_cleaned.json`;
+
+let opts: ReturnType<typeof parseEvalArgs>;
+try {
+  opts = parseEvalArgs(process.argv.slice(2));
+} catch (err) {
+  console.error((err as Error).message);
+  process.exit(2);
+}
+const { n } = opts;
+
+async function sha256Of(path: string): Promise<string> {
+  const h = createHash("sha256");
+  await pipeline(createReadStream(path), new Transform({ transform(c, _e, cb) { h.update(c); cb(); } }));
+  return h.digest("hex");
+}
 
 if (!existsSync(FILE)) {
-  if (!args.includes("--download")) {
+  if (!opts.download) {
     console.log(`LongMemEval no encontrado en ${FILE}; omitido (usa --download).`);
     process.exit(0);
   }
   mkdirSync(DIR, { recursive: true });
-  console.log("Descargando LongMemEval-S (~277 MB)…");
+  console.log(`Descargando LongMemEval-S (~277 MB, revisión ${REVISION.slice(0, 7)})…`);
   const res = await fetch(URL_S);
-  if (!res.ok) throw new Error(`descarga falló: ${res.status}`);
-  writeFileSync(FILE, Buffer.from(await res.arrayBuffer()));
+  if (!res.ok || !res.body) throw new Error(`descarga falló: ${res.status}`);
+  const part = `${FILE}.part`;
+  const h = createHash("sha256");
+  try {
+    await pipeline(
+      Readable.fromWeb(res.body as import("node:stream/web").ReadableStream),
+      new Transform({ transform(c, _e, cb) { h.update(c); cb(null, c); } }),
+      createWriteStream(part),
+    );
+    const got = h.digest("hex");
+    if (got !== SHA256) throw new Error(`sha256 no coincide: esperado ${SHA256}, obtenido ${got}`);
+    renameSync(part, FILE);
+  } catch (err) {
+    rmSync(part, { force: true });
+    throw err;
+  }
+} else if ((await sha256Of(FILE)) !== SHA256) {
+  console.error(`${FILE} no es la revisión ${REVISION.slice(0, 7)} (sha256 distinto). Bórralo y usa --download.`);
+  process.exit(1);
 }
 
 const all: LmeQuestion[] = JSON.parse(readFileSync(FILE, "utf8"));
-const pool = all.filter((q) => !q.question_id.endsWith("_abs"));
-// Deterministic, stratified-by-position subset: every k-th question.
-const step = Math.max(1, Math.floor(pool.length / n));
-const subset = pool.filter((_, i) => i % step === 0).slice(0, n);
+const { subset, pool } = selectSubset(all, n);
 
 const pct = (x: number) => (x * 100).toFixed(1) + "%";
 const show = (name: string, r: ReturnType<typeof evalRetrieval>) =>
   console.log(`${name.padEnd(8)} n=${r.n} ` + [1, 3, 5, 10].map((k) => `R_any@${k}=${pct(r.recallAny[k]!)} R_all@${k}=${pct(r.recallAll[k]!)}`).join(" ") + ` MRR=${r.mrr.toFixed(3)}`);
-console.log(`Subconjunto: ${subset.length} de ${pool.length} preguntas (sin abstención)`);
+console.log(`Subconjunto: ${subset.length} de ${pool} preguntas (sin abstención)`);
 show("bm25", evalRetrieval(subset, bm25Rank));
 show("trigram", evalRetrieval(subset, trigramRank));
 
@@ -63,7 +101,7 @@ const prf = (r: ReturnType<typeof evalConsolidation>) => {
 console.log(`trigramas (THRESHOLDS): ${prf(evalConsolidation(pairs, { ...THRESHOLDS, embedding: undefined }))}`);
 
 // `--embeddings`: M20e, local all-MiniLM-L6-v2 (downloaded once into .cache/models).
-if (args.includes("--embeddings")) {
+if (opts.embeddings) {
   const { localEmbedder, cosine } = await import("../memory/embeddings.js");
   const e = await localEmbedder();
   const texts = [...new Set([...pairs.pos, ...pairs.neg].flat())];

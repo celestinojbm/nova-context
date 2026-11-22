@@ -71,12 +71,14 @@ export async function markFailed(
   momentId: string,
   userId: string,
   error: string,
+  code = "enrichment_failed",
 ): Promise<void> {
   await db.query(
     `UPDATE context_moments
-     SET enrichment_status = 'failed', enrichment_error = $2
+     SET enrichment_status = 'failed', enrichment_error = $2,
+         enrichment_error_code = $3, enrichment_wait_reason = NULL
      WHERE id = $1`,
-    [momentId, error.slice(0, 1000)],
+    [momentId, error.slice(0, 1000), code.slice(0, 64)],
   );
   await db.query(
     `INSERT INTO audit_log (user_id, event_type, subject_kind, subject_id, detail)
@@ -278,7 +280,8 @@ export async function enrichMoment(
   await db.query(
     `UPDATE context_moments
      SET summary = $1, enrichment = $2, enrichment_status = 'completed',
-         enrichment_error = NULL, enriched_at = now()
+         enrichment_error = NULL, enrichment_error_code = NULL,
+         enrichment_wait_reason = NULL, enrichment_expires_at = NULL, enriched_at = now()
      WHERE id = $3`,
     [draft.summary, JSON.stringify(result), momentId],
   );

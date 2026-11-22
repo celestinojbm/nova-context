@@ -1,8 +1,10 @@
 -- M20c: background memory consolidation (docs/design/memoria-m20.md §1.2–1.3).
--- Forward-only, additive. Nothing is deleted: duplicates become 'merged'
+-- Additive. Nothing is deleted: duplicates become 'merged'
 -- (canonical_id), contradicted facts 'superseded' (supersedes_id on the newer)
 -- or 'contested' when a user-authored fact is involved. Every change is logged
--- per run in memory_consolidation_changes so a run can be reverted by run_id.
+-- per run in memory_consolidation_changes (+ memory_consolidation_sources for
+-- provenance copied onto canonical facts) so a run can be reverted by run_id.
+-- Schema rollback: migrations/rollback/0015_m20c_memory_consolidation.down.sql.
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 ALTER TABLE memory_items
@@ -27,7 +29,7 @@ CREATE TABLE IF NOT EXISTS memory_conflicts (
   run_id      uuid REFERENCES ops_maintenance_runs(id) ON DELETE SET NULL,
   created_at  timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT memory_conflicts_resolution_chk
-    CHECK (resolution IN ('open','newer_wins','user_resolved','false_positive'))
+    CHECK (resolution IN ('open','newer_wins','user_resolved','false_positive','reverted'))
 );
 CREATE INDEX IF NOT EXISTS idx_memory_conflicts_user ON memory_conflicts(user_id, resolution);
 
@@ -38,5 +40,17 @@ CREATE TABLE IF NOT EXISTS memory_consolidation_changes (
   new_status         text NOT NULL,
   prev_canonical_id  uuid,
   prev_supersedes_id uuid,
+  -- Values this run wrote: revert only restores rows still in this state, so
+  -- undoing an older run never clobbers what a later run changed.
+  new_canonical_id   uuid,
+  new_supersedes_id  uuid,
   PRIMARY KEY (run_id, memory_item_id)
+);
+
+-- memory_item_sources rows a merge copied onto the canonical fact (deleted on revert).
+CREATE TABLE IF NOT EXISTS memory_consolidation_sources (
+  run_id         uuid NOT NULL REFERENCES ops_maintenance_runs(id) ON DELETE CASCADE,
+  memory_item_id uuid NOT NULL REFERENCES memory_items(id) ON DELETE CASCADE,
+  moment_id      uuid NOT NULL,
+  PRIMARY KEY (run_id, memory_item_id, moment_id)
 );

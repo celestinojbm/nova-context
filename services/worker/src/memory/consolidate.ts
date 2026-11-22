@@ -117,10 +117,14 @@ export async function runConsolidation(
 
     const change = async (id: string, status: string, set: { canonical_id?: string; supersedes_id?: string }) => {
       if (mode !== "apply") return;
+      // Log previous AND written values: revert only restores rows still in
+      // the state this run left them in (see revertConsolidationRun).
       await c.query(
-        `INSERT INTO memory_consolidation_changes (run_id, memory_item_id, prev_status, new_status, prev_canonical_id, prev_supersedes_id)
-         SELECT $1, id, status, $3, canonical_id, supersedes_id FROM memory_items WHERE id = $2`,
-        [runId, id, status],
+        `INSERT INTO memory_consolidation_changes
+           (run_id, memory_item_id, prev_status, new_status, prev_canonical_id, prev_supersedes_id, new_canonical_id, new_supersedes_id)
+         SELECT $1, id, status, $3, canonical_id, supersedes_id, COALESCE($4, canonical_id), COALESCE($5, supersedes_id)
+         FROM memory_items WHERE id = $2`,
+        [runId, id, status, set.canonical_id ?? null, set.supersedes_id ?? null],
       );
       await c.query(
         `UPDATE memory_items SET status = $2,
@@ -146,10 +150,15 @@ export async function runConsolidation(
         touched.add(dup.id);
         await change(dup.id, "merged", { canonical_id: canon.id });
         if (mode === "apply") {
+          // Only rows actually inserted are logged, so revert removes exactly these.
           await c.query(
-            `INSERT INTO memory_item_sources (memory_item_id, moment_id)
-             SELECT $1, moment_id FROM memory_item_sources WHERE memory_item_id = $2 ON CONFLICT DO NOTHING`,
-            [canon.id, dup.id],
+            `WITH copied AS (
+               INSERT INTO memory_item_sources (memory_item_id, moment_id)
+               SELECT $2, moment_id FROM memory_item_sources WHERE memory_item_id = $3
+               ON CONFLICT DO NOTHING RETURNING memory_item_id, moment_id)
+             INSERT INTO memory_consolidation_sources (run_id, memory_item_id, moment_id)
+             SELECT $1, memory_item_id, moment_id FROM copied`,
+            [runId, canon.id, dup.id],
           );
         }
       } else if (d.relation === "conflict") {
@@ -161,15 +170,7 @@ export async function runConsolidation(
         } else {
           report.conflicts_newer_wins++;
           await change(older.id, "superseded", {});
-          if (mode === "apply") {
-            await c.query(
-              `INSERT INTO memory_consolidation_changes (run_id, memory_item_id, prev_status, new_status, prev_canonical_id, prev_supersedes_id)
-               SELECT $1, id, status, status, canonical_id, supersedes_id FROM memory_items WHERE id = $2
-               ON CONFLICT DO NOTHING`,
-              [runId, newer.id],
-            );
-            await c.query(`UPDATE memory_items SET supersedes_id = $2 WHERE id = $1`, [newer.id, older.id]);
-          }
+          await change(newer.id, "active", { supersedes_id: older.id });
         }
         if (mode === "apply") {
           await c.query(
@@ -191,16 +192,43 @@ export async function runConsolidation(
   }
 }
 
-/** Undo an applied run: restores logged statuses/links, conflicts → 'user_resolved'. Idempotent. */
-export async function revertConsolidationRun(db: pg.Pool, runId: string): Promise<{ restored: number }> {
+export interface RevertResult {
+  restored: number;
+  /** Logged rows whose current state no longer matches what this run wrote. */
+  drifted: number;
+  /** True when nothing was reverted because of drift: revert later runs first. */
+  blocked: boolean;
+  sources_removed: number;
+}
+
+/**
+ * Undo an applied run: restores logged statuses/links, removes the sources the
+ * run copied onto canonical facts, conflicts → 'reverted'. All-or-nothing: if
+ * any fact changed after this run (typically a later run superseded it), the
+ * revert is refused (`blocked`) instead of resurrecting contradicted facts;
+ * revert the later runs first (LIFO). Idempotent.
+ */
+export async function revertConsolidationRun(db: pg.Pool, runId: string): Promise<RevertResult> {
+  const none: RevertResult = { restored: 0, drifted: 0, blocked: false, sources_removed: 0 };
   const c = await db.connect();
   try {
     await c.query("BEGIN");
-    const run = await c.query<{ reverted_at: Date | null }>(
-      `SELECT reverted_at FROM ops_maintenance_runs WHERE id = $1 AND job = $2 FOR UPDATE`,
+    const run = await c.query<{ reverted_at: Date | null; user_id: string | null }>(
+      `SELECT reverted_at, user_id FROM ops_maintenance_runs WHERE id = $1 AND job = $2 FOR UPDATE`,
       [runId, CONSOLIDATION_JOB],
     );
-    if (!run.rows[0] || run.rows[0].reverted_at) { await c.query("ROLLBACK"); return { restored: 0 }; }
+    if (!run.rows[0] || run.rows[0].reverted_at) { await c.query("ROLLBACK"); return none; }
+    // Same lock as runConsolidation: no run can interleave with the revert.
+    await c.query("SELECT pg_advisory_xact_lock(hashtext('memory-consolidation:' || $1))", [run.rows[0].user_id ?? ""]);
+    const drift = await c.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM memory_consolidation_changes ch JOIN memory_items mi ON mi.id = ch.memory_item_id
+       WHERE ch.run_id = $1 AND NOT (mi.status = ch.new_status
+         AND mi.canonical_id IS NOT DISTINCT FROM ch.new_canonical_id
+         AND mi.supersedes_id IS NOT DISTINCT FROM ch.new_supersedes_id)`,
+      [runId],
+    );
+    const drifted = drift.rows[0]?.n ?? 0;
+    if (drifted > 0) { await c.query("ROLLBACK"); return { ...none, drifted, blocked: true }; }
     const res = await c.query(
       `UPDATE memory_items mi SET status = ch.prev_status,
               canonical_id = ch.prev_canonical_id, supersedes_id = ch.prev_supersedes_id
@@ -208,13 +236,18 @@ export async function revertConsolidationRun(db: pg.Pool, runId: string): Promis
        WHERE ch.run_id = $1 AND ch.memory_item_id = mi.id`,
       [runId],
     );
+    const src = await c.query(
+      `DELETE FROM memory_item_sources s USING memory_consolidation_sources cs
+       WHERE cs.run_id = $1 AND s.memory_item_id = cs.memory_item_id AND s.moment_id = cs.moment_id`,
+      [runId],
+    );
     await c.query(
-      `UPDATE memory_conflicts SET resolution = 'user_resolved' WHERE run_id = $1 AND resolution IN ('open','newer_wins')`,
+      `UPDATE memory_conflicts SET resolution = 'reverted' WHERE run_id = $1 AND resolution IN ('open','newer_wins')`,
       [runId],
     );
     await c.query(`UPDATE ops_maintenance_runs SET reverted_at = now() WHERE id = $1`, [runId]);
     await c.query("COMMIT");
-    return { restored: res.rowCount ?? 0 };
+    return { restored: res.rowCount ?? 0, drifted: 0, blocked: false, sources_removed: src.rowCount ?? 0 };
   } catch (err) {
     await c.query("ROLLBACK").catch(() => undefined);
     throw err;
