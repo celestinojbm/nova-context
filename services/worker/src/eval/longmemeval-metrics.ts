@@ -123,3 +123,31 @@ export function evalConsolidation(pairs: ReturnType<typeof consolidationPairs>, 
   }
   return r;
 }
+
+/** Boolean flags: --download (M20d), --pg (M20, Postgres FTS ranking), --embeddings (M20e, local model). */
+const EVAL_FLAGS = new Set(["--download", "--pg", "--embeddings"]);
+export interface EvalArgs { n: number; download: boolean; pg: boolean; embeddings: boolean }
+
+/** CLI args for `pnpm eval:longmemeval`. Strict: a bad `--n` or unknown flag is an error, not a silent default. */
+export function parseEvalArgs(argv: string[]): EvalArgs {
+  const args = argv.filter((a) => a !== "--");
+  let n = 100;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (EVAL_FLAGS.has(a)) continue;
+    const m = /^--n(?:=(.*))?$/.exec(a);
+    if (!m) throw new Error(`argumento desconocido: ${a} (uso: [--n 100] [--download] [--pg] [--embeddings])`);
+    const raw = m[1] ?? args[++i];
+    const v = Number(raw);
+    if (!Number.isInteger(v) || v < 1) throw new Error(`--n debe ser un entero >= 1 (recibido: ${raw ?? "nada"})`);
+    n = v;
+  }
+  return { n, download: args.includes("--download"), pg: args.includes("--pg"), embeddings: args.includes("--embeddings") };
+}
+
+/** Deterministic subset without abstention questions: every k-th question, at most n. */
+export function selectSubset(all: LmeQuestion[], n: number): { subset: LmeQuestion[]; pool: number } {
+  const pool = all.filter((q) => !q.question_id.endsWith("_abs"));
+  const step = Math.max(1, Math.floor(pool.length / n));
+  return { subset: pool.filter((_, i) => i % step === 0).slice(0, n), pool: pool.length };
+}
