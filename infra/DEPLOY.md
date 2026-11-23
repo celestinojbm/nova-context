@@ -56,11 +56,21 @@ release takes traffic. Manual run: `fly ssh console -c infra/deploy/fly.api.toml
   --image <previous image ref>`.
 - Migrations are forward-only by policy: write a new migration to undo a
   bad one, never edit an applied file (the runner tracks by filename).
-  Exception for emergencies: `services/api/migrations/rollback/` holds
-  tested down scripts (never run by `db:migrate`). M20c/0015: deploy a
-  worker without M20c first, then `psql "$DATABASE_URL" -v ON_ERROR_STOP=1
-  --single-transaction -f services/api/migrations/rollback/0015_m20c_memory_consolidation.down.sql`
-  (undoes applied consolidation runs, drops what 0015 added).
+  Exception for emergencies: `services/api/migrations/rollback/` is the
+  ONLY place for manual down scripts (never run by `db:migrate`, which reads
+  `migrations/*.sql` only). Convention: `rollback/<migration>.down.sql`
+  (same name as the forward file, `.sql` → `.down.sql`), header with the
+  exact command and what is lost, tested by an integration test, and it
+  deletes its own `schema_migrations` row. `src/db/migrations-layout.test.ts`
+  fails on any other subdirectory or an orphan script. Roll back newest
+  first, always with `psql "$DATABASE_URL" -v ON_ERROR_STOP=1
+  --single-transaction -f services/api/migrations/rollback/<file>`:
+  - M20c/0015 `0015_m20c_memory_consolidation.down.sql`: deploy a worker
+    without M20c first (undoes applied consolidation runs, drops what 0015
+    added).
+  - M20b/0014 `0014_m20b_namespaces_tokens.down.sql`: deploy the API
+    without M20b first (drops namespaces and every namespace token; facts
+    are kept).
 - M8 legacy media: rows captured before M8 may still hold inline
   screenshots. Move them with the manual operator command
   `pnpm --filter @nova/api media:backfill` (idempotent; skips anything it

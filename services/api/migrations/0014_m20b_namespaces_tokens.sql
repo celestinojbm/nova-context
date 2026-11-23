@@ -1,6 +1,6 @@
 -- M20b: memory namespaces, per-namespace tokens for assistants, Markdown export.
 -- Design: docs/design/memoria-m20.md §2 (incl. §2.4). Additive; the runner is
--- forward-only, manual rollback: migrations/down/0014_m20b_namespaces_tokens.down.sql
+-- forward-only. Schema rollback: migrations/rollback/0014_m20b_namespaces_tokens.down.sql.
 
 CREATE TABLE IF NOT EXISTS memory_namespaces (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
