@@ -5,8 +5,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 /**
  * 0017 on a scratch database:
  * - its pgvector guard fails with an explicit message and applies nothing when
- *   the extension is missing or too old for HNSW (simulated by renaming the
- *   extension / raising the minimum version in the guard: CI always has pgvector);
+ *   the extension is missing, cannot be created by the migration role, or is
+ *   too old for HNSW (simulated by renaming the extension / switching to a role
+ *   without superuser / raising the minimum version: CI always has pgvector);
  * - it is reversible: every migration except 0017 → schema snapshot → 0017 +
  *   a stored vector → rollback script → schema identical to the snapshot,
  *   facts intact, pgvector still installed → 0017 re-applies.
@@ -17,6 +18,7 @@ const M17 = "0017_m20e_memory_embeddings.sql";
 const UP = readFileSync(new URL(M17, MIGRATIONS), "utf8");
 const DOWN = readFileSync(new URL("rollback/0017_m20e_memory_embeddings.down.sql", MIGRATIONS), "utf8");
 const scratch = `nova_m20e_down_${process.pid}_${Date.now()}`;
+const noSuper = `${scratch}_nosuper`;
 
 describe.skipIf(!databaseUrl)("M20e migration 0017 (scratch database)", () => {
   let admin: pg.Client;
@@ -62,6 +64,7 @@ describe.skipIf(!databaseUrl)("M20e migration 0017 (scratch database)", () => {
   afterAll(async () => {
     await db?.end();
     await admin?.query(`DROP DATABASE IF EXISTS ${scratch} WITH (FORCE)`);
+    await admin?.query(`DROP ROLE IF EXISTS ${noSuper}`);
     await admin?.end();
   });
 
@@ -73,6 +76,20 @@ describe.skipIf(!databaseUrl)("M20e migration 0017 (scratch database)", () => {
     );
     expect(await tableExists()).toBe(false);
     expect((await db.query(`SELECT 1 FROM schema_migrations WHERE name = $1`, [M17])).rowCount).toBe(0);
+  });
+
+  it("fails with an explicit message when the migration role may not create the extension", async () => {
+    // file_fdw is an untrusted contrib extension: available, but only a
+    // superuser may create it — the same situation as pgvector on a managed
+    // Postgres whose migration role is not an admin.
+    await admin.query(`CREATE ROLE ${noSuper} NOLOGIN NOSUPERUSER`);
+    const noPriv = UP.replace("ext CONSTANT text := 'vector'", "ext CONSTANT text := 'file_fdw'");
+    expect(noPriv).not.toBe(UP);
+    await expect(apply(M17, `SET LOCAL ROLE ${noSuper};\n${noPriv}`)).rejects.toThrow(
+      /the migration role may not create it\. Run CREATE EXTENSION file_fdw; as a superuser.*Nothing was applied/,
+    );
+    expect(await tableExists()).toBe(false);
+    expect((await db.query(`SELECT 1 FROM pg_extension WHERE extname = 'file_fdw'`)).rowCount).toBe(0);
   });
 
   it("fails with an explicit message when pgvector is too old for HNSW", async () => {

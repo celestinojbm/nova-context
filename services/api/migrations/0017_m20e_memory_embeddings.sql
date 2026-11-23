@@ -21,7 +21,7 @@ BEGIN
     BEGIN
       EXECUTE format('CREATE EXTENSION %I', ext);
     EXCEPTION WHEN insufficient_privilege THEN
-      RAISE EXCEPTION 'M20e needs the pgvector extension ("%"), but the migration role may not create it. Run CREATE EXTENSION %I; as a superuser (or the provider''s admin role) and run db:migrate again. Nothing was applied.', ext, ext;
+      RAISE EXCEPTION 'M20e needs the pgvector extension ("%"), but the migration role may not create it. Run CREATE EXTENSION %; as a superuser (or the provider''s admin role) and run db:migrate again. Nothing was applied.', ext, ext;
     END;
   END IF;
   SELECT extversion INTO installed FROM pg_extension WHERE extname = ext;
