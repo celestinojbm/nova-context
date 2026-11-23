@@ -56,6 +56,18 @@ release takes traffic. Manual run: `fly ssh console -c infra/deploy/fly.api.toml
   --image <previous image ref>`.
 - Migrations are forward-only by policy: write a new migration to undo a
   bad one, never edit an applied file (the runner tracks by filename).
+  Exception for emergencies: `services/api/migrations/rollback/` is the
+  ONLY place for manual down scripts (never run by `db:migrate`, which reads
+  `migrations/*.sql` only). Convention: `rollback/<migration>.down.sql`
+  (same name as the forward file, `.sql` → `.down.sql`), header with the
+  exact command and what is lost, tested by an integration test, and it
+  deletes its own `schema_migrations` row. `src/db/migrations-layout.test.ts`
+  fails on any other subdirectory or an orphan script. Roll back newest
+  first, always with `psql "$DATABASE_URL" -v ON_ERROR_STOP=1
+  --single-transaction -f services/api/migrations/rollback/<file>`:
+  - M20b/0014 `0014_m20b_namespaces_tokens.down.sql`: deploy the API
+    without M20b first (drops namespaces and every namespace token; facts
+    are kept).
 - M8 legacy media: rows captured before M8 may still hold inline
   screenshots. Move them with the manual operator command
   `pnpm --filter @nova/api media:backfill` (idempotent; skips anything it
