@@ -49,6 +49,7 @@ import { registerM1Routes } from "./routes-m1.js";
 import { registerM2Routes } from "./routes-m2.js";
 import { registerM3Routes } from "./routes-m3.js";
 import { registerM4Routes } from "./routes-m4.js";
+import { registerProjectWriteRoutes } from "./routes-project-write.js";
 import { redactDeep, suggestProjects, type RedactionType } from "@nova/context-engine";
 import { parseEncryptionKey, parseKeyList } from "@nova/context-engine/secret-box";
 import type { OcrEngine } from "@nova/context-engine/visual-redaction";
@@ -764,6 +765,7 @@ export async function buildApp({
     media,
   });
   registerM4Routes(app, { db, analytics, media });
+  registerProjectWriteRoutes(app, { db, intentRouter, redactionOn });
 
   return app;
 }
