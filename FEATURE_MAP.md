@@ -83,10 +83,13 @@ build, typecheck, unit, migrate e integration, y deja el reporte en
 
 ### 7. Proyectos y tareas
 - **Archivos:** `services/api/src/routes-m1.ts` (`/v1/tasks`, proyectos), `routes-m2.ts`, `routes-m4.ts`,
-  `packages/context-engine/src/suggest.ts` (`/v1/projects/suggest`), `packages/schema/src/{project,task}.ts`,
-  web `apps/web/app/{projects,tasks}/`.
-- **Tests:** `services/api/test/integration/m1.test.ts`, `m4.test.ts`, `isolation.test.ts`.
-- **Verificar:** `pnpm test:integration` (suites `m1`, `m4`, `isolation`).
+  `services/api/src/routes-project-write.ts` (`POST /v1/projects`, `PATCH /v1/context/moments/:id`:
+  crear proyecto, confirmar/cambiar/desvincular proyecto y editar la intención con redacción),
+  `packages/context-engine/src/suggest.ts` (`/v1/projects/suggest`),
+  `packages/schema/src/{project,project-write,task}.ts`, web `apps/web/app/{projects,tasks}/`.
+- **Tests:** `services/api/test/integration/m1.test.ts`, `m4.test.ts`, `isolation.test.ts`,
+  `project-write.test.ts`, `packages/schema/src/project-write.test.ts`.
+- **Verificar:** `pnpm test:integration` (suites `m1`, `m4`, `isolation`, `project-write`).
 
 ### 8. Acciones con aprobación humana (risk tiers)
 - **Archivos:** `services/api/src/routes-m2.ts`, `routes-integrations.ts` (`/v1/actions`, preview,
