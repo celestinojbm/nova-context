@@ -39,6 +39,7 @@ import { registerAccountRoutes } from "./routes-account.js";
 import { registerFeedbackRoutes } from "./routes-feedback.js";
 import { registerIngestStatusRoutes } from "./routes-ingest-status.js";
 import { registerOpsRoutes } from "./routes-ops.js";
+import { registerNamespaceRoutes } from "./routes-namespaces.js";
 import { registerMediaRoutes } from "./routes-media.js";
 import { TesseractOcrEngine } from "./ocr.js";
 import { HttpNotionApiClient, type NotionApiClient } from "./integrations/notion-api.js";
@@ -364,6 +365,8 @@ export async function buildApp({
   });
   // M13: private-alpha feedback intake.
   registerFeedbackRoutes(app, { db, analytics, rateLimiter });
+  // M20b: memory namespaces, per-namespace tokens, Markdown export.
+  registerNamespaceRoutes(app, { db });
   registerIngestStatusRoutes(app, db);
 
   app.get("/healthz", async () => {

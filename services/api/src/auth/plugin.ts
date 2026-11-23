@@ -1,10 +1,14 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type pg from "pg";
 import { resolveSession, type AuthContext } from "./sessions.js";
+import { resolveNamespaceToken } from "../memory/token-auth.js";
+import { isNamespaceToken, tokenRouteAllowed, type NamespaceTokenContext } from "../memory/tokens.js";
 
 declare module "fastify" {
   interface FastifyRequest {
     auth: AuthContext | null;
+    /** M20b: set instead of `auth` when the bearer is a namespace token. */
+    nsToken: NamespaceTokenContext | null;
   }
 }
 
@@ -32,9 +36,11 @@ const PUBLIC_V1_ROUTES = new Set([
 
 export function registerAuth(app: FastifyInstance, db: pg.Pool): void {
   app.decorateRequest("auth", null);
+  app.decorateRequest("nsToken", null);
 
   app.addHook("onRequest", async (req, reply) => {
     req.auth = null;
+    req.nsToken = null;
     const path = req.url.split("?")[0]!;
     if (!path.startsWith("/v1/")) return; // only /healthz lives outside /v1
     if (PUBLIC_V1_ROUTES.has(`${req.method} ${path}`)) return;
@@ -43,7 +49,17 @@ export function registerAuth(app: FastifyInstance, db: pg.Pool): void {
     if (!header?.startsWith("Bearer ")) {
       return reply.code(401).send({ error: "unauthorized" });
     }
-    const auth = await resolveSession(db, header.slice("Bearer ".length).trim());
+    const bearer = header.slice("Bearer ".length).trim();
+    // M20b §2.4: a namespace token never reaches account surfaces (moments,
+    // projects, other namespaces…): 404, not 403, so existence never leaks.
+    if (isNamespaceToken(bearer)) {
+      if (!tokenRouteAllowed(req.method, path)) return reply.code(404).send({ error: "not_found" });
+      const r = await resolveNamespaceToken(db, bearer);
+      if (!r.ok) return reply.code(r.status).send({ error: r.status === 429 ? "rate_limited" : "unauthorized", reason: r.reason });
+      req.nsToken = r.ctx;
+      return;
+    }
+    const auth = await resolveSession(db, bearer);
     if (!auth) {
       return reply.code(401).send({ error: "unauthorized", reason: "session_invalid_or_expired" });
     }
