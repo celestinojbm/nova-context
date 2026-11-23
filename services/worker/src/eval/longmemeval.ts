@@ -14,7 +14,7 @@ import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import {
-  bm25Rank, consolidationPairs, evalConsolidation, evalRetrieval, parseEvalArgs, selectSubset, trigramRank, type LmeQuestion,
+  bm25Rank, consolidationPairs, evalConsolidation, evalRetrieval, parseEvalArgs, selectSubset, tokens, trigramRank, type LmeQuestion,
 } from "./longmemeval-metrics.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
@@ -78,6 +78,32 @@ const show = (name: string, r: ReturnType<typeof evalRetrieval>) =>
 console.log(`Subconjunto: ${subset.length} de ${pool} preguntas (sin abstención)`);
 show("bm25", evalRetrieval(subset, bm25Rank));
 show("trigram", evalRetrieval(subset, trigramRank));
+
+// `--pg`: same ranking SQL as GET /memory?q= (tsvector 'simple' + ts_rank(·,1),
+// OR-query over tokens, trigram as tie-break). Uses a TEMP table only.
+if (opts.pg) {
+  const pg = (await import("pg")).default;
+  const c = new pg.Client({ connectionString: process.env.DATABASE_URL ?? "postgres://nova:nova@localhost:5432/nova" });
+  await c.connect();
+  await c.query("CREATE EXTENSION IF NOT EXISTS pg_trgm");
+  const CFG = process.env.LME_CFG ?? "simple", FN = process.env.LME_FN ?? "ts_rank", NORM = process.env.LME_NORM ?? "1";
+  await c.query(`CREATE TEMP TABLE lme_docs (i int, content text, tsv tsvector GENERATED ALWAYS AS (to_tsvector('${CFG}', content)) STORED)`);
+  const cache = new Map<string, number[]>();
+  for (const q of subset) {
+    const docs = q.haystack_sessions.map((s) => s.filter((t) => t.role === "user").map((t) => t.content).join("\n"));
+    await c.query("TRUNCATE lme_docs");
+    await c.query("INSERT INTO lme_docs SELECT i - 1, d FROM unnest($1::text[]) WITH ORDINALITY AS u(d, i)", [docs]);
+    const terms = [...new Set(tokens(q.question).filter((w) => w.length > 1))].slice(0, 32);
+    const { rows } = await c.query<{ i: number }>(
+      `SELECT i FROM lme_docs ORDER BY ${FN}(tsv, to_tsquery('${CFG}', $1), ${NORM}) DESC, word_similarity($2, content) DESC, i`,
+      [terms.join(" | ") || "''", q.question],
+    );
+    cache.set(q.question_id, rows.map((r) => r.i));
+  }
+  await c.end();
+  const byQ = new Map(subset.map((q) => [q.question, q.question_id]));
+  show("pg_fts", evalRetrieval(subset, (question) => cache.get(byQ.get(question)!)!));
+}
 
 const byType = new Map<string, LmeQuestion[]>();
 for (const q of subset) byType.set(q.question_type, [...(byType.get(q.question_type) ?? []), q]);

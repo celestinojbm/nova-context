@@ -70,10 +70,14 @@ describe("M20d LongMemEval metrics (fixture; real dataset is never fetched in CI
 
 describe("M20d eval CLI helpers", () => {
   it("parses --n strictly and ignores pnpm's '--'", () => {
-    expect(parseEvalArgs([])).toEqual({ n: 100, download: false });
-    expect(parseEvalArgs(["--", "--n", "20", "--download"])).toEqual({ n: 20, download: true });
-    expect(parseEvalArgs(["--n=7"])).toEqual({ n: 7, download: false });
-    expect(parseEvalArgs(["--download"])).toEqual({ n: 100, download: true }); // was: args[0] read as --n
+    const off = { pg: false, embeddings: false };
+    expect(parseEvalArgs([])).toEqual({ n: 100, download: false, ...off });
+    expect(parseEvalArgs(["--", "--n", "20", "--download"])).toEqual({ n: 20, download: true, ...off });
+    expect(parseEvalArgs(["--n=7"])).toEqual({ n: 7, download: false, ...off });
+    expect(parseEvalArgs(["--download"])).toEqual({ n: 100, download: true, ...off }); // was: args[0] read as --n
+    // M20 (--pg) and M20e (--embeddings) flags: accepted, not mistaken for --n's value.
+    expect(parseEvalArgs(["--pg", "--embeddings", "--n", "5"])).toEqual({ n: 5, download: false, pg: true, embeddings: true });
+    expect(() => parseEvalArgs(["--n", "--pg"])).toThrow(/entero/);
     expect(() => parseEvalArgs(["--n", "abc"])).toThrow(/entero/);
     expect(() => parseEvalArgs(["--n"])).toThrow(/entero/);
     expect(() => parseEvalArgs(["--n", "0"])).toThrow(/entero/);
