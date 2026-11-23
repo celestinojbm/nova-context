@@ -1,6 +1,6 @@
 # Nova enrichment worker — build from the repo root:
 #   docker build -f infra/deploy/worker.Dockerfile -t nova-worker .
-FROM node:22-alpine
+FROM node:22.23.4-alpine
 RUN corepack enable
 WORKDIR /app
 COPY . .

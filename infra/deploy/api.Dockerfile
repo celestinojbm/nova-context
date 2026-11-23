@@ -1,6 +1,6 @@
 # Nova API — build from the repo root:
 #   docker build -f infra/deploy/api.Dockerfile -t nova-api .
-FROM node:22-alpine
+FROM node:22.23.4-alpine
 RUN corepack enable
 WORKDIR /app
 COPY . .
