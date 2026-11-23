@@ -180,7 +180,7 @@ export async function opsStatus(
 
   const lastMaintenance = await check(async () => {
     const { rows } = await db.query(
-      `SELECT mode, report, ran_at FROM ops_maintenance_runs ORDER BY ran_at DESC LIMIT 1`,
+      `SELECT mode, report, ran_at FROM ops_maintenance_runs WHERE job = 'retention' ORDER BY ran_at DESC LIMIT 1`,
     );
     return rows[0] ?? null;
   });
