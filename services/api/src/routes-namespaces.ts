@@ -159,12 +159,41 @@ async function loadItems(
     sql += ` AND mi.status = $${params.length}`;
   }
   if (opts.q) {
+    // BM25-style ranking: OR-query over non-stopword tokens, ts_rank with
+    // log-length normalisation (1); best config on LongMemEval (docs/design/m20-busqueda-fts.md).
+    // Trigram similarity / ILIKE only as fallback for typos and substrings that FTS cannot match.
+    const terms = memoryQueryTerms(opts.q);
+    params.push(terms.join(" | ") || "''");
+    const tq = `to_tsquery('simple', $${params.length})`;
+    params.push(opts.q);
+    const raw = `$${params.length}`;
     params.push(`%${opts.q.replace(/[\\%_]/g, (m) => "\\" + m)}%`);
-    sql += ` AND mi.content ILIKE $${params.length}`;
+    const like = `$${params.length}`;
+    sql = sql.replace(
+      " FROM memory_items mi",
+      `, ts_rank(mi.tsv, ${tq}, 1) AS fts_rank, word_similarity(${raw}, mi.content) AS trgm_sim FROM memory_items mi`,
+    );
+    sql += ` AND (mi.tsv @@ ${tq} OR ${raw} <% mi.content OR mi.content ILIKE ${like})`;
+    sql += " ORDER BY fts_rank DESC, trgm_sim DESC, COALESCE(mi.valid_from, mi.created_at) DESC LIMIT 500";
+  } else {
+    sql += " ORDER BY COALESCE(mi.valid_from, mi.created_at) DESC LIMIT 500";
   }
-  sql += " ORDER BY COALESCE(mi.valid_from, mi.created_at) DESC LIMIT 500";
   const { rows } = await db.query<ItemRow>(sql, params);
   return rows;
+}
+
+// EN + ES stopwords: with the 'simple' config they would otherwise dominate the OR-query.
+const MEMORY_STOP = new Set(
+  (
+    "the a an of in on at and or to for with my i me is are was what how did do you it that this " +
+    "el la los las un una de del en y o que por para con mi me es son fue qué cómo se lo al su"
+  ).split(" "),
+);
+/** Tokens for the OR tsquery; only letters/digits, so the tsquery is always valid. */
+export function memoryQueryTerms(q: string): string[] {
+  const all = (q.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((w) => w.length > 1);
+  const kept = all.filter((w) => !MEMORY_STOP.has(w));
+  return [...new Set(kept.length ? kept : all)].slice(0, 32);
 }
 
 function slugFromRest(rest: string): string {
