@@ -65,6 +65,9 @@ release takes traffic. Manual run: `fly ssh console -c infra/deploy/fly.api.toml
   fails on any other subdirectory or an orphan script. Roll back newest
   first, always with `psql "$DATABASE_URL" -v ON_ERROR_STOP=1
   --single-transaction -f services/api/migrations/rollback/<file>`:
+  - M20/0016 `0016_m20_memory_fts.down.sql`: deploy the API without M20
+    full-text search first (drops `memory_items.tsv` and its GIN index;
+    nothing is lost, the column is derived from `content`).
   - M20c/0015 `0015_m20c_memory_consolidation.down.sql`: deploy a worker
     without M20c first (undoes applied consolidation runs, drops what 0015
     added).
