@@ -101,6 +101,11 @@ const envSchema = z.object({
   // storage total (MB) above which /status and ops:report raise a warning.
   NOVA_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
   NOVA_MEDIA_WARN_MB: z.coerce.number().int().positive().default(1024),
+  // M20h (opt-in): serialize concurrent PATCHes of one memory item behind its
+  // row lock; a request that waits longer than the timeout gets 429 + Retry-After.
+  // 'off' (default) keeps the historical unserialized path byte for byte.
+  NOVA_MEMORY_ITEM_LOCK: z.enum(["on", "off"]).default("off"),
+  NOVA_MEMORY_ITEM_LOCK_TIMEOUT_MS: z.coerce.number().int().min(50).max(60_000).default(5000),
 });
 
 export type Env = z.infer<typeof envSchema> & {

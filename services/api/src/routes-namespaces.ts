@@ -222,8 +222,22 @@ const tokenBody = z.object({
   rate_limit_per_hour: z.number().int().min(1).max(100000).default(600),
 });
 
-export function registerNamespaceRoutes(app: FastifyInstance, deps: { db: pg.Pool }): void {
+export interface ItemLockOptions {
+  enabled: boolean;
+  timeoutMs: number;
+}
+
+/** Postgres lock_not_available: raised when `lock_timeout` expires while waiting for a row lock. */
+export function isLockTimeout(err: unknown): boolean {
+  return typeof err === "object" && err !== null && (err as { code?: string }).code === "55P03";
+}
+
+export function registerNamespaceRoutes(
+  app: FastifyInstance,
+  deps: { db: pg.Pool; itemLock?: ItemLockOptions },
+): void {
   const { db } = deps;
+  const itemLock = deps.itemLock ?? { enabled: false, timeoutMs: 5000 };
 
   // ---- Namespaces (session only) -------------------------------------------------
   app.get("/v1/namespaces", async (req, reply) => {
@@ -361,24 +375,57 @@ export function registerNamespaceRoutes(app: FastifyInstance, deps: { db: pg.Poo
     if (ns === "forbidden") return reply.code(403).send({ error: "insufficient_scope", required: "memory:write" });
     const body = memoryPatchBody.safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: "invalid_body" });
-    const { rows } = await db.query<{ author: string; local_only: boolean }>(
-      `SELECT author, local_only FROM memory_items WHERE id = $1 AND user_id = $2 AND namespace_id = $3`,
-      [itemId, c.userId, ns.id],
-    );
-    const item = rows[0];
-    if (!item || (c.kind === "token" && item.local_only)) return reply.code(404).send({ error: "not_found" });
-    // §2.4: memory:write NEVER edits or resolves a user-authored fact.
-    if (c.kind === "token" && item.author !== "assistant") {
+    const content = body.data.content !== undefined ? redactText(body.data.content).text.trim() : null;
+
+    // M20h: with the lock on, the read-check-write runs in one transaction that
+    // holds the item's row lock (FOR UPDATE), so concurrent PATCHes of the same
+    // item (and any other writer, e.g. consolidation) are serialized. Waiting
+    // longer than lock_timeout → 429. With it off, this is the historical path.
+    const client = itemLock.enabled ? await db.connect() : null;
+    const q: pg.Pool | pg.PoolClient = client ?? db;
+    let denied = false;
+    let found = true;
+    try {
+      if (client) {
+        await client.query("BEGIN");
+        await client.query("SELECT set_config('lock_timeout', $1, true)", [`${itemLock.timeoutMs}ms`]);
+      }
+      const { rows } = await q.query<{ author: string; local_only: boolean }>(
+        `SELECT author, local_only FROM memory_items WHERE id = $1 AND user_id = $2 AND namespace_id = $3${client ? " FOR UPDATE" : ""}`,
+        [itemId, c.userId, ns.id],
+      );
+      const item = rows[0];
+      if (!item || (c.kind === "token" && item.local_only)) {
+        found = false;
+      } else if (c.kind === "token" && item.author !== "assistant") {
+        // §2.4: memory:write NEVER edits or resolves a user-authored fact.
+        denied = true;
+      } else {
+        await q.query(
+          `UPDATE memory_items SET content = COALESCE($2, content), content_hash = COALESCE($3, content_hash),
+                  status = COALESCE($4, status)
+           WHERE id = $1 AND user_id = $5 ${c.kind === "token" ? "AND author = 'assistant'" : ""}`,
+          [itemId, content, content ? contentHash(content) : null, body.data.status ?? null, c.userId],
+        );
+      }
+      if (client) await client.query("COMMIT");
+    } catch (err) {
+      if (client) await client.query("ROLLBACK").catch(() => {});
+      if (client && isLockTimeout(err)) {
+        return reply
+          .code(429)
+          .header("retry-after", String(Math.max(1, Math.ceil(itemLock.timeoutMs / 1000))))
+          .send({ error: "item_busy" });
+      }
+      throw err;
+    } finally {
+      client?.release();
+    }
+    if (!found) return reply.code(404).send({ error: "not_found" });
+    if (denied) {
       await audit(db, c, "namespace_token.denied", { namespace: slug, action: "memory.update", reason: "user_fact_protected" }, { kind: "memory_item", id: itemId });
       return reply.code(403).send({ error: "user_fact_protected" });
     }
-    const content = body.data.content !== undefined ? redactText(body.data.content).text.trim() : null;
-    await db.query(
-      `UPDATE memory_items SET content = COALESCE($2, content), content_hash = COALESCE($3, content_hash),
-              status = COALESCE($4, status)
-       WHERE id = $1 AND user_id = $5 ${c.kind === "token" ? "AND author = 'assistant'" : ""}`,
-      [itemId, content, content ? contentHash(content) : null, body.data.status ?? null, c.userId],
-    );
     await audit(db, c, c.kind === "token" ? "namespace_token.use" : "memory.update", { namespace: slug, action: "memory.update", items: 1 }, { kind: "memory_item", id: itemId });
     return { id: itemId, updated: true };
   }

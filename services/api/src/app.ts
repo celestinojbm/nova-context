@@ -366,7 +366,10 @@ export async function buildApp({
   // M13: private-alpha feedback intake.
   registerFeedbackRoutes(app, { db, analytics, rateLimiter });
   // M20b: memory namespaces, per-namespace tokens, Markdown export.
-  registerNamespaceRoutes(app, { db });
+  registerNamespaceRoutes(app, {
+    db,
+    itemLock: { enabled: env.NOVA_MEMORY_ITEM_LOCK === "on", timeoutMs: env.NOVA_MEMORY_ITEM_LOCK_TIMEOUT_MS },
+  });
   registerIngestStatusRoutes(app, db);
 
   app.get("/healthz", async () => {
