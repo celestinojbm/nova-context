@@ -111,14 +111,18 @@ export function consolidationPairs(qs: LmeQuestion[], negPerQuestion = 40) {
   }
   return { pos, neg };
 }
-export function evalConsolidation(pairs: ReturnType<typeof consolidationPairs>, t: Thresholds = THRESHOLDS): ConsolidationResult {
+export function evalConsolidation(
+  pairs: ReturnType<typeof consolidationPairs>,
+  t: Thresholds = THRESHOLDS,
+  cos?: (a: string, b: string) => number | undefined,
+): ConsolidationResult {
   const r: ConsolidationResult = { thresholds: t, positives: pairs.pos.length, posFlagged: 0, posMerge: 0, posConflict: 0, negatives: pairs.neg.length, negFlagged: 0, negMerge: 0, negConflict: 0 };
   for (const [a, b] of pairs.pos) {
-    const rel = classifyPair(a, b, t).relation;
+    const rel = classifyPair(a, b, t, undefined, cos?.(a, b)).relation;
     if (rel === "merge") { r.posMerge++; r.posFlagged++; } else if (rel === "conflict") { r.posConflict++; r.posFlagged++; }
   }
   for (const [a, b] of pairs.neg) {
-    const rel = classifyPair(a, b, t).relation;
+    const rel = classifyPair(a, b, t, undefined, cos?.(a, b)).relation;
     if (rel === "merge") { r.negMerge++; r.negFlagged++; } else if (rel === "conflict") { r.negConflict++; r.negFlagged++; }
   }
   return r;

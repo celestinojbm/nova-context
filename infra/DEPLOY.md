@@ -65,6 +65,11 @@ release takes traffic. Manual run: `fly ssh console -c infra/deploy/fly.api.toml
   fails on any other subdirectory or an orphan script. Roll back newest
   first, always with `psql "$DATABASE_URL" -v ON_ERROR_STOP=1
   --single-transaction -f services/api/migrations/rollback/<file>`:
+  - M20e/0017 `0017_m20e_memory_embeddings.down.sql`: deploy a worker
+    without M20e (or with `NOVA_MEMORY_EMBEDDINGS=off`) first (drops
+    `memory_item_embeddings`; vectors are recomputable, pgvector stays).
+    0017 itself needs pgvector >= 0.5.0 (HNSW) and stops `db:migrate` with
+    an explicit message, applying nothing, if the server lacks it.
   - M20/0016 `0016_m20_memory_fts.down.sql`: deploy the API without M20
     full-text search first (drops `memory_items.tsv` and its GIN index;
     nothing is lost, the column is derived from `content`).
