@@ -1,0 +1,425 @@
+{
+ "description": "M20f: pares sintéticos en español para candidatos de consolidación. label=1: mismo hecho parafraseado o actualizado (debe ser candidato); label=0: tema distinto con solapamiento léxico.",
+ "cases": [
+  {
+   "id": "es-p01",
+   "a": "Lucía vive en Valencia",
+   "b": "Lucía reside en la ciudad de Valencia",
+   "label": 1,
+   "kind": "paraphrase"
+  },
+  {
+   "id": "es-p02",
+   "a": "Prefiero café sin azúcar",
+   "b": "Me gusta tomar el café sin endulzar",
+   "label": 1,
+   "kind": "paraphrase"
+  },
+  {
+   "id": "es-p03",
+   "a": "Decidimos usar Postgres para el MVP",
+   "b": "Para el MVP elegimos PostgreSQL como base de datos",
+   "label": 1,
+   "kind": "paraphrase"
+  },
+  {
+   "id": "es-p04",
+   "a": "El plan Pro cuesta 49 USD al mes",
+   "b": "La suscripción Pro vale 49 dólares mensuales",
+   "label": 1,
+   "kind": "paraphrase"
+  },
+  {
+   "id": "es-p05",
+   "a": "Marta trabaja en Telefónica",
+   "b": "Marta es empleada de Telefónica",
+   "label": 1,
+   "kind": "paraphrase"
+  },
+  {
+   "id": "es-p06",
+   "a": "Fluvia usa Supabase como backend",
+   "b": "El backend de Fluvia corre sobre Supabase",
+   "label": 1,
+   "kind": "paraphrase"
+  },
+  {
+   "id": "es-p07",
+   "a": "Pedro odia las reuniones largas",
+   "b": "A Pedro no le gustan nada las reuniones extensas",
+   "label": 1,
+   "kind": "paraphrase"
+  },
+  {
+   "id": "es-p08",
+   "a": "La demo es el 12 de noviembre",
+   "b": "La presentación de la demo será el 12 de noviembre",
+   "label": 1,
+   "kind": "paraphrase"
+  },
+  {
+   "id": "es-p09",
+   "a": "Ana es alérgica a los cacahuetes",
+   "b": "Ana tiene alergia al maní",
+   "label": 1,
+   "kind": "paraphrase"
+  },
+  {
+   "id": "es-p10",
+   "a": "El equipo de diseño tiene cuatro personas",
+   "b": "Diseño cuenta con 4 integrantes",
+   "label": 1,
+   "kind": "paraphrase"
+  },
+  {
+   "id": "es-p11",
+   "a": "Siempre viajo en asiento de pasillo",
+   "b": "Cuando vuelo prefiero el pasillo",
+   "label": 1,
+   "kind": "paraphrase"
+  },
+  {
+   "id": "es-p12",
+   "a": "Nuestro proveedor de correo es Postmark",
+   "b": "Enviamos los emails con Postmark",
+   "label": 1,
+   "kind": "paraphrase"
+  },
+  {
+   "id": "es-p13",
+   "a": "Carlos corre maratones",
+   "b": "Carlos es corredor de maratón",
+   "label": 1,
+   "kind": "paraphrase"
+  },
+  {
+   "id": "es-p14",
+   "a": "La oficina está en Medellín",
+   "b": "Tenemos la oficina en Medellín, Colombia",
+   "label": 1,
+   "kind": "paraphrase"
+  },
+  {
+   "id": "es-p15",
+   "a": "El presupuesto del proyecto es 20.000 USD",
+   "b": "El proyecto tiene un presupuesto de veinte mil dólares",
+   "label": 1,
+   "kind": "paraphrase"
+  },
+  {
+   "id": "es-p16",
+   "a": "Lucía vive en Valencia",
+   "b": "Lucía se mudó a Sevilla y ahora vive allí",
+   "label": 1,
+   "kind": "update"
+  },
+  {
+   "id": "es-p17",
+   "a": "El plan Pro cuesta 49 USD al mes",
+   "b": "Subimos el plan Pro a 59 USD mensuales",
+   "label": 1,
+   "kind": "update"
+  },
+  {
+   "id": "es-p18",
+   "a": "Marta trabaja en Telefónica",
+   "b": "Marta dejó Telefónica y ahora trabaja en BBVA",
+   "label": 1,
+   "kind": "update"
+  },
+  {
+   "id": "es-p19",
+   "a": "Decidimos usar Postgres para el MVP",
+   "b": "Cambiamos de idea: el MVP usará MongoDB",
+   "label": 1,
+   "kind": "update"
+  },
+  {
+   "id": "es-p20",
+   "a": "La demo es el 12 de noviembre",
+   "b": "La demo se aplazó al 3 de diciembre",
+   "label": 1,
+   "kind": "update"
+  },
+  {
+   "id": "es-p21",
+   "a": "El equipo de diseño tiene cuatro personas",
+   "b": "Diseño creció a seis personas",
+   "label": 1,
+   "kind": "update"
+  },
+  {
+   "id": "es-p22",
+   "a": "Prefiero el té verde",
+   "b": "Últimamente prefiero el té negro",
+   "label": 1,
+   "kind": "update"
+  },
+  {
+   "id": "es-p23",
+   "a": "Mi coche es un Toyota Corolla",
+   "b": "Vendí el Corolla y ahora tengo un Mazda 3",
+   "label": 1,
+   "kind": "update"
+  },
+  {
+   "id": "es-p24",
+   "a": "Juan es el responsable de backend",
+   "b": "Ahora la responsable de backend es Sofía",
+   "label": 1,
+   "kind": "update"
+  },
+  {
+   "id": "es-p25",
+   "a": "El servidor corre en Hetzner",
+   "b": "Migramos el servidor de Hetzner a AWS",
+   "label": 1,
+   "kind": "update"
+  },
+  {
+   "id": "es-p26",
+   "a": "Tengo dos gatos",
+   "b": "Ahora tengo tres gatos en casa",
+   "label": 1,
+   "kind": "update"
+  },
+  {
+   "id": "es-p27",
+   "a": "La reunión semanal es los lunes",
+   "b": "Movimos la reunión semanal a los martes",
+   "label": 1,
+   "kind": "update"
+  },
+  {
+   "id": "es-p28",
+   "a": "Elena estudia medicina en Madrid",
+   "b": "Elena terminó medicina y ahora hace la residencia en Madrid",
+   "label": 1,
+   "kind": "update"
+  },
+  {
+   "id": "es-p29",
+   "a": "El límite de la API es 100 peticiones por minuto",
+   "b": "Subimos el límite de la API a 500 peticiones por minuto",
+   "label": 1,
+   "kind": "update"
+  },
+  {
+   "id": "es-p30",
+   "a": "Uso VS Code para programar",
+   "b": "Cambié VS Code por Cursor para programar",
+   "label": 1,
+   "kind": "update"
+  },
+  {
+   "id": "es-n01",
+   "a": "Lucía vive en Valencia",
+   "b": "Valencia tiene una playa muy famosa",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n02",
+   "a": "Prefiero café sin azúcar",
+   "b": "El azúcar subió de precio este mes",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n03",
+   "a": "Decidimos usar Postgres para el MVP",
+   "b": "El MVP de la competencia salió ayer",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n04",
+   "a": "El plan Pro cuesta 49 USD al mes",
+   "b": "El plan de marketing está casi listo",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n05",
+   "a": "Marta trabaja en Telefónica",
+   "b": "Telefónica publicó sus resultados trimestrales",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n06",
+   "a": "Fluvia usa Supabase como backend",
+   "b": "Dona usa Firebase para notificaciones",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n07",
+   "a": "Pedro odia las reuniones largas",
+   "b": "Las reuniones de los viernes son opcionales",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n08",
+   "a": "La demo es el 12 de noviembre",
+   "b": "El 12 de noviembre es el cumpleaños de mi madre",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n09",
+   "a": "Ana es alérgica a los cacahuetes",
+   "b": "Los cacahuetes son una legumbre",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n10",
+   "a": "El equipo de diseño tiene cuatro personas",
+   "b": "El equipo de ventas viaja a Lima",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n11",
+   "a": "Siempre viajo en asiento de pasillo",
+   "b": "El pasillo de la oficina está en obras",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n12",
+   "a": "Nuestro proveedor de correo es Postmark",
+   "b": "El correo postal llega los martes",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n13",
+   "a": "Carlos corre maratones",
+   "b": "Carlos tiene una hermana en Quito",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n14",
+   "a": "La oficina está en Medellín",
+   "b": "Medellín tiene buen clima todo el año",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n15",
+   "a": "El presupuesto del proyecto es 20.000 USD",
+   "b": "El proyecto de Dona usa Next.js",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n16",
+   "a": "Lucía vive en Valencia",
+   "b": "Pedro vive en Bilbao",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n17",
+   "a": "Marta trabaja en Telefónica",
+   "b": "Jorge trabaja en Repsol",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n18",
+   "a": "Tengo dos gatos",
+   "b": "Mi vecino tiene un perro",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n19",
+   "a": "Mi coche es un Toyota Corolla",
+   "b": "Toyota anunció un coche eléctrico nuevo",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n20",
+   "a": "Juan es el responsable de backend",
+   "b": "El backend tarda 200 ms en responder",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n21",
+   "a": "El servidor corre en Hetzner",
+   "b": "El servidor de correo tuvo una caída",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n22",
+   "a": "La reunión semanal es los lunes",
+   "b": "Los lunes el gimnasio abre tarde",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n23",
+   "a": "Elena estudia medicina en Madrid",
+   "b": "Madrid tiene muchas universidades",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n24",
+   "a": "El límite de la API es 100 peticiones por minuto",
+   "b": "La API de pagos usa Stripe",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n25",
+   "a": "Uso VS Code para programar",
+   "b": "Programar en Rust es divertido",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n26",
+   "a": "Prefiero el té verde",
+   "b": "El té verde viene de China",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n27",
+   "a": "Ana es alérgica a los cacahuetes",
+   "b": "Ana juega al pádel los jueves",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n28",
+   "a": "Fluvia usa Supabase como backend",
+   "b": "Supabase lanzó una nueva versión",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n29",
+   "a": "La demo es el 12 de noviembre",
+   "b": "La demo de Fluvia fue un éxito",
+   "label": 0,
+   "kind": "different_subject"
+  },
+  {
+   "id": "es-n30",
+   "a": "Carlos corre maratones",
+   "b": "La maratón de Valencia es en diciembre",
+   "label": 0,
+   "kind": "different_subject"
+  }
+ ]
+}
