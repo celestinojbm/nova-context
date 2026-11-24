@@ -18,6 +18,11 @@ describe("memoryQueryTerms", () => {
     ]);
     expect(memoryQueryTerms("the")).toEqual(["the"]);
   });
+  it("has no searchable terms for 1-char or punctuation-only input", () => {
+    expect(memoryQueryTerms("a")).toEqual([]);
+    expect(memoryQueryTerms("a b ? ! & |")).toEqual([]);
+    expect(memoryQueryTerms("   ")).toEqual([]);
+  });
 });
 
 describe.skipIf(!databaseUrl)("M20: memory full-text ranking", () => {
@@ -74,6 +79,25 @@ describe.skipIf(!databaseUrl)("M20: memory full-text ranking", () => {
     expect(r[0]).toBe("Su coche es un Mazda rojo");
     expect(r).toContain("Vive en Caracas y su coche anterior era un Fiat");
     expect(r).not.toContain("Le gusta el café");
+  });
+  // Review fix: q with no searchable term used to send to_tsquery('simple', "''")
+  // → "syntax error in tsquery" → 500. Now: 200 with no results.
+  it.each(["a", "x", "a b", "?", "& | !", "'", "a'", "é"])("q=%j → 200 and no results, never a tsquery error", async (q) => {
+    const res = await u.inject({ method: "GET", url: `/v1/namespaces/asistente/claude/memory?q=${encodeURIComponent(q)}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().items).toEqual([]);
+  });
+  it("whitespace-only q behaves like no q (unfiltered list), not a 500", async () => {
+    const res = await u.inject({ method: "GET", url: `/v1/namespaces/asistente/claude/memory?q=${encodeURIComponent("   ")}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().items).toHaveLength(4);
+  });
+  it("stopword-only q keeps the documented fallback (searches the stopwords) and never 500s", async () => {
+    for (const q of ["the of", "el de la", "qué"]) {
+      const res = await u.inject({ method: "GET", url: `/v1/namespaces/asistente/claude/memory?q=${encodeURIComponent(q)}` });
+      expect(res.statusCode).toBe(200);
+    }
+    expect(await search("el")).toContain("Le gusta el café");
   });
   it("falls back to trigrams for typos", async () => {
     expect(await search("Mazdaa")).toContain("Su coche es un Mazda rojo");
