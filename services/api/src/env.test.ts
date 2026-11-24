@@ -12,6 +12,17 @@ describe("loadEnv", () => {
     expect(env.NOVA_EXTENSION_SESSION_TTL_HOURS).toBe(720);
   });
 
+  it("M20h: the memory item lock is opt-in with a 5 s timeout", () => {
+    const def = loadEnv({});
+    expect(def.NOVA_MEMORY_ITEM_LOCK).toBe("off");
+    expect(def.NOVA_MEMORY_ITEM_LOCK_TIMEOUT_MS).toBe(5000);
+    const on = loadEnv({ NOVA_MEMORY_ITEM_LOCK: "on", NOVA_MEMORY_ITEM_LOCK_TIMEOUT_MS: "2000" });
+    expect(on.NOVA_MEMORY_ITEM_LOCK).toBe("on");
+    expect(on.NOVA_MEMORY_ITEM_LOCK_TIMEOUT_MS).toBe(2000);
+    expect(() => loadEnv({ NOVA_MEMORY_ITEM_LOCK: "yes" })).toThrow();
+    expect(() => loadEnv({ NOVA_MEMORY_ITEM_LOCK_TIMEOUT_MS: "0" })).toThrow();
+  });
+
   it("defaults signup to invite-only in production", () => {
     const env = loadEnv({ NODE_ENV: "production", NOVA_ENCRYPTION_KEY: "a".repeat(64) });
     expect(env.isProduction).toBe(true);

@@ -80,6 +80,11 @@ build, typecheck, unit, migrate e integration, y deja el reporte en
   `services/worker/src/memory/fact-extractor.test.ts`, `services/worker/src/memory/pii-skipped.test.ts`,
   `services/worker/test/integration/m20a-memory-facts.test.ts`.
 - **Verificar:** `pnpm --filter @nova/worker test`; `pnpm test:integration` (suites `m2`, `search-golden`, `m20a-memory-facts`).
+- **M20h (opt-in):** `PATCH /v1/namespaces/:slug/memory/:id` serializa escrituras concurrentes del mismo
+  ítem con su bloqueo de fila cuando `NOVA_MEMORY_ITEM_LOCK=on`; si la espera supera
+  `NOVA_MEMORY_ITEM_LOCK_TIMEOUT_MS` (5000 por defecto) responde `429 item_busy` + `Retry-After`.
+  Apagado por defecto (comportamiento histórico). Código: `services/api/src/routes-namespaces.ts`, `env.ts`.
+  Tests: `services/api/src/{env,routes-namespaces}.test.ts`, `services/api/test/integration/m20h-memory-item-lock.test.ts`.
 
 ### 7. Proyectos y tareas
 - **Archivos:** `services/api/src/routes-m1.ts` (`/v1/tasks`, proyectos), `routes-m2.ts`, `routes-m4.ts`,
