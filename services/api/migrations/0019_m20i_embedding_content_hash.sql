@@ -1,0 +1,12 @@
+-- M20i: stale-vector detection for memory_item_embeddings (docs/design/m20e-embeddings.md).
+-- Before this, consolidation only embedded items WITHOUT a vector, so editing a
+-- fact (PATCH .../memory/:id) left the old content's vector in place and the
+-- next run compared the new text by the old meaning.
+--
+-- content_sha256 = sha256 hex of the EXACT text that was embedded (not the
+-- normalized memory_items.content_hash: a case or whitespace edit is a new
+-- input to the model). Nullable on purpose: rows written before 0019 have no
+-- hash, read as "stale" and are re-embedded once on the next run (derived
+-- data, no backfill needed). Forward-only, additive.
+-- Schema rollback: migrations/rollback/0019_m20i_embedding_content_hash.down.sql.
+ALTER TABLE memory_item_embeddings ADD COLUMN IF NOT EXISTS content_sha256 text;

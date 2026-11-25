@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type pg from "pg";
 import { classifyPair, THRESHOLDS, type Thresholds } from "./consolidation-rules.js";
 import type { Embedder } from "./embeddings.js";
@@ -16,6 +17,8 @@ import type { Embedder } from "./embeddings.js";
  * M20e: with an `Embedder` (local model, opt-in) missing vectors are stored in
  * memory_item_embeddings (derived index data, also in dry-run) and pairs with
  * cosine >= t.embedding become extra candidates. Without it: trigrams only.
+ * M20i: each vector stores the sha256 of the exact text it was computed from;
+ * an edited fact (or a pre-0019 vector) is re-embedded on the next run.
  * Serialized per user with pg_advisory_xact_lock. No LLM.
  */
 export type ConsolidationMode = "dry-run" | "apply";
@@ -28,6 +31,13 @@ export interface ConsolidationReport {
   conflicts_contested: number;
   skipped_user_merges: number;
   embedding_candidates: number;
+  /** M20i: existing vectors recomputed because their text changed (or had no hash). */
+  embeddings_refreshed: number;
+}
+
+/** sha256 hex of the exact text handed to the embedder (not the normalized factHash). */
+export function embeddedTextHash(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
 interface Item { id: string; content: string; author: string; valid_from: Date | null; created_at: Date }
@@ -66,23 +76,34 @@ export async function runConsolidation(
       )
     ).rows;
     let embeddingCandidates = 0;
+    let reembedded = 0;
     if (embedder && t.embedding !== undefined) {
-      const missing = (
-        await c.query<{ id: string; content: string }>(
-          `SELECT mi.id, mi.content FROM memory_items mi
-           WHERE mi.user_id = $1 AND mi.status = 'active' AND mi.layer = 'semantic'
-             AND NOT EXISTS (SELECT 1 FROM memory_item_embeddings e WHERE e.memory_item_id = mi.id AND e.model = $2)`,
-          [userId, embedder.model],
-        )
-      ).rows;
-      if (missing.length) {
-        const vecs = await embedder.embed(missing.map((m) => m.content));
+      // M20i: (re)embed items with no vector OR whose vector was computed from
+      // other text (edited since, or written before 0019 without a hash).
+      const stored = new Map(
+        (
+          await c.query<{ id: string; h: string | null }>(
+            `SELECT e.memory_item_id AS id, e.content_sha256 AS h FROM memory_item_embeddings e
+             JOIN memory_items mi ON mi.id = e.memory_item_id
+             WHERE mi.user_id = $1 AND e.model = $2`,
+            [userId, embedder.model],
+          )
+        ).rows.map((r) => [r.id, r.h]),
+      );
+      const stale = [...items.values()]
+        .map((it) => ({ id: it.id, content: it.content, h: embeddedTextHash(it.content) }))
+        .filter((it) => stored.get(it.id) !== it.h);
+      if (stale.length) {
+        const vecs = await embedder.embed(stale.map((m) => m.content));
         await c.query(
-          `INSERT INTO memory_item_embeddings (memory_item_id, model, embedding)
-           SELECT unnest($1::uuid[]), $2, unnest($3::text[])::vector ON CONFLICT DO NOTHING`,
-          [missing.map((m) => m.id), embedder.model, vecs.map((v) => `[${Array.from(v).join(",")}]`)],
+          `INSERT INTO memory_item_embeddings (memory_item_id, model, embedding, content_sha256)
+           SELECT unnest($1::uuid[]), $2, unnest($3::text[])::vector, unnest($4::text[])
+           ON CONFLICT (memory_item_id, model) DO UPDATE
+             SET embedding = EXCLUDED.embedding, content_sha256 = EXCLUDED.content_sha256, created_at = now()`,
+          [stale.map((m) => m.id), embedder.model, vecs.map((v) => `[${Array.from(v).join(",")}]`), stale.map((m) => m.h)],
         );
       }
+      reembedded = stale.filter((m) => stored.has(m.id)).length;
       const byKey = new Map(pairs.map((p) => [`${p.a}|${p.b}`, p]));
       for (const r of (
         await c.query<{ a: string; b: string; sim: number; cos: number }>(
@@ -105,7 +126,7 @@ export async function runConsolidation(
 
     const report: ConsolidationReport = {
       candidates: pairs.length, merges: 0, conflicts_newer_wins: 0, conflicts_contested: 0, skipped_user_merges: 0,
-      embedding_candidates: embeddingCandidates,
+      embedding_candidates: embeddingCandidates, embeddings_refreshed: reembedded,
     };
     const run = await c.query<{ id: string }>(
       `INSERT INTO ops_maintenance_runs (mode, report, job, user_id) VALUES ($1, '{}', $2, $3) RETURNING id`,

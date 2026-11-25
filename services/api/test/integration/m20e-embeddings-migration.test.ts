@@ -11,12 +11,17 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  * - it is reversible: every migration except 0017 → schema snapshot → 0017 +
  *   a stored vector → rollback script → schema identical to the snapshot,
  *   facts intact, pgvector still installed → 0017 re-applies.
+ * - migrations that alter its table (DEPENDENTS) are kept out of the snapshot
+ *   and must be rolled back first: the 0017 down script refuses otherwise.
  */
 const databaseUrl = process.env.DATABASE_URL;
 const MIGRATIONS = new URL("../../migrations/", import.meta.url);
 const M17 = "0017_m20e_memory_embeddings.sql";
 const UP = readFileSync(new URL(M17, MIGRATIONS), "utf8");
 const DOWN = readFileSync(new URL("rollback/0017_m20e_memory_embeddings.down.sql", MIGRATIONS), "utf8");
+const M19 = "0019_m20i_embedding_content_hash.sql";
+const DOWN19 = readFileSync(new URL("rollback/0019_m20i_embedding_content_hash.down.sql", MIGRATIONS), "utf8");
+const DEPENDENTS = [M19];
 const scratch = `nova_m20e_down_${process.pid}_${Date.now()}`;
 const noSuper = `${scratch}_nosuper`;
 
@@ -58,7 +63,7 @@ describe.skipIf(!databaseUrl)("M20e migration 0017 (scratch database)", () => {
     await db.connect();
     await db.query(`CREATE TABLE schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`);
     expect(files).toContain(M17);
-    for (const f of files.filter((f) => f !== M17)) await apply(f);
+    for (const f of files.filter((f) => f !== M17 && !DEPENDENTS.includes(f))) await apply(f);
     before = await schema();
   });
   afterAll(async () => {
@@ -119,5 +124,16 @@ describe.skipIf(!databaseUrl)("M20e migration 0017 (scratch database)", () => {
 
     await apply(M17); // forward again on the rolled-back database
     expect(await tableExists()).toBe(true);
+  });
+
+  it("down script refuses while 0019 (depends on this table) is applied; LIFO order works", async () => {
+    await apply(M19);
+    await expect(run(DOWN)).rejects.toThrow(/Roll back 0019 first.*Nothing was rolled back/);
+    expect(await tableExists()).toBe(true);
+    expect((await db.query(`SELECT 1 FROM schema_migrations WHERE name = $1`, [M17])).rowCount).toBe(1);
+
+    await run(DOWN19);
+    await run(DOWN);
+    expect(await schema()).toEqual(before);
   });
 });
