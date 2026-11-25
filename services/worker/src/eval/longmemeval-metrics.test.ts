@@ -84,6 +84,16 @@ describe("M20d eval CLI helpers", () => {
     expect(() => parseEvalArgs(["--nn"])).toThrow(/desconocido/);
   });
 
+  it("M20g: --model <id> is strict and only valid with --embeddings", () => {
+    const e5 = "Xenova/multilingual-e5-small";
+    expect(parseEvalArgs(["--embeddings", "--model", e5, "--n", "5"])).toEqual({ n: 5, download: false, pg: false, embeddings: true, model: e5 });
+    expect(parseEvalArgs(["--", "--embeddings", `--model=${e5}`])).toMatchObject({ embeddings: true, model: e5 });
+    expect(parseEvalArgs(["--embeddings"])).not.toHaveProperty("model");
+    expect(() => parseEvalArgs(["--embeddings", "--model"])).toThrow(/id de modelo/);
+    expect(() => parseEvalArgs(["--embeddings", "--model", "--pg"])).toThrow(/id de modelo/);
+    expect(() => parseEvalArgs(["--model", e5])).toThrow(/--embeddings/);
+  });
+
   it("subset is deterministic, excludes abstention and respects n", () => {
     const all = Array.from({ length: 50 }, (_, i) => ({ ...q, question_id: i % 10 === 9 ? `q${i}_abs` : `q${i}` }));
     const a = selectSubset(all, 10);
