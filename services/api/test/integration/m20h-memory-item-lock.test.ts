@@ -139,6 +139,94 @@ describe.skipIf(!databaseUrl)("M20h: memory item write lock", () => {
     expect(open.rows[0].n).toBe(0);
   });
 
+  // ---- Review fix: the lock must not drain the connection pool -----------------------
+  // Before: every waiting PATCH checked a pool connection out FIRST and then sat on
+  // the row lock for up to the timeout, so N concurrent PATCHes on one hot item held
+  // min(N, pool.max) connections and the rest of the API queued behind them.
+  describe("pool protection", () => {
+    const POOL_MAX = 10;
+    const HOT_TIMEOUT_MS = 1500;
+    let pool: pg.Pool;
+    let app: FastifyInstance;
+    let inj: AuthedInject;
+
+    beforeAll(async () => {
+      pool = new pg.Pool({ connectionString: databaseUrl, max: POOL_MAX, application_name: "m20h-pool-test" });
+      app = await buildApp({
+        ocr: null,
+        pool,
+        env: loadEnv({ DATABASE_URL: databaseUrl, NOVA_MEMORY_ITEM_LOCK: "on", NOVA_MEMORY_ITEM_LOCK_TIMEOUT_MS: String(HOT_TIMEOUT_MS) }),
+      });
+      await app.ready();
+      inj = authedInject(app, alice.token);
+    });
+    afterAll(async () => {
+      await app?.close();
+      await pool?.end();
+    });
+
+    /** App backends (this pool only) currently blocked on a row lock. */
+    const lockWaiters = async () =>
+      (await admin.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM pg_stat_activity
+          WHERE datname = current_database() AND application_name = 'm20h-pool-test' AND wait_event_type = 'Lock'`,
+      )).rows[0]!.n;
+
+    it("N concurrent PATCHes on one locked item hold at most ONE connection; other routes stay fast", async () => {
+      const id = await newItem();
+      await holdLock(id);
+      const n = POOL_MAX + 5;
+      const pending = Array.from({ length: n }, (_, i) =>
+        inj({ method: "PATCH", url: `${base}/${id}`, payload: { content: `caliente ${i}` } }),
+      );
+      await sleep(300);
+      const waiting = await lockWaiters();
+      const poolWaiting = pool.waitingCount;
+      // An unrelated request (needs DB connections for session auth + query) is not starved.
+      const t0 = Date.now();
+      const list = await inj({ method: "GET", url: base });
+      const listMs = Date.now() - t0;
+      await holder.query("COMMIT");
+      const results = await Promise.all(pending);
+
+      expect(waiting).toBe(1);
+      expect(poolWaiting).toBe(0);
+      expect(list.statusCode).toBe(200);
+      expect(listMs).toBeLessThan(400);
+      // Once the holder commits, the queued PATCHes drain one by one within the deadline.
+      expect(results.map((r) => r.statusCode)).toEqual(results.map(() => 200));
+    });
+
+    it("hot rows across many items never take more than half the pool; overflow gets 429 at the deadline", async () => {
+      const ids: string[] = [];
+      for (let i = 0; i < POOL_MAX; i++) ids.push(await newItem(`distinto ${i}`));
+      await holder.query("BEGIN");
+      await holder.query(`SELECT 1 FROM memory_items WHERE id = ANY($1::uuid[]) FOR UPDATE`, [ids]);
+      const t0 = Date.now();
+      const pending = ids.map((id) => inj({ method: "PATCH", url: `${base}/${id}`, payload: { content: "x" } }));
+      await sleep(300);
+      const waiting = await lockWaiters();
+      const tl = Date.now();
+      const list = await inj({ method: "GET", url: base });
+      const listMs = Date.now() - tl;
+      const results = await Promise.all(pending);
+      const elapsed = Date.now() - t0;
+      await holder.query("ROLLBACK");
+
+      expect(waiting).toBeLessThanOrEqual(POOL_MAX / 2);
+      expect(waiting).toBeGreaterThanOrEqual(1);
+      expect(list.statusCode).toBe(200);
+      expect(listMs).toBeLessThan(400);
+      // Every request ends at its single deadline (gate wait + lock wait share it), never later.
+      expect(results.map((r) => r.statusCode)).toEqual(results.map(() => 429));
+      expect(results.every((r) => r.headers["retry-after"] === "2")).toBe(true);
+      expect(elapsed).toBeLessThan(HOT_TIMEOUT_MS + 1500);
+      // Nothing was written and nothing is left open.
+      for (const id of ids) expect((await row(id)).content).toMatch(/^distinto /);
+      expect(pool.waitingCount).toBe(0);
+    });
+  });
+
   it("off (default): no serialization and no 429 — the request just waits for the lock", async () => {
     const id = await newItem();
     await holdLock(id);

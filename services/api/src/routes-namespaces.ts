@@ -4,6 +4,7 @@ import type pg from "pg";
 import { z } from "zod";
 import { redactText } from "@nova/context-engine";
 import { sha256Hex } from "./auth/sessions.js";
+import { ItemWriteGate, defaultItemLockConnections } from "./item-write-gate.js";
 import { renderNamespaceMarkdown, type ExportItem } from "./memory/markdown.js";
 import { newNamespaceToken, SCOPES, SLUG_RE, type Scope } from "./memory/tokens.js";
 
@@ -158,16 +159,22 @@ async function loadItems(
     params.push(opts.status);
     sql += ` AND mi.status = $${params.length}`;
   }
-  if (opts.q) {
+  const q = opts.q?.trim();
+  if (q) {
     // BM25-style ranking: OR-query over non-stopword tokens, ts_rank with
     // log-length normalisation (1); best config on LongMemEval (docs/design/m20-busqueda-fts.md).
     // Trigram similarity / ILIKE only as fallback for typos and substrings that FTS cannot match.
-    const terms = memoryQueryTerms(opts.q);
-    params.push(terms.join(" | ") || "''");
+    const terms = memoryQueryTerms(q);
+    // No searchable term (1-char tokens, punctuation only: "a", "?", "a b"): there is
+    // nothing to rank and a 1-char ILIKE would match almost every row, so answer
+    // "no results" without touching Postgres. (The old `|| "''"` fallback was a
+    // tsquery syntax error → 500.)
+    if (!terms.length) return [];
+    params.push(terms.join(" | "));
     const tq = `to_tsquery('simple', $${params.length})`;
-    params.push(opts.q);
+    params.push(q);
     const raw = `$${params.length}`;
-    params.push(`%${opts.q.replace(/[\\%_]/g, (m) => "\\" + m)}%`);
+    params.push(`%${q.replace(/[\\%_]/g, (m) => "\\" + m)}%`);
     const like = `$${params.length}`;
     sql = sql.replace(
       " FROM memory_items mi",
@@ -225,6 +232,25 @@ const tokenBody = z.object({
 export interface ItemLockOptions {
   enabled: boolean;
   timeoutMs: number;
+  /** Max pool connections the lock path may hold at once (default: half the pool). */
+  maxConnections?: number;
+}
+
+/** Check out a pool connection, giving up after `ms` (the late connection is returned to the pool). */
+async function connectWithin(db: pg.Pool, ms: number): Promise<pg.PoolClient | null> {
+  if (!(ms > 0)) return null;
+  const pending = db.connect();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), ms);
+  });
+  try {
+    const won = await Promise.race([pending, timedOut]);
+    if (won === null) pending.then((late) => late.release(), () => {});
+    return won;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Postgres lock_not_available: raised when `lock_timeout` expires while waiting for a row lock. */
@@ -238,6 +264,9 @@ export function registerNamespaceRoutes(
 ): void {
   const { db } = deps;
   const itemLock = deps.itemLock ?? { enabled: false, timeoutMs: 5000 };
+  const gate = itemLock.enabled
+    ? new ItemWriteGate(itemLock.maxConnections ?? defaultItemLockConnections(db.options?.max))
+    : null;
 
   // ---- Namespaces (session only) -------------------------------------------------
   app.get("/v1/namespaces", async (req, reply) => {
@@ -379,47 +408,65 @@ export function registerNamespaceRoutes(
 
     // M20h: with the lock on, the read-check-write runs in one transaction that
     // holds the item's row lock (FOR UPDATE), so concurrent PATCHes of the same
-    // item (and any other writer, e.g. consolidation) are serialized. Waiting
-    // longer than lock_timeout → 429. With it off, this is the historical path.
-    const client = itemLock.enabled ? await db.connect() : null;
-    const q: pg.Pool | pg.PoolClient = client ?? db;
+    // item (and any other writer, e.g. consolidation) are serialized. With it off,
+    // this is the historical path.
+    // Review fix: waiters queue in memory (ItemWriteGate) BEFORE checking out a
+    // pool connection — one per item, at most `maxConnections` in total — so a hot
+    // item can no longer park the whole pool on its row lock. Gate wait, pool wait
+    // and lock wait share ONE deadline; missing it → 429 + Retry-After.
+    const busy = () =>
+      reply
+        .code(429)
+        .header("retry-after", String(Math.max(1, Math.ceil(itemLock.timeoutMs / 1000))))
+        .send({ error: "item_busy" });
+    let leave: (() => void) | null = null;
+    let client: pg.PoolClient | null = null;
+    let lockTimeoutMs = 0;
     let denied = false;
     let found = true;
     try {
-      if (client) {
-        await client.query("BEGIN");
-        await client.query("SELECT set_config('lock_timeout', $1, true)", [`${itemLock.timeoutMs}ms`]);
+      if (gate) {
+        const deadline = Date.now() + itemLock.timeoutMs;
+        leave = await gate.enter(itemId, deadline);
+        if (!leave) return busy();
+        client = await connectWithin(db, deadline - Date.now());
+        // lock_timeout = 0 would mean "wait forever": below 1 ms left is a miss.
+        lockTimeoutMs = deadline - Date.now();
+        if (!client || lockTimeoutMs < 1) return busy();
       }
-      const { rows } = await q.query<{ author: string; local_only: boolean }>(
-        `SELECT author, local_only FROM memory_items WHERE id = $1 AND user_id = $2 AND namespace_id = $3${client ? " FOR UPDATE" : ""}`,
-        [itemId, c.userId, ns.id],
-      );
-      const item = rows[0];
-      if (!item || (c.kind === "token" && item.local_only)) {
-        found = false;
-      } else if (c.kind === "token" && item.author !== "assistant") {
-        // §2.4: memory:write NEVER edits or resolves a user-authored fact.
-        denied = true;
-      } else {
-        await q.query(
-          `UPDATE memory_items SET content = COALESCE($2, content), content_hash = COALESCE($3, content_hash),
-                  status = COALESCE($4, status)
-           WHERE id = $1 AND user_id = $5 ${c.kind === "token" ? "AND author = 'assistant'" : ""}`,
-          [itemId, content, content ? contentHash(content) : null, body.data.status ?? null, c.userId],
+      const q: pg.Pool | pg.PoolClient = client ?? db;
+      try {
+        if (client) {
+          await client.query("BEGIN");
+          await client.query("SELECT set_config('lock_timeout', $1, true)", [`${lockTimeoutMs}ms`]);
+        }
+        const { rows } = await q.query<{ author: string; local_only: boolean }>(
+          `SELECT author, local_only FROM memory_items WHERE id = $1 AND user_id = $2 AND namespace_id = $3${client ? " FOR UPDATE" : ""}`,
+          [itemId, c.userId, ns.id],
         );
+        const item = rows[0];
+        if (!item || (c.kind === "token" && item.local_only)) {
+          found = false;
+        } else if (c.kind === "token" && item.author !== "assistant") {
+          // §2.4: memory:write NEVER edits or resolves a user-authored fact.
+          denied = true;
+        } else {
+          await q.query(
+            `UPDATE memory_items SET content = COALESCE($2, content), content_hash = COALESCE($3, content_hash),
+                    status = COALESCE($4, status)
+             WHERE id = $1 AND user_id = $5 ${c.kind === "token" ? "AND author = 'assistant'" : ""}`,
+            [itemId, content, content ? contentHash(content) : null, body.data.status ?? null, c.userId],
+          );
+        }
+        if (client) await client.query("COMMIT");
+      } catch (err) {
+        if (client) await client.query("ROLLBACK").catch(() => {});
+        if (client && isLockTimeout(err)) return busy();
+        throw err;
       }
-      if (client) await client.query("COMMIT");
-    } catch (err) {
-      if (client) await client.query("ROLLBACK").catch(() => {});
-      if (client && isLockTimeout(err)) {
-        return reply
-          .code(429)
-          .header("retry-after", String(Math.max(1, Math.ceil(itemLock.timeoutMs / 1000))))
-          .send({ error: "item_busy" });
-      }
-      throw err;
     } finally {
       client?.release();
+      leave?.();
     }
     if (!found) return reply.code(404).send({ error: "not_found" });
     if (denied) {

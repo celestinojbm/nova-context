@@ -85,6 +85,13 @@ build, typecheck, unit, migrate e integration, y deja el reporte en
   `NOVA_MEMORY_ITEM_LOCK_TIMEOUT_MS` (5000 por defecto) responde `429 item_busy` + `Retry-After`.
   Apagado por defecto (comportamiento histórico). Código: `services/api/src/routes-namespaces.ts`, `env.ts`.
   Tests: `services/api/src/{env,routes-namespaces}.test.ts`, `services/api/test/integration/m20h-memory-item-lock.test.ts`.
+  Protección del pool: las esperas hacen cola en memoria (`services/api/src/item-write-gate.ts`) antes de pedir
+  conexión — como mucho 1 conexión por ítem y la mitad del pool en total por proceso; espera en cola, en el
+  pool y en el bloqueo comparten un único plazo (→ 429). Tests: `item-write-gate.test.ts` y el bloque
+  "pool protection" del test de integración.
+- **M20 búsqueda (`GET …/memory?q=`):** una consulta sin términos buscables (tokens de 1 carácter o solo
+  signos: `a`, `?`, `a b`) responde 200 con `items: []` sin consultar Postgres; antes generaba un tsquery
+  inválido (500). `q` solo con espacios equivale a no pasar `q`. Tests: `test/integration/m20-memory-fts.test.ts`.
 
 ### 7. Proyectos y tareas
 - **Archivos:** `services/api/src/routes-m1.ts` (`/v1/tasks`, proyectos), `routes-m2.ts`, `routes-m4.ts`,
