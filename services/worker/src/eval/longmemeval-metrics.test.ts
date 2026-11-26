@@ -108,7 +108,7 @@ describe("M20d eval CLI helpers", () => {
 // Same bug as the API before PR #42: a question with no term of >= 2 letters/digits
 // sent to_tsquery('simple', "''") → "syntax error in tsquery" and aborted `--pg`.
 const NO_TERMS = ["a", "x", "a b", "?", "& | !", "'", "a'", "é", "   ", "", "I?"];
-describe("pgTsQuery (`--pg` tsquery, same rules as the API's memoryQueryTerms)", () => {
+describe("pgTsQuery (`--pg` tsquery, same algorithm as the API's memoryQueryTerms, eval stopwords)", () => {
   it.each(NO_TERMS)("q=%j has no searchable term → null (caller skips Postgres)", (q) => {
     expect(pgTsQuery(q)).toBeNull();
   });
@@ -120,6 +120,9 @@ describe("pgTsQuery (`--pg` tsquery, same rules as the API's memoryQueryTerms)",
   it("stopword-only questions fall back to the stopwords instead of failing (as in the API)", () => {
     expect(pgTsQuery("what is it")).toBe("what | is | it");
     expect(pgTsQuery("the of the")).toBe("the | of");
+  });
+  it("uses the eval's English stopwords, not the API's Spanish ones (keeps published numbers reproducible)", () => {
+    expect(pgTsQuery("¿Qué coche tiene el usuario?")).toBe("qué | coche | tiene | el | usuario");
   });
   it("questions with real terms give exactly the query the eval used before (published numbers unchanged)", () => {
     const old = (q: string) => [...new Set(tokens(q).filter((w) => w.length > 1))].slice(0, 32).join(" | ");

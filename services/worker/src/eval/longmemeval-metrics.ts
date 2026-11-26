@@ -24,10 +24,14 @@ export function tokens(t: string): string[] {
 
 /**
  * OR tsquery text for `--pg`, or null when the question has no searchable term.
- * Same rules as the API's memoryQueryTerms after PR #42: only letters/digits (so
- * `& | ! ' :` can never reach to_tsquery), length >= 2, stopwords dropped unless
- * that leaves nothing. On null the caller must not query Postgres: the old
+ * Same algorithm as the API's memoryQueryTerms after PR #42: only letters/digits
+ * (so `& | ! ' :` can never reach to_tsquery), length >= 2, stopwords dropped
+ * unless that leaves nothing. On null the caller must not query Postgres: the old
  * `|| "''"` fallback sent to_tsquery('simple', "''") → "syntax error in tsquery".
+ * The stopword list is deliberately this file's STOP (English only), not the
+ * API's MEMORY_STOP (which adds Spanish words): with it, questions that have
+ * terms get exactly the tsquery the published pg_fts numbers were computed with.
+ * Do not "unify" the two lists without re-running and re-publishing the eval.
  */
 export function pgTsQuery(question: string): string | null {
   const all = (question.toLowerCase().match(TOKEN) ?? []).filter((w) => w.length > 1);
