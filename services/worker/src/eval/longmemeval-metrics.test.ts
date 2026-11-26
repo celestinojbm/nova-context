@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  bm25Rank, consolidationPairs, evalConsolidation, evalRetrieval, parseEvalArgs, selectSubset, type LmeQuestion,
+  bm25Rank, consolidationPairs, evalConsolidation, evalRetrieval, parseEvalArgs, pgTsQuery, selectSubset, tokens, type LmeQuestion,
 } from "./longmemeval-metrics.js";
 
 const q: LmeQuestion = {
@@ -102,5 +102,30 @@ describe("M20d eval CLI helpers", () => {
     expect(a.subset.every((x) => !x.question_id.endsWith("_abs"))).toBe(true);
     expect(selectSubset(all, 10).subset.map((x) => x.question_id)).toEqual(a.subset.map((x) => x.question_id));
     expect(selectSubset(all, 1000).subset).toHaveLength(45);
+  });
+});
+
+// Same bug as the API before PR #42: a question with no term of >= 2 letters/digits
+// sent to_tsquery('simple', "''") → "syntax error in tsquery" and aborted `--pg`.
+const NO_TERMS = ["a", "x", "a b", "?", "& | !", "'", "a'", "é", "   ", "", "I?"];
+describe("pgTsQuery (`--pg` tsquery, same rules as the API's memoryQueryTerms)", () => {
+  it.each(NO_TERMS)("q=%j has no searchable term → null (caller skips Postgres)", (q) => {
+    expect(pgTsQuery(q)).toBeNull();
+  });
+  it("tsquery operators and quotes never reach the output", () => {
+    expect(pgTsQuery("what's & my | car!: (mazda) <-> 'rojo'")).toBe("car | mazda | rojo");
+    for (const q of ["a:*", "!!x", "foo\\bar", "¿Qué coche?", "100% & 2x"])
+      expect(pgTsQuery(q) ?? "").toMatch(/^([\p{L}\p{N}]{2,}( \| [\p{L}\p{N}]{2,})*)?$/u);
+  });
+  it("stopword-only questions fall back to the stopwords instead of failing (as in the API)", () => {
+    expect(pgTsQuery("what is it")).toBe("what | is | it");
+    expect(pgTsQuery("the of the")).toBe("the | of");
+  });
+  it("questions with real terms give exactly the query the eval used before (published numbers unchanged)", () => {
+    const old = (q: string) => [...new Set(tokens(q).filter((w) => w.length > 1))].slice(0, 32).join(" | ");
+    for (const q of ["What color is my bike?", "How many days did I spend in Japan in 2023?", "Which is older, A or B?"])
+      expect(pgTsQuery(q)).toBe(old(q));
+    const long = Array.from({ length: 40 }, (_, i) => `w${i}`).join(" ");
+    expect(pgTsQuery(long)!.split(" | ")).toHaveLength(32);
   });
 });
