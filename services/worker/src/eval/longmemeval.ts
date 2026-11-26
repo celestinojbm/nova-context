@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { THRESHOLDS } from "../memory/consolidation-rules.js";
 import {
-  bm25Rank, consolidationPairs, evalConsolidation, evalRetrieval, parseEvalArgs, selectSubset, tokens, trigramRank, type LmeQuestion,
+  bm25Rank, consolidationPairs, evalConsolidation, evalRetrieval, parseEvalArgs, pgTsQuery, selectSubset, trigramRank, type LmeQuestion,
 } from "./longmemeval-metrics.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
@@ -90,18 +90,26 @@ if (opts.pg) {
   const CFG = process.env.LME_CFG ?? "simple", FN = process.env.LME_FN ?? "ts_rank", NORM = process.env.LME_NORM ?? "1";
   await c.query(`CREATE TEMP TABLE lme_docs (i int, content text, tsv tsvector GENERATED ALWAYS AS (to_tsvector('${CFG}', content)) STORED)`);
   const cache = new Map<string, number[]>();
+  let noTerms = 0;
   for (const q of subset) {
+    // Like the API (PR #42): no searchable term → no results, without querying Postgres.
+    const tsq = pgTsQuery(q.question);
+    if (tsq === null) {
+      noTerms++;
+      cache.set(q.question_id, []);
+      continue;
+    }
     const docs = q.haystack_sessions.map((s) => s.filter((t) => t.role === "user").map((t) => t.content).join("\n"));
     await c.query("TRUNCATE lme_docs");
     await c.query("INSERT INTO lme_docs SELECT i - 1, d FROM unnest($1::text[]) WITH ORDINALITY AS u(d, i)", [docs]);
-    const terms = [...new Set(tokens(q.question).filter((w) => w.length > 1))].slice(0, 32);
     const { rows } = await c.query<{ i: number }>(
       `SELECT i FROM lme_docs ORDER BY ${FN}(tsv, to_tsquery('${CFG}', $1), ${NORM}) DESC, word_similarity($2, content) DESC, i`,
-      [terms.join(" | ") || "''", q.question],
+      [tsq, q.question],
     );
     cache.set(q.question_id, rows.map((r) => r.i));
   }
   await c.end();
+  if (noTerms) console.log(`pg_fts: ${noTerms} pregunta(s) sin términos buscables → sin resultados (cuentan como fallo)`);
   const byQ = new Map(subset.map((q) => [q.question, q.question_id]));
   show("pg_fts", evalRetrieval(subset, (question) => cache.get(byQ.get(question)!)!));
 }
