@@ -7,14 +7,16 @@ import { runAlphaReport } from "../ops/report.js";
  *
  *   pnpm --filter @nova/api ops:report            # last 14 days
  *   pnpm --filter @nova/api ops:report -- --days=30
+ *   pnpm --filter @nova/api ops:report -- --include-synthetic   # count smoke/dev accounts in alpha_bar
  */
 const daysArg = process.argv.find((a) => a.startsWith("--days="));
 const days = daysArg ? Number.parseInt(daysArg.split("=")[1]!, 10) : 14;
+const includeSynthetic = process.argv.includes("--include-synthetic");
 
 const env = loadEnv();
 const db = new pg.Pool({ connectionString: env.DATABASE_URL, max: 2 });
 
-runAlphaReport(db, { days, mediaWarnMb: env.NOVA_MEDIA_WARN_MB })
+runAlphaReport(db, { days, mediaWarnMb: env.NOVA_MEDIA_WARN_MB, includeSynthetic })
   .then((report) => {
     console.log(JSON.stringify(report, null, 2));
     return db.end();

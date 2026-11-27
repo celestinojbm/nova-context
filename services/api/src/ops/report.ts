@@ -1,4 +1,5 @@
 import type pg from "pg";
+import { computeAlphaBar, type AlphaBar } from "./alpha-bar.js";
 
 /**
  * M13 alpha usage report — the real-world feedback loop, aggregated.
@@ -38,13 +39,15 @@ export interface AlphaReport {
   }>;
   /** M14: triage counts across ALL feedback (not just the excerpt list). */
   feedback_by_category: Record<string, number>;
+  /** ROADMAP Horizon-2 success metrics, same window; see ops/alpha-bar.ts. */
+  alpha_bar: AlphaBar;
   warnings: string[];
   generated_at: string;
 }
 
 export async function runAlphaReport(
   db: pg.Pool | pg.Client,
-  opts: { days?: number; mediaWarnMb?: number } = {},
+  opts: { days?: number; mediaWarnMb?: number; includeSynthetic?: boolean } = {},
 ): Promise<AlphaReport> {
   const days = opts.days ?? 14;
   const mediaWarnMb = opts.mediaWarnMb ?? 1024;
@@ -92,6 +95,11 @@ export async function runAlphaReport(
   const feedbackByCategory = await db.query<{ category: string; n: string }>(
     `SELECT category, count(*) AS n FROM alpha_feedback GROUP BY category`,
   );
+
+  const alphaBar = await computeAlphaBar(db, {
+    days,
+    includeSynthetic: opts.includeSynthetic ?? false,
+  });
 
   const mediaBytes = Number(media.rows[0]!.bytes);
   const pending = Number(pendingDeletes.rows[0]!.n);
@@ -154,6 +162,7 @@ export async function runAlphaReport(
     feedback_by_category: Object.fromEntries(
       feedbackByCategory.rows.map((r) => [r.category, Number(r.n)]),
     ),
+    alpha_bar: alphaBar,
     warnings,
     generated_at: new Date().toISOString(),
   };
