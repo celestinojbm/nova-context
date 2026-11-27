@@ -451,10 +451,22 @@ export function registerNamespaceRoutes(
           // §2.4: memory:write NEVER edits or resolves a user-authored fact.
           denied = true;
         } else {
+          // M20i follow-up: when the text actually changes, its derived vectors
+          // (memory_item_embeddings, every model) go in the SAME statement, so a
+          // vector of the old text never outlives the edit — not even when
+          // NOVA_MEMORY_EMBEDDINGS is later turned off and consolidation stops
+          // refreshing. The next run re-embeds it as a missing vector.
+          // `prev` reads the pre-update snapshot (data-modifying CTE semantics).
           await q.query(
-            `UPDATE memory_items SET content = COALESCE($2, content), content_hash = COALESCE($3, content_hash),
-                    status = COALESCE($4, status)
-             WHERE id = $1 AND user_id = $5 ${c.kind === "token" ? "AND author = 'assistant'" : ""}`,
+            `WITH prev AS (SELECT content FROM memory_items WHERE id = $1 AND user_id = $5),
+             upd AS (
+               UPDATE memory_items SET content = COALESCE($2, content), content_hash = COALESCE($3, content_hash),
+                      status = COALESCE($4, status)
+               WHERE id = $1 AND user_id = $5 ${c.kind === "token" ? "AND author = 'assistant'" : ""}
+               RETURNING id, content
+             )
+             DELETE FROM memory_item_embeddings e USING upd, prev
+             WHERE e.memory_item_id = upd.id AND upd.content IS DISTINCT FROM prev.content`,
             [itemId, content, content ? contentHash(content) : null, body.data.status ?? null, c.userId],
           );
         }

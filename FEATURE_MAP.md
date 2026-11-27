@@ -89,6 +89,9 @@ build, typecheck, unit, migrate e integration, y deja el reporte en
   conexión — como mucho 1 conexión por ítem y la mitad del pool en total por proceso; espera en cola, en el
   pool y en el bloqueo comparten un único plazo (→ 429). Tests: `item-write-gate.test.ts` y el bloque
   "pool protection" del test de integración.
+- **M20i (PATCH y vectores):** si el `PATCH` cambia el texto guardado del hecho, sus filas de
+  `memory_item_embeddings` se borran en la misma sentencia; la consolidación las recalcula como faltantes.
+  Tests: `services/api/test/integration/m20i-patch-drops-embedding.test.ts`.
 - **M20 búsqueda (`GET …/memory?q=`):** una consulta sin términos buscables (tokens de 1 carácter o solo
   signos: `a`, `?`, `a b`) responde 200 con `items: []` sin consultar Postgres; antes generaba un tsquery
   inválido (500). `q` solo con espacios equivale a no pasar `q`. Tests: `test/integration/m20-memory-fts.test.ts`.
