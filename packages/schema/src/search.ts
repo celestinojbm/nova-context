@@ -38,8 +38,14 @@ export const memorySearchRequestSchema = z
     // M9: include per-item ranking diagnostics (raw leg scores). The user's
     // own data only — this explains ranking, it exposes nothing new.
     debug: z.boolean().optional(),
+    // Mismo corte que GET /v1/context/moments?link=. Ausente = sin filtro.
+    link: z.enum(["unlinked", "linked"]).optional(),
   })
-  .strict();
+  .strict()
+  .refine((v) => !(v.project_id && v.link), {
+    message: "project_id and link are mutually exclusive",
+    path: ["link"],
+  });
 export type MemorySearchRequest = z.infer<typeof memorySearchRequestSchema>;
 
 /** M9: raw leg scores behind an item's fused score (debug: true). */

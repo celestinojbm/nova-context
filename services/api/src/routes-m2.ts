@@ -72,6 +72,8 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
       return params.length;
     };
     if (input.project_id) conditions.push(`m.project_id = $${addParam(input.project_id)}`);
+    else if (input.link === "unlinked") conditions.push("m.project_id IS NULL");
+    else if (input.link === "linked") conditions.push("m.project_id IS NOT NULL");
     if (input.domain) {
       conditions.push(`m.source_meta->>'url' ILIKE $${addParam(`%://%${input.domain}%`)}`);
     }

@@ -11,6 +11,7 @@ import {
 } from "@nova/model-router";
 import {
   createContextMomentRequestSchema,
+  listMomentsQuerySchema,
   type ContextMoment,
   type ContextMomentWithMedia,
   type EnrichmentMeta,
@@ -670,18 +671,12 @@ export async function buildApp({
     return reply.code(201).send(response);
   });
 
-  const listQuerySchema = z.object({
-    limit: z.coerce.number().int().min(1).max(100).default(50),
-    before: z.string().datetime({ offset: true }).optional(),
-    project_id: z.string().uuid().optional(),
-  });
-
   app.get("/v1/context/moments", async (req, reply) => {
-    const parsed = listQuerySchema.safeParse(req.query);
+    const parsed = listMomentsQuerySchema.safeParse(req.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: "invalid_request" });
     }
-    const { limit, before, project_id } = parsed.data;
+    const { limit, before, project_id, link } = parsed.data;
     const userId = requireAuth(req).userId;
 
     const conditions = ["user_id = $1"];
@@ -693,6 +688,10 @@ export async function buildApp({
     if (project_id) {
       params.push(project_id);
       conditions.push(`project_id = $${params.length}`);
+    } else if (link === "unlinked") {
+      conditions.push("project_id IS NULL");
+    } else if (link === "linked") {
+      conditions.push("project_id IS NOT NULL");
     }
     params.push(limit);
 
