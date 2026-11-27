@@ -23,8 +23,10 @@ import type pg from "pg";
  *     the default, not the linking behavior the metric exists to validate.
  *   - Capture-to-action: server-side seconds from the moment row's
  *     created_at to the action being confirmed (approved_at, or created_at
- *     for Tier-0 actions that auto-execute). Only confirmed actions
- *     (approved / executing / done). It EXCLUDES client-side time before the
+ *     for Tier-0 actions that auto-execute). Confirmed = the user approved
+ *     (approved_at set, whatever happened next: queued, executing, done or
+ *     failed) or a Tier-0 auto action. Execution outcome is not part of
+ *     capture-to-confirmed. It EXCLUDES client-side time before the
  *     capture reached the API, so it is a lower bound of the roadmap's
  *     invoke-to-confirmed figure.
  *   - Week-4 retention: users who signed up ≥28 days before `now`, retained
@@ -113,18 +115,26 @@ const round = (n: number, places = 3): number => {
 const ratio = (num: number, den: number): number | null =>
   den > 0 ? round(num / den) : null;
 
+/**
+ * `raw` is judged against the target; `places` only rounds what is shown.
+ * Rounding first would flip strict bars at the edge (0.4004 → 0.4 fails "> 0.4").
+ */
 function metric(
-  value: number | null,
+  raw: number | null,
   sample: number,
   target: string,
   passes: (v: number) => boolean,
-  minSample = ALPHA_BAR_MIN_SAMPLE,
+  opts: { places?: number; minSample?: number } = {},
 ): AlphaBarMetric {
-  if (value === null || sample < minSample) {
+  const { places = 3, minSample = ALPHA_BAR_MIN_SAMPLE } = opts;
+  const value = raw === null ? null : round(raw, places);
+  if (raw === null || sample < minSample) {
     return { value, target, status: "insufficient_data", sample };
   }
-  return { value, target, status: passes(value) ? "pass" : "fail", sample };
+  return { value, target, status: passes(raw) ? "pass" : "fail", sample };
 }
+
+const rawRatio = (num: number, den: number): number | null => (den > 0 ? num / den : null);
 
 /** Pure: raw inputs → metrics with targets and statuses. */
 export function evaluateAlphaBar(inputs: AlphaBarInputs): AlphaBar {
@@ -132,7 +142,7 @@ export function evaluateAlphaBar(inputs: AlphaBarInputs): AlphaBar {
   const weeks = inputs.window_days / 7;
   const perWeek =
     inputs.active_users > 0 && weeks > 0
-      ? round(inputs.window_captures / inputs.active_users / weeks, 2)
+      ? inputs.window_captures / inputs.active_users / weeks
       : null;
 
   const metrics = {
@@ -142,30 +152,30 @@ export function evaluateAlphaBar(inputs: AlphaBarInputs): AlphaBar {
       inputs.active_users,
       `>= ${t.active_users}`,
       (v) => v >= t.active_users,
-      0,
+      { places: 0, minSample: 0 },
     ),
     captures_per_user_per_week: metric(
       perWeek,
       inputs.active_users,
       `> ${t.captures_per_user_per_week}`,
       (v) => v > t.captures_per_user_per_week,
+      { places: 2 },
     ),
     linked_share: metric(
-      ratio(inputs.linked_captures, inputs.window_captures),
+      rawRatio(inputs.linked_captures, inputs.window_captures),
       inputs.window_captures,
       `> ${t.linked_share}`,
       (v) => v > t.linked_share,
     ),
     capture_to_action_p75_seconds: metric(
-      inputs.capture_to_action_p75_seconds === null
-        ? null
-        : round(inputs.capture_to_action_p75_seconds, 1),
+      inputs.capture_to_action_p75_seconds,
       inputs.confirmed_actions,
       `< ${t.capture_to_action_p75_seconds}`,
       (v) => v < t.capture_to_action_p75_seconds,
+      { places: 1 },
     ),
     week4_retention: metric(
-      ratio(inputs.week4_retained_users, inputs.week4_eligible_users),
+      rawRatio(inputs.week4_retained_users, inputs.week4_eligible_users),
       inputs.week4_eligible_users,
       `> ${t.week4_retention}`,
       (v) => v > t.week4_retention,
@@ -222,7 +232,13 @@ export interface CollectAlphaBarOptions {
   userIds?: string[];
 }
 
-const CONFIRMED = `('approved','executing','done')`;
+/**
+ * Confirmed by the user: approve sets approved_at (status 'queued' for
+ * Tier-1, 'executing' for internal; the worker may end in 'failed'), and the
+ * enqueue-failure revert clears it again. Tier-0 auto actions are inserted
+ * as 'done' with no approved_at.
+ */
+const CONFIRMED = `(a.approved_at IS NOT NULL OR a.status IN ('approved','executing','done'))`;
 
 export async function collectAlphaBarInputs(
   db: pg.Pool | pg.Client,
@@ -269,7 +285,7 @@ export async function collectAlphaBarInputs(
       SELECT win.*,
         (coalesce(btrim(win.intent_text), '') <> '') AS has_intent,
         EXISTS (SELECT 1 FROM actions a WHERE a.moment_id = win.id
-                AND a.status IN ${CONFIRMED}) AS actioned,
+                AND ${CONFIRMED}) AS actioned,
         p.name AS project_name
       FROM win LEFT JOIN projects p ON p.id = win.project_id
     )
@@ -294,7 +310,7 @@ export async function collectAlphaBarInputs(
       FROM actions a
       JOIN context_moments m ON m.id = a.moment_id
       JOIN pop ON pop.id = a.user_id, ref
-      WHERE a.status IN ${CONFIRMED}
+      WHERE ${CONFIRMED}
         AND coalesce(a.approved_at, a.created_at) > ref.now - make_interval(days => $2::int)
         AND coalesce(a.approved_at, a.created_at) <= ref.now
     )

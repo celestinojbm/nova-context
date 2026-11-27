@@ -110,4 +110,26 @@ describe("evaluateAlphaBar", () => {
     const bar = evaluateAlphaBar({ ...passing, window_days: 7, window_captures: 100 });
     expect(bar.metrics.captures_per_user_per_week.value).toBe(4); // 100 / 25 / 1
   });
+
+  it("judges thresholds on the raw value, not the rounded one shown", () => {
+    // Each raw value clears its strict bar by a hair that display rounding
+    // would erase (0.4004 → 0.4, 3.004 → 3, 29.96 → 30).
+    const bar = evaluateAlphaBar({
+      ...passing,
+      window_days: 7,
+      active_users: 250,
+      window_captures: 751, // 3.004 per user per week
+      linked_captures: 301, // 301 / 751 = 0.4008
+      capture_to_action_p75_seconds: 29.96,
+      week4_eligible_users: 2500,
+      week4_retained_users: 1251, // 0.5004
+    });
+    expect(bar.metrics.captures_per_user_per_week.status).toBe("pass");
+    expect(bar.metrics.linked_share.status).toBe("pass");
+    expect(bar.metrics.capture_to_action_p75_seconds.status).toBe("pass");
+    expect(bar.metrics.week4_retention.status).toBe("pass");
+    expect(bar.verdict).toBe("met");
+    // The displayed value is still rounded.
+    expect(bar.metrics.capture_to_action_p75_seconds.value).toBe(30);
+  });
 });

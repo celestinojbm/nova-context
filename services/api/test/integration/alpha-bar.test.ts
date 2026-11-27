@@ -217,6 +217,38 @@ describe.skipIf(!databaseUrl)("alpha bar (ROADMAP Horizon 2 metrics)", () => {
     expect(text).not.toContain(alice.userId);
   });
 
+  it("counts an approval as confirmation even while queued or after a failed execution", async () => {
+    // Tier-1 approval sets status 'queued' (routes-m2); the worker may later
+    // mark it 'failed'. Either way the user confirmed — execution outcome is
+    // not part of capture-to-confirmed. A still-proposed action is not.
+    const daveId = await seedUser(`alpha-bar-dave-${stamp}@example.test`, 3);
+    try {
+      const moments = [
+        await seedMoment(daveId, 1),
+        await seedMoment(daveId, 1),
+        await seedMoment(daveId, 1),
+      ];
+      await db.query(
+        `INSERT INTO actions (user_id, moment_id, action_type, risk_tier, status, payload,
+                              approved_by, approved_at)
+         SELECT $1, m.id, 'notion_page', 1, s.status::action_status, '{}',
+                CASE WHEN s.secs IS NULL THEN NULL ELSE $1::uuid END,
+                m.created_at + make_interval(secs => s.secs)
+         FROM context_moments m
+         JOIN (VALUES ($2::uuid, 'queued', 5), ($3::uuid, 'failed', 7), ($4::uuid, 'proposed', NULL))
+           AS s(moment_id, status, secs) ON s.moment_id = m.id`,
+        [daveId, ...moments],
+      );
+      const inputs = await collectAlphaBarInputs(db, { days: 14, userIds: [daveId] });
+      expect(inputs.confirmed_actions).toBe(2);
+      expect(inputs.captures_without_intent).toBe(3);
+      expect(inputs.captures_without_intent_actioned).toBe(2);
+      expect(inputs.capture_to_action_p75_seconds!).toBeCloseTo(6.5, 1);
+    } finally {
+      await db.query(`DELETE FROM users WHERE id = $1`, [daveId]);
+    }
+  });
+
   it("is part of the ops:report output", async () => {
     const report = await runAlphaReport(db, { days: 14 });
     expect(report.alpha_bar.window_days).toBe(14);
