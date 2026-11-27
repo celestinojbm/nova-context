@@ -98,10 +98,16 @@ build, typecheck, unit, migrate e integration, y deja el reporte en
   `services/api/src/routes-project-write.ts` (`POST /v1/projects`, `PATCH /v1/context/moments/:id`:
   crear proyecto, confirmar/cambiar/desvincular proyecto y editar la intención con redacción),
   `packages/context-engine/src/suggest.ts` (`/v1/projects/suggest`),
-  `packages/schema/src/{project,project-write,task}.ts`, web `apps/web/app/{projects,tasks}/`.
+  `packages/schema/src/{project,project-write,task,context-moment}.ts` (`listMomentsQuerySchema`),
+  web `apps/web/app/{page,projects,tasks}/`.
+- **Vínculo en la revisión:** `GET /v1/context/moments?link=unlinked|linked` y el mismo campo
+  opcional en `POST /v1/memory/search`. Ausente, el listado y la búsqueda no filtran por vínculo
+  (comportamiento histórico). No se combina con `project_id` (400). La web crea proyectos
+  (`POST /v1/projects`) y confirma o quita el vínculo desde la timeline (`PATCH`).
 - **Tests:** `services/api/test/integration/m1.test.ts`, `m4.test.ts`, `isolation.test.ts`,
-  `project-write.test.ts`, `packages/schema/src/project-write.test.ts`.
-- **Verificar:** `pnpm test:integration` (suites `m1`, `m4`, `isolation`, `project-write`).
+  `project-write.test.ts`, `moment-link-filter.test.ts`,
+  `packages/schema/src/{project-write,moment-link}.test.ts`.
+- **Verificar:** `pnpm test:integration` (suites `m1`, `m4`, `isolation`, `project-write`, `moment-link-filter`).
 
 ### 8. Acciones con aprobación humana (risk tiers)
 - **Archivos:** `services/api/src/routes-m2.ts`, `routes-integrations.ts` (`/v1/actions`, preview,
@@ -170,8 +176,10 @@ build, typecheck, unit, migrate e integration, y deja el reporte en
 - **Verificar:** `pnpm --filter @nova/validation-gate test`; `pnpm validate:pr`.
 
 ### 17. Web (cliente de referencia)
-- **Archivos:** `apps/web/app/` (inicio, proyectos, tareas, aprobaciones, auditoría, ajustes, estado, export, login).
-- **Tests:** sin tests propios; cubierto por `pnpm build`/`pnpm typecheck` y la integración de la API.
+- **Archivos:** `apps/web/app/` (inicio con filtro y vínculo de proyecto, proyectos con alta,
+  tareas, aprobaciones, auditoría, ajustes, estado, export, login).
+- **Tests:** sin tests propios de la UI; el contrato que usa está en `moment-link-filter.test.ts`
+  y `project-write.test.ts`. El resto, `pnpm build`/`pnpm typecheck`.
 - **Verificar:** `pnpm --filter @nova/web dev` → abrir `http://localhost:3000`.
 
 ## Mantener este mapa

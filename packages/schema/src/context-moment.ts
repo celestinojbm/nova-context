@@ -257,3 +257,25 @@ export const listContextMomentsResponseSchema = z.object({
 export type ListContextMomentsResponse = z.infer<
   typeof listContextMomentsResponseSchema
 >;
+
+/**
+ * Filtro de vínculo a proyecto en el listado y en la búsqueda.
+ * Ausente = sin filtro (el listado histórico, con y sin proyecto).
+ * No se combina con `project_id`: o se pide un proyecto concreto, o el corte
+ * vinculado/sin vincular.
+ */
+export const momentLinkFilterSchema = z.enum(["unlinked", "linked"]);
+export type MomentLinkFilter = z.infer<typeof momentLinkFilterSchema>;
+
+export const listMomentsQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+    before: z.string().datetime({ offset: true }).optional(),
+    project_id: z.string().uuid().optional(),
+    link: momentLinkFilterSchema.optional(),
+  })
+  .refine((v) => !(v.project_id && v.link), {
+    message: "project_id and link are mutually exclusive",
+    path: ["link"],
+  });
+export type ListMomentsQuery = z.infer<typeof listMomentsQuerySchema>;

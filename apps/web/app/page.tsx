@@ -1,5 +1,6 @@
 import type {
   ListContextMomentsResponse,
+  ListProjectsResponse,
   MemorySearchResponse,
 } from "@nova/schema";
 import { revalidatePath } from "next/cache";
@@ -17,15 +18,41 @@ async function deleteMoment(formData: FormData) {
     headers: await authHeaders(),
   });
   revalidatePath("/");
+  revalidatePath("/projects");
+}
+
+async function linkMoment(formData: FormData) {
+  "use server";
+  const id = formData.get("id");
+  const projectId = formData.get("project_id");
+  if (typeof id !== "string" || typeof projectId !== "string") return;
+  await fetch(`${API_URL}/v1/context/moments/${id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ project_id: projectId === "" ? null : projectId }),
+  });
+  revalidatePath("/");
+  revalidatePath("/projects");
 }
 
 export default async function TimelinePage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string }>;
+  searchParams: Promise<{ q?: string; project?: string }>;
 }) {
-  const { q } = await searchParams;
+  const { q, project } = await searchParams;
   const query = q?.trim() || null;
+  const projectFilter = project?.trim() || "";
+  const link = projectFilter === "unlinked" ? "unlinked" : null;
+  const projectId =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(projectFilter)
+      ? projectFilter
+      : null;
+
+  const projectsResult = await apiGet<ListProjectsResponse>("/v1/projects");
+  if (!projectsResult.ok) return <div className="error-banner">{projectsResult.message}</div>;
+  const projects = projectsResult.data.items;
+  const projectName = new Map(projects.map((p) => [p.id, p.name]));
 
   let items: Array<
     ListContextMomentsResponse["items"][number] & { score?: number; match?: string }
@@ -36,6 +63,8 @@ export default async function TimelinePage({
     const result = await apiPost<MemorySearchResponse>("/v1/memory/search", {
       query,
       limit: 50,
+      ...(projectId ? { project_id: projectId } : {}),
+      ...(link ? { link } : {}),
     });
     if (!result.ok) return <div className="error-banner">{result.message}</div>;
     items = result.data.items;
@@ -43,8 +72,11 @@ export default async function TimelinePage({
       ? "keyword + semantic search"
       : "keyword search (semantic search needs embeddings)";
   } else {
+    const params = new URLSearchParams({ limit: "50" });
+    if (projectId) params.set("project_id", projectId);
+    if (link) params.set("link", link);
     const result = await apiGet<ListContextMomentsResponse>(
-      "/v1/context/moments?limit=50",
+      `/v1/context/moments?${params.toString()}`,
     );
     if (!result.ok) return <div className="error-banner">{result.message}</div>;
     items = result.data.items;
@@ -59,6 +91,15 @@ export default async function TimelinePage({
           placeholder="Search your memory…"
           defaultValue={query ?? ""}
         />
+        <select name="project" defaultValue={projectId ?? (link ?? "")} aria-label="Project">
+          <option value="">All projects</option>
+          <option value="unlinked">Not linked</option>
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
         <button type="submit">Search</button>
       </form>
 
@@ -165,10 +206,33 @@ export default async function TimelinePage({
                     {new Date(m.captured_at).toLocaleString()} ·{" "}
                     {m.source_mode === "live_context" ? "live session" : "capture"}
                     {m.match && m.match !== "filter" ? ` · match: ${m.match}` : ""}
+                    {" · "}
+                    {m.project_id ? (
+                      <a href={`/projects/${m.project_id}`}>
+                        {projectName.get(m.project_id) ?? "project"}
+                      </a>
+                    ) : (
+                      "no project"
+                    )}
                   </div>
                   {m.intent_text && (
                     <p className="moment-intent">“{m.intent_text}”</p>
                   )}
+                  <form action={linkMoment} className="moment-link">
+                    <input type="hidden" name="id" value={m.id} />
+                    <label>
+                      Project
+                      <select name="project_id" defaultValue={m.project_id ?? ""}>
+                        <option value="">— none —</option>
+                        {projects.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button type="submit">Save link</button>
+                  </form>
                   <form action={deleteMoment} className="moment-delete">
                     <input type="hidden" name="id" value={m.id} />
                     <ConfirmSubmit message="Delete this moment and everything derived from it (tasks, actions, embeddings)? This cannot be undone.">
