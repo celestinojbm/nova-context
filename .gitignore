@@ -20,3 +20,6 @@ var/
 
 # M20d: LongMemEval (downloaded at runtime, never committed)
 .cache/
+
+# Redis RDB snapshot written when redis-server runs from the repo root (local tests)
+dump.rdb
