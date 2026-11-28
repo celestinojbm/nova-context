@@ -13,8 +13,10 @@ import type pg from "pg";
  *
  * Definitions (stated here because each one is a judgment call):
  *   - Population: non-deleted users, excluding synthetic accounts
- *     (`*@alpha.local` from ops:smoke and the `dev@nova.local` seed) unless
- *     `includeSynthetic` is set.
+ *     (`*@alpha.local` from ops:smoke, `*@nova-validate.invalid` from the
+ *     post-deploy validation gate — normally deleted by its cleanup, but an
+ *     orphan would sit in the week-4 denominator — and the `dev@nova.local`
+ *     seed) unless `includeSynthetic` is set.
  *   - Window: captures (context_moments) created in the last `days` days.
  *   - Active user: ≥1 capture in the window.
  *   - Captures/user/week: window captures ÷ active users ÷ (days / 7).
@@ -261,7 +263,9 @@ export async function collectAlphaBarInputs(
       SELECT u.id, u.created_at FROM users u
       WHERE u.deleted_at IS NULL
         AND ($4::uuid[] IS NULL OR u.id = ANY($4::uuid[]))
-        AND ($3::boolean OR (u.email NOT LIKE '%@alpha.local' AND u.email <> 'dev@nova.local'))
+        AND ($3::boolean OR (u.email NOT LIKE '%@alpha.local'
+                             AND u.email NOT LIKE '%@nova-validate.invalid'
+                             AND u.email <> 'dev@nova.local'))
     ),
     win AS (
       SELECT m.id, m.user_id, m.project_id, m.intent_text, m.created_at

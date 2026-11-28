@@ -24,6 +24,7 @@ describe.skipIf(!databaseUrl)("alpha bar (ROADMAP Horizon 2 metrics)", () => {
   let bobId: string;
   let carolId: string;
   let synthId: string;
+  let validateOrphanId: string;
   const stamp = Date.now();
   const SECRET_TEXT = `alpha bar secret page text ${stamp}`;
 
@@ -133,17 +134,20 @@ describe.skipIf(!databaseUrl)("alpha bar (ROADMAP Horizon 2 metrics)", () => {
     // ops:smoke-style synthetic account: excluded unless asked for.
     synthId = await seedUser(`alpha-bar-${stamp}@alpha.local`, 0);
     await seedMoment(synthId, 1);
+    // Post-deploy validation-gate account whose cleanup failed: no captures,
+    // but old enough to be week-4 eligible. Must not dilute retention.
+    validateOrphanId = await seedUser(`validate-${stamp}@nova-validate.invalid`, 35);
   });
 
   afterAll(async () => {
     await db?.query(`DELETE FROM users WHERE id = ANY($1::uuid[])`, [
-      [bobId, carolId, synthId].filter(Boolean),
+      [bobId, carolId, synthId, validateOrphanId].filter(Boolean),
     ]);
     await db?.end();
     await app?.close();
   });
 
-  const scope = (): string[] => [alice.userId, bobId, carolId, synthId];
+  const scope = (): string[] => [alice.userId, bobId, carolId, synthId, validateOrphanId];
 
   it("counts window captures, active users and linking without the Inbox", async () => {
     const inputs = await collectAlphaBarInputs(db, { days: 14, userIds: scope() });
@@ -186,6 +190,9 @@ describe.skipIf(!databaseUrl)("alpha bar (ROADMAP Horizon 2 metrics)", () => {
     });
     expect(withSynth.window_captures).toBe(6);
     expect(withSynth.active_users).toBe(3);
+    // The validation-gate orphan only shows up as an eligible, unretained user.
+    expect(withSynth.week4_eligible_users).toBe(3);
+    expect(withSynth.week4_retained_users).toBe(1);
   });
 
   it("honors the reference time (`now`)", async () => {

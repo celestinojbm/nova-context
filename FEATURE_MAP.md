@@ -159,7 +159,7 @@ build, typecheck, unit, migrate e integration, y deja el reporte en
   no incluye el tiempo del cliente antes de llegar a la API) y retención en semana 4 (>50 %).
   Añade la prueba de falsación de la teoría: tasa de acción de capturas con y sin intención
   hablada; la tasa de recuperación sale `null` (`not_instrumented`) porque la búsqueda aún no
-  registra qué capturas devuelve. Excluye cuentas sintéticas (`*@alpha.local`, `dev@nova.local`)
+  registra qué capturas devuelve. Excluye cuentas sintéticas (`*@alpha.local`, `*@nova-validate.invalid`, `dev@nova.local`)
   salvo `--include-synthetic`. Solo cuentas y ratios, sin contenido. Código:
   `services/api/src/ops/alpha-bar.ts`. Tests: `services/api/src/ops/alpha-bar.test.ts`,
   `services/api/test/integration/alpha-bar.test.ts`.
