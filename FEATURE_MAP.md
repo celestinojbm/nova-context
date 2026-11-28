@@ -155,6 +155,17 @@ build, typecheck, unit, migrate e integration, y deja el reporte en
   `services/api/src/analytics.ts`, `packages/schema/src/feedback.ts`, web `apps/web/app/audit/`.
 - **Tests:** `services/api/test/integration/{alpha-feedback,alpha-ops,alpha-blockers,m4}.test.ts`.
 - **Verificar:** `pnpm test:integration` (suites `alpha-*`).
+- **Alpha bar (ROADMAP Horizonte 2):** `ops:report` incluye `alpha_bar` con las cinco métricas
+  numéricas del roadmap y su estado (`pass` / `fail` / `insufficient_data`, este último con menos de
+  5 de muestra): usuarios activos (≥25), capturas/usuario/semana (>3), capturas vinculadas a un
+  proyecto **distinto del Inbox** (>40 %), p75 captura→acción confirmada (<30 s, medido en servidor:
+  no incluye el tiempo del cliente antes de llegar a la API) y retención en semana 4 (>50 %).
+  Añade la prueba de falsación de la teoría: tasa de acción de capturas con y sin intención
+  hablada; la tasa de recuperación sale `null` (`not_instrumented`) porque la búsqueda aún no
+  registra qué capturas devuelve. Excluye cuentas sintéticas (`*@alpha.local`, `dev@nova.local`)
+  salvo `--include-synthetic`. Solo cuentas y ratios, sin contenido. Código:
+  `services/api/src/ops/alpha-bar.ts`. Tests: `services/api/src/ops/alpha-bar.test.ts`,
+  `services/api/test/integration/alpha-bar.test.ts`.
 
 ### 14. Operación: health, readiness, estado, preflight, smoke, mantenimiento, heartbeat
 - **Archivos:** `services/api/src/app.ts` (`/healthz`, `/readyz`), `routes-ops.ts` (`/v1/ops/status`),
