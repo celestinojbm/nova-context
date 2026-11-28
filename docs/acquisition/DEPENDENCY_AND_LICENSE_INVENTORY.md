@@ -39,6 +39,9 @@ transitively reviewed — **gap: dev-tree transitive review not verified**
 | @nova/worker | pino | MIT | structured logs | low | low |
 | @nova/model-router | @anthropic-ai/sdk | MIT | LLM provider SDK | medium (provider-coupled features) | **medium** — provider terms/account (R-05) |
 | @nova/web | next, react, react-dom | MIT | web app | high (framework) | low (OSS) |
+| @nova/landing | gsap | Standard no-charge license (package metadata points at https://gsap.com/standard-license; not MIT) | ScrollReveal on the landing only | low | low — confirm the standard license text at review |
+| @nova/landing | motion, @hugeicons/react, @hugeicons/core-free-icons | MIT (package metadata) | PromptBar and ThoughtLine on the landing only | low | low |
+| @nova/landing (vendored source, not an npm package) | React Bits `ScrollReveal`, `PromptBar`, `ThoughtLine` (TS + Tailwind), free registry | **MIT + Commons Clause** | landing only. Use inside this site is permitted; selling, sublicensing or redistributing the components themselves is not. React Bits Pro is not included. Notice: `apps/landing/components/react-bits/LICENSE.md` | n/a (source is copied) | **medium** — Commons Clause; do not extract into a component kit; confirm at diligence that transferring the repo in a sale is not "redistributing" |
 | @nova/extension | react, react-dom (+ WXT dev-time) | MIT | extension UI | medium | low |
 | @nova/browser-shell | electron (dev) | MIT (Chromium: BSD-like + bundled licenses) | spike only | n/a (not shipped) | low |
 | @nova/validation-gate | (none runtime) | — | tooling | — | — |
