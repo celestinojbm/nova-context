@@ -151,6 +151,13 @@ build, typecheck, unit, migrate e integration, y deja el reporte en
 - **Verificar:** `pnpm test:integration` (suite `account-lifecycle`).
 
 ### 13. Alpha: feedback, eventos de producto, auditoría y analítica
+- **Recuperación (prueba de falsación, THEORY §6):** cada búsqueda **con texto** en
+  `/v1/memory/search` registra en `moment_retrievals` (migración 0020) qué capturas devolvió:
+  una fila por captura con `search_hits` y `best_rank`. Los listados sin texto no cuentan (es
+  navegar, no recordar). Sin texto de la consulta ni contenido; respeta `NOVA_ANALYTICS=off`;
+  sale en el export de cuenta y se borra con la captura y con la cuenta. "Devuelta" no es
+  "usada": la web no tiene vista de abrir una captura. Test:
+  `services/api/test/integration/moment-retrievals.test.ts`.
 - **Archivos:** `services/api/src/routes-feedback.ts`, `routes-m4.ts` (`/v1/events`, `/v1/audit`),
   `services/api/src/analytics.ts`, `packages/schema/src/feedback.ts`, web `apps/web/app/audit/`.
 - **Tests:** `services/api/test/integration/{alpha-feedback,alpha-ops,alpha-blockers,m4}.test.ts`.
