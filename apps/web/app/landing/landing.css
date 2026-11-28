@@ -1,0 +1,235 @@
+/* Tailwind utilities for the React Bits components only. Preflight is omitted
+   so the signed-in app keeps its existing CSS. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@source "./**/*.{ts,tsx}";
+
+/* The shared layout caps `main` at 760px. The landing is the only child that
+   should run edge to edge, and it must not use 100vw (that includes the
+   scrollbar and shifts the page sideways). */
+main:has(.landing) {
+  max-width: none;
+  padding: 0;
+}
+
+.landing {
+  --ink: #171717;
+  --muted: #666666;
+  --line: #eaeaea;
+  --bg: #ffffff;
+  --panel: #fafafa;
+  color: var(--ink);
+  background: var(--bg);
+  font-family: inherit;
+}
+
+@media (prefers-color-scheme: dark) {
+  .landing {
+    --ink: #ededed;
+    --muted: #a1a1a1;
+    --line: #2e2e2e;
+    --bg: #000000;
+    --panel: #0a0a0a;
+  }
+}
+
+.landing a {
+  color: inherit;
+}
+
+.landing :focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.landing-hero {
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(to right, var(--line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--line) 1px, transparent 1px);
+  background-size: 72px 72px;
+  background-position: center top;
+  border-bottom: 1px solid var(--line);
+}
+
+.landing-wrap {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 72px 24px 56px;
+}
+
+.landing h1 {
+  margin: 0;
+  max-width: 22ch;
+  min-height: 2.15em;
+  font-size: clamp(2.75rem, 6vw, 4.5rem);
+  line-height: 0.98;
+  letter-spacing: -0.045em;
+  font-weight: 600;
+}
+
+.landing-h1-line {
+  display: block;
+}
+
+.landing-lede {
+  max-width: 62ch;
+  margin: 20px 0 0;
+  color: var(--muted);
+  font-size: 1.0625rem;
+  line-height: 1.5;
+}
+
+.landing-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-top: 28px;
+}
+
+a.landing-cta {
+  display: inline-flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 6px;
+  background: var(--ink);
+  color: var(--bg);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.landing-cta:hover {
+  text-decoration: none;
+  opacity: 0.88;
+}
+
+.landing-lang {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.landing-lang button {
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.landing-lang button[aria-pressed="true"] {
+  color: var(--ink);
+  background: var(--panel);
+}
+
+.landing-demo {
+  margin-top: 40px;
+  max-width: 640px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+}
+
+.landing-demo-label {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.landing-slots,
+.landing-demo-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 168px;
+}
+
+.landing-slot-trace {
+  min-height: 28px;
+}
+
+.landing-note {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.landing-section {
+  border-bottom: 1px solid var(--line);
+}
+
+.landing-section .landing-wrap {
+  padding: 48px 24px;
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 28px 48px;
+  align-items: start;
+}
+
+.landing-reveal {
+  margin: 0;
+  max-width: 18ch;
+  font-size: clamp(1.75rem, 3vw, 2.25rem);
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+  font-weight: 600;
+}
+
+.landing-reveal-text {
+  font: inherit;
+  letter-spacing: inherit;
+}
+
+.landing-section p {
+  margin: 0;
+  max-width: 62ch;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.55;
+}
+
+.landing-foot {
+  padding: 28px 24px 48px;
+}
+
+.landing-foot p {
+  max-width: 72ch;
+  margin: 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+@media (max-width: 720px) {
+  .landing-wrap {
+    padding: 48px 16px 40px;
+  }
+  .landing h1 {
+    font-size: 2.5rem;
+  }
+  .landing-section .landing-wrap {
+    grid-template-columns: 1fr;
+    padding: 36px 16px;
+    gap: 12px;
+  }
+  .landing-foot {
+    padding: 24px 16px 40px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-reveal [data-piece] {
+    opacity: 1 !important;
+    filter: none !important;
+    transform: none !important;
+  }
+}
