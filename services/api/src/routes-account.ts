@@ -50,8 +50,19 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDe
     if (!query.success) return reply.code(400).send({ error: "invalid_request" });
     const userId = requireAuth(req).userId;
 
-    const [user, projects, moments, tasks, actions, integrations, sessions, audit, events, versions] =
-      await Promise.all([
+    const [
+      user,
+      projects,
+      moments,
+      tasks,
+      actions,
+      integrations,
+      sessions,
+      audit,
+      events,
+      versions,
+      retrievals,
+    ] = await Promise.all([
         db.query(
           `SELECT id, email, display_name, created_at FROM users WHERE id = $1`,
           [userId],
@@ -102,6 +113,12 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDe
         db.query(
           `SELECT moment_id, version, summary, enrichment, provider, model, created_at
            FROM enrichment_versions WHERE user_id = $1 ORDER BY moment_id, version ASC`,
+          [userId],
+        ),
+        // Migration 0020: which of your moments text searches returned.
+        db.query(
+          `SELECT moment_id, search_hits, best_rank, first_retrieved_at, last_retrieved_at
+           FROM moment_retrievals WHERE user_id = $1 ORDER BY first_retrieved_at ASC`,
           [userId],
         ),
       ]);
@@ -172,6 +189,7 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDe
       audit_log: audit.rows,
       product_events: events.rows,
       enrichment_versions: versions.rows,
+      moment_retrievals: retrievals.rows,
     };
   });
 
@@ -358,7 +376,7 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDe
       // Cascades: projects, moments (→ moment_media, entity_mentions,
       // memory_items, enrichment_versions), tasks, actions, entities,
       // embeddings, sessions, pairing_codes, oauth_states,
-      // integration_connections, audit_log, product_events.
+      // integration_connections, audit_log, product_events, moment_retrievals.
       await client.query(`DELETE FROM users WHERE id = $1`, [auth.userId]);
       await client.query("COMMIT");
     } catch (err) {

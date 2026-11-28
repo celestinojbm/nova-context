@@ -74,4 +74,36 @@ export class Analytics {
         /* dropped on error, by design */
       });
   }
+
+  /**
+   * Retrieval instrumentation (migration 0020, THEORY §6 falsification test):
+   * record that a TEXT-QUERY search returned these moments, in rank order.
+   * One upserted row per moment — ids, counters and timestamps only, never
+   * the query. Same off-switch and fire-and-forget contract as `track`: the
+   * returned promise never rejects, and callers must not await it on the
+   * request path. The join re-checks ownership, so a foreign or just-deleted
+   * id is skipped instead of failing the batch.
+   */
+  trackRetrievals(userId: string, momentIdsInRankOrder: readonly string[]): Promise<void> {
+    if (!this.enabled || momentIdsInRankOrder.length === 0) return Promise.resolve();
+    const ranks = momentIdsInRankOrder.map((_, i) => i + 1);
+    return this.db
+      .query(
+        `INSERT INTO moment_retrievals (moment_id, user_id, best_rank)
+         SELECT m.id, m.user_id, r.rank
+         FROM unnest($2::uuid[], $3::int[]) AS r(id, rank)
+         JOIN context_moments m ON m.id = r.id AND m.user_id = $1
+         ON CONFLICT (moment_id) DO UPDATE
+           SET search_hits = moment_retrievals.search_hits + 1,
+               best_rank = least(moment_retrievals.best_rank, EXCLUDED.best_rank),
+               last_retrieved_at = now()`,
+        [userId, [...momentIdsInRankOrder], ranks],
+      )
+      .then(
+        () => undefined,
+        () => {
+          /* dropped on error, by design */
+        },
+      );
+  }
 }

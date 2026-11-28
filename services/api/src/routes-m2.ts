@@ -242,6 +242,8 @@ export function registerM2Routes(app: FastifyInstance, deps: M2RouteDeps): void 
     }
 
     items = await attachMedia(items);
+    // Recall, not browsing: only a text query counts as a retrieval.
+    if (query) void analytics.trackRetrievals(userId, items.map((i) => i.id));
     analytics.track(userId, "search_performed", {
       has_query: Boolean(query),
       results: items.length,
