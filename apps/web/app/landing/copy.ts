@@ -29,9 +29,6 @@ export interface LandingCopy {
   commandLink: string;
   commandTask: string;
   commandRecall: string;
-  modelDevice: string;
-  modelCloud: string;
-  efforts: string[];
   sections: LandingSection[];
   license: string;
 }
@@ -71,9 +68,6 @@ export const landingCopy: Record<LandingLang, LandingCopy> = {
     commandLink: "Attach it to a project",
     commandTask: "Draft a task to confirm",
     commandRecall: "Search what you already kept",
-    modelDevice: "On this device",
-    modelCloud: "Cloud, if you opt in",
-    efforts: ["Low", "Medium", "High", "Extra", "Max"],
     sections: [
       {
         title: "Capture only when you ask.",
@@ -125,9 +119,6 @@ export const landingCopy: Record<LandingLang, LandingCopy> = {
     commandLink: "Vincularlo a un proyecto",
     commandTask: "Redactar una tarea para confirmar",
     commandRecall: "Buscar lo que ya guardaste",
-    modelDevice: "En este dispositivo",
-    modelCloud: "Nube, si lo activas",
-    efforts: ["Bajo", "Medio", "Alto", "Extra", "Máximo"],
     sections: [
       {
         title: "Captura solo cuando lo pides.",

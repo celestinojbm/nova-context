@@ -46,12 +46,11 @@ export default function DemoWidgets({ copy }: { copy: LandingCopy }) {
           { key: "task", name: "/task", description: copy.commandTask },
           { key: "recall", name: "/recall", description: copy.commandRecall },
         ]}
-        models={[
-          { key: "device", name: copy.modelDevice },
-          { key: "cloud", name: copy.modelCloud },
-        ]}
-        defaultModel="device"
-        efforts={copy.efforts}
+        // No model or effort pickers: Nova has no on-device model (ROADMAP
+        // Horizon 2 non-goal) and no user-facing effort setting, so either
+        // menu would advertise something the product does not do.
+        models={[]}
+        efforts={[]}
         onSend={(text) => {
           const trimmed = text.trim();
           if (trimmed) setSent(trimmed);
